@@ -1,16 +1,24 @@
-/**
+﻿/**
  * HTTP Request Utility | HTTP 请求工具
  * Axios-based request with interceptors
  */
 
 import axios from 'axios'
 
-// Base URL from environment or default
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+// Detect desktop environment (Tauri / Electron) | 检测桌面环境
+const isDesktop = () => {
+  const ua = navigator.userAgent
+  return ua.includes('Tauri') || ua.includes('Electron')
+}
+
+// Base URL: desktop uses full API URL, web uses proxy | 桌面端使用完整 API 地址，Web 端使用代理
+const BASE_URL = isDesktop()
+  ? 'https://api.chatfire.site/v1'
+  : (import.meta.env.VITE_API_BASE_URL || '')
 
 // Create axios instance | 创建 axios 实例
 const instance = axios.create({
-  baseURL: "/",
+  baseURL: BASE_URL,
   timeout: 30000000
 })
 
@@ -18,7 +26,7 @@ const instance = axios.create({
 instance.interceptors.request.use(
   (config) => {
     // Get current provider | 获取当前渠道
-    const currentProvider = localStorage.getItem('api-provider') || 'openai'
+    const currentProvider = localStorage.getItem('api-provider') || 'chatfire'
 
     // Get API keys from new storage | 从新存储结构获取 API Keys
     let apiKey = ''

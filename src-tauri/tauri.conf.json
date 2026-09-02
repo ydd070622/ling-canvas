@@ -1,0 +1,81 @@
+{
+    "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
+    "productName": "Ling Canvas",
+    "version": "0.1.5",
+    "identifier": "com.lingcanvas.app",
+    "build": {
+        "frontendDist": "../dist",
+        "devUrl": "http://localhost:5173",
+        "beforeDevCommand": "pnpm dev",
+        "beforeBuildCommand": "pnpm build"
+    },
+    "app": {
+        "windows": [
+            {
+                "title": "Ling Canvas",
+                "width": 1400,
+                "height": 900,
+                "minWidth": 1024,
+                "minHeight": 700,
+                "center": true,
+                "resizable": true,
+                "fullscreen": false
+            }
+        ],
+        "security": {
+            "csp": {
+                "default-src": [
+                    "'self'",
+                    "data:",
+                    "blob:",
+                    "https://api.chatfire.site",
+                    "https://*.chatfire.site"
+                ],
+                "script-src": [
+                    "'self'",
+                    "'unsafe-inline'",
+                    "'unsafe-eval'"
+                ],
+                "style-src": [
+                    "'self'",
+                    "'unsafe-inline'",
+                    "https://fonts.googleapis.com"
+                ],
+                "font-src": [
+                    "'self'",
+                    "data:",
+                    "https://fonts.gstatic.com"
+                ],
+                "img-src": [
+                    "'self'",
+                    "data:",
+                    "https:",
+                    "http:",
+                    "asset:",
+                    "http://asset.localhost"
+                ],
+                "connect-src": [
+                    "'self'",
+                    "https://api.chatfire.site",
+                    "https://*.chatfire.site",
+                    "wss:",
+                    "ws:"
+                ],
+                "media-src": [
+                    "'self'",
+                    "blob:",
+                    "https:",
+                    "http:"
+                ],
+                "worker-src": [
+                    "'self'",
+                    "blob:"
+                ]
+            }
+        }
+    },
+    "bundle": {
+        "active": false,
+        "targets": "all"
+    }
+}

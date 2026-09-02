@@ -8,10 +8,17 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-.pnpm-store
 dist
 dist-ssr
 *.local
+.pnpm-store/
+
+# Tauri / Rust build outputs
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local Vite logs
+.vite-dev.*.log
 
 # Editor directories and files
 .vscode/*

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <!-- Download Modal | 下载弹窗 -->
   <n-modal v-model:show="visible" preset="card" title="素材下载" style="width: 600px; max-width: 90vw;">
     <div class="space-y-4">
@@ -71,6 +71,7 @@ import { computed } from 'vue'
 import { NModal, NButton, NIcon } from 'naive-ui'
 import { DownloadOutline, VideocamOutline } from '@vicons/ionicons5'
 import { nodes } from '../stores/canvas'
+import { openExternal } from '@/utils'
 
 // Props | 属性
 const props = defineProps({
@@ -114,7 +115,7 @@ const videoAssets = computed(() => {
 
 // Download single asset | 下载单个素材
 const downloadAsset = (asset) => {
-  window.open(asset.url, '_blank')
+  openExternal(asset.url)
   window.$message?.success('已在新标签页打开')
 }
 </script>

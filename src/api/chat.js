@@ -1,8 +1,14 @@
-/**
+﻿/**
  * Chat API | 对话 API
  */
 
 import { request, getBaseUrl } from '@/utils'
+
+// Detect desktop environment | 检测桌面环境
+const isDesktop = () => {
+  const ua = navigator.userAgent
+  return ua.includes('Tauri') || ua.includes('Electron')
+}
 
 // 对话补全
 export const chatCompletions = (data) =>
@@ -15,8 +21,9 @@ export const chatCompletions = (data) =>
 // 流式对话补全
 export const streamChatCompletions = async function* (data, signal, options = {}) {
   const apiKey = localStorage.getItem('apiKey')
-  // 优先使用传入的 baseUrl，否则使用默认的
-  const baseUrl = options.baseUrl || getBaseUrl()
+  // Desktop: use full API URL; Web: use proxy | 桌面端使用完整 API 地址，Web 端使用代理
+  const defaultBaseUrl = isDesktop() ? 'https://api.chatfire.site/v1' : getBaseUrl()
+  const baseUrl = options.baseUrl || defaultBaseUrl
   // 使用 options.endpoint 或默认的 /chat/completions
   const endpoint = options.endpoint || '/chat/completions'
 

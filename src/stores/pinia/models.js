@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Pinia Store: Model Config | 模型配置 Store
  * 管理模型配置、渠道切换和模型选择
  */
@@ -31,7 +31,8 @@ const STORAGE_KEYS = {
   BASE_URLS_BY_PROVIDER: 'base-urls-by-provider',
   CUSTOM_PROVIDERS: 'custom-api-providers',
   PROVIDER_ALIASES: 'api-provider-aliases',
-  PROVIDER_ORDER: 'api-provider-order'
+  PROVIDER_ORDER: 'api-provider-order',
+  HIDDEN_PROVIDERS: 'api-hidden-providers'
 }
 
 /**
@@ -84,7 +85,7 @@ const setStoredJson = (key, value) => {
 }
 
 /**
- * 检查模型是否支持指定渠道
+ * 检查模型是否支持指定渠�?
  */
 const isModelSupported = (model, provider) => {
   if (!model.provider) {
@@ -94,21 +95,25 @@ const isModelSupported = (model, provider) => {
 }
 
 export const useModelStore = defineStore('model', () => {
-  // ============ Provider 状态 | Provider State ============
+  // ============ Provider 状�?| Provider State ============
 
   const customProviders = ref(getStoredJson(STORAGE_KEYS.CUSTOM_PROVIDERS, {}))
   const providerAliases = ref(getStoredJson(STORAGE_KEYS.PROVIDER_ALIASES, {}))
   const providerOrder = ref(getStoredJson(STORAGE_KEYS.PROVIDER_ORDER, []))
+  const hiddenProviders = ref(getStoredJson(STORAGE_KEYS.HIDDEN_PROVIDERS, []))
 
-  // 当前选中的渠道
+  // 当前选中的渠�?
   const currentProvider = ref(getStored(STORAGE_KEYS.PROVIDER) || getDefaultProvider())
 
   // 渠道列表
   const providerList = computed(() => {
+    const hidden = new Set(hiddenProviders.value)
     const providers = [
-      ...getProviderList().map(provider => ({
-      ...provider,
-      label: providerAliases.value[provider.key] || provider.label
+      ...getProviderList()
+        .filter(provider => !hidden.has(provider.key))
+        .map(provider => ({
+        ...provider,
+        label: providerAliases.value[provider.key] || provider.label
       })),
       ...Object.entries(customProviders.value).map(([key, provider]) => ({
         key,
@@ -195,6 +200,23 @@ export const useModelStore = defineStore('model', () => {
     return true
   }
 
+  // 统一删除供应商（支持内置和自定义）
+  const removeProvider = (key) => {
+    // 清除 API 配置
+    delete apiKeysByProvider.value[key]
+    delete baseUrlsByProvider.value[key]
+    if (customProviders.value[key]) {
+      // 自定义供应商：直接删除
+      delete customProviders.value[key]
+    } else {
+      // 内置供应商：加入隐藏列表
+      if (!hiddenProviders.value.includes(key)) {
+        hiddenProviders.value.push(key)
+      }
+    }
+    if (currentProvider.value === key) setProvider(getDefaultProvider())
+  }
+
   // 清除渠道配置
   const clearProvider = () => {
     currentProvider.value = getDefaultProvider()
@@ -219,19 +241,19 @@ export const useModelStore = defineStore('model', () => {
     return response
   }
 
-  // ============ Custom Models 状态 | Custom Models State ============
+  // ============ Custom Models 状�?| Custom Models State ============
 
   // 全局自定义模型（不区分渠道）
   const customChatModels = ref(getStoredJson(STORAGE_KEYS.CUSTOM_CHAT_MODELS, []))
   const customImageModels = ref(getStoredJson(STORAGE_KEYS.CUSTOM_IMAGE_MODELS, []))
   const customVideoModels = ref(getStoredJson(STORAGE_KEYS.CUSTOM_VIDEO_MODELS, []))
 
-  // 按渠道存储的自定义模型 | 结构: { 'openai': [{key, label}], 'openai': [{key, label}] }
+  // 按渠道存储的自定义模�?| 结构: { 'openai': [{key, label}], 'chatfire': [{key, label}] }
   const customChatModelsByProvider = ref(getStoredJson(STORAGE_KEYS.CUSTOM_CHAT_MODELS_BY_PROVIDER, {}))
   const customImageModelsByProvider = ref(getStoredJson(STORAGE_KEYS.CUSTOM_IMAGE_MODELS_BY_PROVIDER, {}))
   const customVideoModelsByProvider = ref(getStoredJson(STORAGE_KEYS.CUSTOM_VIDEO_MODELS_BY_PROVIDER, {}))
 
-  // 选中的模型
+  // 选中的模�?
   const selectedChatModel = ref(getStored(STORAGE_KEYS.SELECTED_CHAT_MODEL, DEFAULT_CHAT_MODEL))
   const selectedImageModel = ref(getStored(STORAGE_KEYS.SELECTED_IMAGE_MODEL, DEFAULT_IMAGE_MODEL))
   const selectedVideoModel = ref(getStored(STORAGE_KEYS.SELECTED_VIDEO_MODEL, DEFAULT_VIDEO_MODEL))
@@ -240,21 +262,21 @@ export const useModelStore = defineStore('model', () => {
   const apiKeysByProvider = ref(getStoredJson(STORAGE_KEYS.API_KEYS_BY_PROVIDER, {}))
   const baseUrlsByProvider = ref(getStoredJson(STORAGE_KEYS.BASE_URLS_BY_PROVIDER, {}))
 
-  // 当前渠道的 API Key 和 Base URL
+  // 当前渠道�?API Key �?Base URL
   const currentApiKey = computed(() => apiKeysByProvider.value[currentProvider.value] || '')
   const currentBaseUrl = computed(() => baseUrlsByProvider.value[currentProvider.value] || providerConfig.value.defaultBaseUrl || getDefaultBaseUrl(currentProvider.value))
 
-  // 设置指定渠道的 API Key
+  // 设置指定渠道�?API Key
   const setApiKeyByProvider = (provider, apiKey) => {
     apiKeysByProvider.value[provider] = apiKey
   }
 
-  // 设置指定渠道的 Base URL
+  // 设置指定渠道�?Base URL
   const setBaseUrlByProvider = (provider, baseUrl) => {
     baseUrlsByProvider.value[provider] = baseUrl
   }
 
-  // 清除指定渠道的 API 配置
+  // 清除指定渠道�?API 配置
   const clearApiConfigByProvider = (provider) => {
     delete apiKeysByProvider.value[provider]
     delete baseUrlsByProvider.value[provider]
@@ -315,7 +337,7 @@ export const useModelStore = defineStore('model', () => {
       key: m.key,
       isCustom: true,
       ratios: ['16x9', '9:16', '1:1'],
-      durs: [{ label: '5 秒', key: 5 }, { label: '10 秒', key: 10 }],
+      durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
       defaultParams: { ratio: '16:9', duration: 5 }
     })),
     // 添加当前渠道的自定义模型
@@ -324,7 +346,7 @@ export const useModelStore = defineStore('model', () => {
       key: m.key,
       isCustom: true,
       ratios: ['16x9', '9:16', '1:1'],
-      durs: [{ label: '5 秒', key: 5 }, { label: '10 秒', key: 10 }],
+      durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
       defaultParams: { ratio: '16:9', duration: 5 },
       provider: [currentProvider.value]
     }))
@@ -380,14 +402,14 @@ export const useModelStore = defineStore('model', () => {
     customVideoModels.value,
     {
       ratios: ['16x9', '9:16', '1:1'],
-      durs: [{ label: '5 秒', key: 5 }, { label: '10 秒', key: 10 }],
+      durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
       defaultParams: { ratio: '16:9', duration: 5 }
     }
   ))
 
   // ============ Computed: Model Options for UI (all models, not filtered by provider) ============
 
-  // 返回适合 n-dropdown 使用的选项格式（全部模型，不按渠道过滤）
+  // 返回适合 n-dropdown 使用的选项格式（全部模型，不按渠道过滤�?
   const allImageModelOptions = computed(() =>
     availableImageModels.value.map(m => ({
       label: m.label,
@@ -515,7 +537,7 @@ export const useModelStore = defineStore('model', () => {
   // 获取视频任务查询端点
   const getVideoTaskEndpoint = () => {
     const config = providerConfig.value
-    // 优先使用 videoQuery 端点，支持 {taskId} 占位符替换
+    // 优先使用 videoQuery 端点，支�?{taskId} 占位符替�?
     let endpoint = config.endpoints?.videoQuery || config.endpoints?.video || '/videos'
     return `${currentBaseUrl.value}${endpoint}`
   }
@@ -556,7 +578,7 @@ export const useModelStore = defineStore('model', () => {
         key: m.key,
         isCustom: true,
         ratios: ['16x9', '9:16', '1:1'],
-        durs: [{ label: '5 秒', key: 5 }, { label: '10 秒', key: 10 }],
+        durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
         defaultParams: { ratio: '16:9', duration: 5 },
         provider: [provider]
       }))
@@ -650,17 +672,17 @@ export const useModelStore = defineStore('model', () => {
 
   // ============ Watch & Persist ============
 
-  // 监听并持久化自定义模型
+  // 监听并持久化自定义模�?
   watch(customChatModels, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_CHAT_MODELS, val), { deep: true })
   watch(customImageModels, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_IMAGE_MODELS, val), { deep: true })
   watch(customVideoModels, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_VIDEO_MODELS, val), { deep: true })
 
-  // 监听并持久化按渠道的自定义模型
+  // 监听并持久化按渠道的自定义模�?
   watch(customChatModelsByProvider, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_CHAT_MODELS_BY_PROVIDER, val), { deep: true })
   watch(customImageModelsByProvider, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_IMAGE_MODELS_BY_PROVIDER, val), { deep: true })
   watch(customVideoModelsByProvider, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_VIDEO_MODELS_BY_PROVIDER, val), { deep: true })
 
-  // 监听并持久化选中的模型
+  // 监听并持久化选中的模�?
   watch(selectedChatModel, (val) => setStored(STORAGE_KEYS.SELECTED_CHAT_MODEL, val))
   watch(selectedImageModel, (val) => setStored(STORAGE_KEYS.SELECTED_IMAGE_MODEL, val))
   watch(selectedVideoModel, (val) => setStored(STORAGE_KEYS.SELECTED_VIDEO_MODEL, val))
@@ -671,6 +693,7 @@ export const useModelStore = defineStore('model', () => {
   watch(customProviders, (val) => setStoredJson(STORAGE_KEYS.CUSTOM_PROVIDERS, val), { deep: true })
   watch(providerAliases, (val) => setStoredJson(STORAGE_KEYS.PROVIDER_ALIASES, val), { deep: true })
   watch(providerOrder, (val) => setStoredJson(STORAGE_KEYS.PROVIDER_ORDER, val), { deep: true })
+  watch(hiddenProviders, (val) => setStoredJson(STORAGE_KEYS.HIDDEN_PROVIDERS, val), { deep: true })
 
   return {
     // Provider
@@ -688,6 +711,7 @@ export const useModelStore = defineStore('model', () => {
     updateProviderLabel,
     reorderProviders,
     removeCustomProvider,
+    removeProvider,
     adaptRequest,
     adaptResponse,
 

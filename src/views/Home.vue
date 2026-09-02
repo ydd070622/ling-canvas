@@ -1,760 +1,148 @@
-<template>
-  <!-- Home page | 首页 -->
-  <div class="min-h-screen h-screen overflow-y-auto bg-[var(--bg-primary)]">
-    <!-- Main content | 主要内容 -->
-    <main class="max-w-5xl mx-auto px-4 py-8 md:py-16">
-      <!-- Welcome section | 欢迎区域 -->
-      <section class="text-center mb-12">
-        <div class="flex items-center justify-center gap-4 mb-8">
-          <img src="../assets/logo.png" alt="Ling Canvas Logo" class="w-12 h-12 md:w-16 md:h-16" />
-          <h1 class="text-2xl md:text-4xl font-bold text-[var(--text-primary)]">欢迎来到 Ling Canvas</h1>
-        </div>
-        
-        <!-- Input area | 输入区域 -->
-        <div class="max-w-[980px] mx-auto">
-          <div class="bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] p-4 shadow-sm">
-            <!-- Reference images | 参考图 -->
-            <div class="mb-3 flex items-center gap-2">
-              <input
-                ref="referenceInputRef"
-                type="file"
-                accept="image/*"
-                multiple
-                class="hidden"
-                @change="handleReferenceImageChange"
-              />
-              <button
-                type="button"
-                data-testid="home-add-reference"
-                aria-label="添加参考图"
-                title="添加参考图"
-                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-[var(--border-color)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]"
-                @click="referenceInputRef?.click()"
-              >
-                <n-icon :size="16"><AddOutline /></n-icon>
-              </button>
-              <div
-                v-for="(img, index) in referenceImages"
-                :key="`${img.name}-${index}`"
-                class="group relative h-9 w-9 overflow-hidden rounded-lg border border-[var(--border-color)]"
-                :title="img.name"
-              >
-                <img :src="img.dataUrl" :alt="img.name" class="h-full w-full object-cover" />
-                <button
-                  type="button"
-                  aria-label="移除参考图"
-                  title="移除参考图"
-                  class="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl-md bg-black/65 text-xs leading-none text-white opacity-0 transition-opacity group-hover:opacity-100"
-                  @click="removeReferenceImage(index)"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <textarea
-              v-model="inputText"
-              placeholder="输入你的创意，开始新项目"
-              class="w-full bg-transparent resize-none outline-none text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] min-h-[150px]"
-              @keydown.enter.ctrl="handleCreateWithInput"
-            />
-            <!-- Image generation settings | 生图配置 -->
-            <div class="relative mt-2 flex items-center justify-between gap-3 text-sm text-[var(--text-primary)]">
-              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                <!-- Model selector | 模型选择 -->
-                <n-dropdown
-                  v-if="imageModelOptions.length > 0"
-                  :options="imageModelDropdownOptions"
-                  @select="selectImageModel"
-                  placement="bottom-start"
-                >
-                  <button
-                    type="button"
-                    data-testid="home-image-model"
-                    class="flex max-w-44 items-center gap-1 rounded-md px-2 py-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)]"
-                  >
-                    <span class="max-w-36 truncate">{{ selectedImageModelLabel }}</span>
-                    <n-icon :size="13" class="text-[var(--text-secondary)]"><ChevronDownOutline /></n-icon>
-                  </button>
-                </n-dropdown>
-                <button
-                  v-else
-                  type="button"
-                  data-testid="home-add-image-model"
-                  class="rounded-md px-2 py-1.5 text-[var(--accent-color)] transition-colors hover:bg-[var(--bg-tertiary)]"
-                  @click="openImageModelSettings"
-                >
-                  暂无模型，先添加
-                </button>
-
-                <span class="text-[var(--text-secondary)]">·</span>
-
-                <!-- Combined ratio, resolution and quality selector | 比例、分辨率、画质组合选择 -->
-                <button
-                  type="button"
-                  data-testid="home-image-ratio"
-                  class="flex items-center gap-1 rounded-md px-2 py-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)]"
-                  :class="{ 'bg-[var(--bg-tertiary)]': showImageSettings }"
-                  @click="showImageSettings = !showImageSettings"
-                >
-                  {{ selectedRatioLabel }}
-                  <span class="text-[var(--text-secondary)]">·</span>
-                  {{ selectedResolutionLabel }}
-                  <span class="text-[var(--text-secondary)]">·</span>
-                  {{ selectedQualityLabel }}
-                  <n-icon :size="13" class="text-[var(--text-secondary)]"><ChevronDownOutline /></n-icon>
-                </button>
-
-                <span class="text-[var(--text-secondary)]">·</span>
-
-                <!-- Count selector | 张数选择 -->
-                <n-dropdown
-                  :options="countDropdownOptions"
-                  @select="selectImageCount"
-                  placement="bottom-start"
-                >
-                  <button
-                    type="button"
-                    data-testid="home-image-count"
-                    class="flex items-center gap-1 rounded-md px-2 py-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)]"
-                  >
-                    {{ imageCount }} 张
-                    <n-icon :size="13" class="text-[var(--text-secondary)]"><ChevronDownOutline /></n-icon>
-                  </button>
-                </n-dropdown>
-              </div>
-
-              <button
-                type="button"
-                data-testid="home-send"
-                aria-label="开始生成"
-                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-color)] text-white transition-colors hover:bg-[var(--accent-hover)]"
-                @click="handleCreateWithInput"
-              >
-                <n-icon :size="20"><SendOutline /></n-icon>
-              </button>
-
-              <!-- Settings popover | 设置弹层 -->
-              <div
-                v-if="showImageSettings"
-                data-testid="home-image-settings-popover"
-                class="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-24px)] w-[min(280px,calc(100vw-16px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] p-2.5 text-left text-[var(--text-primary)] shadow-xl"
-              >
-                <div class="mb-2 text-xs font-semibold text-[var(--text-secondary)]">比例</div>
-                <div class="grid grid-cols-4 gap-1">
-                  <button
-                    type="button"
-                    class="row-span-5 flex h-full min-h-[210px] flex-col items-center justify-center rounded-md border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-xs transition-colors hover:border-[var(--accent-color)]"
-                    :class="{ '!border-[var(--accent-color)] !bg-[var(--accent-color)] !text-white shadow-sm': selectedImageRatioMode === 'auto' }"
-                    @click="selectImageSize('auto')"
-                  >
-                    <span class="mb-1 h-5 w-3 rounded-sm border border-current"></span>
-                    自适应
-                  </button>
-                  <button
-                    v-for="(option, index) in ratioOptions"
-                    :key="option.key || option.label"
-                    type="button"
-                    class="flex h-11 flex-col items-center justify-center rounded-md border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-xs transition-colors hover:border-[var(--accent-color)]"
-                    :class="{ 'col-start-2': index === 12, '!border-[var(--accent-color)] !bg-[var(--accent-color)] !text-white shadow-sm': selectedImageRatioMode !== 'auto' && option.key === selectedImageSize }"
-                    @click="selectImageSize(option.key)"
-                  >
-                    <span class="mb-0.5 h-3.5 w-6 rounded-sm border border-current" :style="ratioPreviewStyle(option.label)"></span>
-                    {{ option.label }}
-                  </button>
-                </div>
-
-                <div class="my-3 border-t border-[var(--border-color)]"></div>
-                <div class="mb-2 text-xs font-semibold text-[var(--text-secondary)]">画质</div>
-                <div class="grid grid-cols-3 gap-1">
-                  <button
-                    v-for="option in qualityOptions"
-                    :key="option.key"
-                    type="button"
-                    class="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-xs transition-colors hover:border-[var(--accent-color)]"
-                    :class="{ '!border-[var(--accent-color)] !bg-[var(--accent-color)] !text-white shadow-sm': option.key === selectedImageQuality }"
-                    @click="selectImageQuality(option.key)"
-                  >
-                    {{ option.label }}
-                  </button>
-                </div>
-
-                <div class="my-3 border-t border-[var(--border-color)]"></div>
-                <div class="mb-2 text-xs font-semibold text-[var(--text-secondary)]">分辨率</div>
-                <div class="grid grid-cols-3 gap-1">
-                  <button
-                    v-for="option in resolutionOptions"
-                    :key="option.key"
-                    type="button"
-                    class="rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-xs transition-colors hover:border-[var(--accent-color)]"
-                    :class="{ '!border-[var(--accent-color)] !bg-[var(--accent-color)] !text-white shadow-sm': option.key === selectedResolution }"
-                    @click="selectImageResolution(option.key)"
-                  >
-                    {{ option.label }}
-                  </button>
-                </div>
-
-              </div>
-            </div>
-          </div>
-          
-        </div>
-      </section>
-
-      <!-- My projects section | 我的项目区域 -->
-      <section>
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-[var(--text-primary)]">我的项目</h2>
-          <div class="flex items-center gap-2">
-            <button 
-              @click="createNewProject"
-              class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-[var(--accent-color)] hover:bg-[var(--accent-hover)] text-white transition-colors"
-            >
-              <n-icon :size="16"><AddOutline /></n-icon>
-              新建项目
-            </button>
-            <button
-              type="button"
-              class="flex items-center gap-1.5 rounded-lg border border-[var(--border-color)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--accent-color)] hover:text-[var(--accent-color)]"
-              @click="showTrashModal = true"
-            >
-              <n-icon :size="16"><TrashOutline /></n-icon>
-              回收站
-              <span v-if="trashedProjects.length" class="rounded-full bg-[var(--bg-tertiary)] px-1.5 text-xs">{{ trashedProjects.length }}</span>
-            </button>
-          </div>
-        </div>
-        
-        <!-- Empty state | 空状态 -->
-        <div v-if="projects.length === 0" class="text-center py-12 bg-[var(--bg-secondary)] rounded-xl border border-dashed border-[var(--border-color)]">
-          <n-icon :size="48" class="text-[var(--text-secondary)] mb-4"><FolderOutline /></n-icon>
-          <p class="text-[var(--text-secondary)] mb-4">还没有项目，创建一个开始吧</p>
-          <button 
-            @click="createNewProject"
-            class="px-4 py-2 text-sm rounded-lg bg-[var(--accent-color)] hover:bg-[var(--accent-hover)] text-white transition-colors"
-          >
-            创建第一个项目
-          </button>
-        </div>
-        
-        <!-- Projects grid | 项目网格 -->
-        <div v-else class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div 
-            v-for="project in projects" 
-            :key="project.id"
-            class="group relative"
-          >
-            <!-- Project card | 项目卡片 -->
-            <div 
-              @click="openProject(project)"
-              class="cursor-pointer"
-            >
-              <div 
-                class="aspect-video rounded-xl overflow-hidden bg-[var(--bg-tertiary)] mb-2 border border-[var(--border-color)] relative"
-                @mouseenter="handleThumbnailHover(project, true)"
-                @mouseleave="handleThumbnailHover(project, false)"
-              >
-                <!-- Thumbnail or placeholder | 缩略图或占位 -->
-                <template v-if="project.thumbnail">
-                  <!-- Video thumbnail | 视频缩略图 -->
-                  <video 
-                    v-if="isVideoUrl(project.thumbnail)"
-                    :ref="el => setVideoRef(project.id, el)"
-                    :src="project.thumbnail"
-                    class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    muted
-                    loop
-                    playsinline
-                  />
-                  <!-- Image thumbnail | 图片缩略图 -->
-                  <img 
-                    v-else
-                    :src="project.thumbnail" 
-                    :alt="project.name"
-                    class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </template>
-                <div v-else class="w-full h-full flex items-center justify-center">
-                  <n-icon :size="32" class="text-[var(--text-secondary)]"><DocumentOutline /></n-icon>
-                </div>
-                
-                <!-- Hover overlay | 悬浮遮罩 -->
-                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                  <span class="text-white text-sm">打开项目</span>
-                </div>
-              </div>
-              <p class="text-sm text-[var(--text-primary)] truncate">{{ project.name }}</p>
-              <p class="text-xs text-[var(--text-secondary)]">{{ formatDate(project.updatedAt) }}</p>
-            </div>
-            
-            <!-- Project actions | 项目操作 -->
-            <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-              <n-dropdown :options="getProjectActions(project)" @select="(key) => handleProjectAction(key, project)" placement="bottom-end">
-                <button 
-                  @click.stop
-                  class="p-1.5 bg-white/90 dark:bg-gray-800/90 rounded-lg shadow hover:bg-white dark:hover:bg-gray-800 transition-colors"
-                >
-                  <n-icon :size="16"><EllipsisHorizontalOutline /></n-icon>
-                </button>
-              </n-dropdown>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <!-- Floating bottom-left actions | 左下角悬浮操作（主题 / 设置） -->
-    <div class="fixed bottom-4 left-4 z-40 flex items-center gap-1 rounded-full border border-[var(--border-color)] bg-[var(--bg-secondary)] px-2 py-2 shadow-lg">
-      <button
-        type="button"
-        class="flex h-10 w-10 items-center justify-center rounded-full text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)]"
-        :title="isDark ? '切换浅色主题' : '切换深色主题'"
-        @click="toggleTheme"
-      >
-        <n-icon :size="20">
-          <SunnyOutline v-if="isDark" />
-          <MoonOutline v-else />
-        </n-icon>
-      </button>
-      <button
-        type="button"
-        class="flex h-10 w-10 items-center justify-center rounded-full text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-tertiary)]"
-        title="API 设置"
-        @click="showApiSettings = true"
-      >
-        <n-icon :size="20"><SettingsOutline /></n-icon>
-      </button>
-    </div>
-
-    <!-- API Settings Modal | API 设置弹窗 -->
-    <ApiSettings v-model:show="showApiSettings" @saved="refreshApiConfig" />
-
-    <!-- Rename modal | 重命名弹窗 -->
-    <n-modal v-model:show="showRenameModal" preset="dialog" title="重命名项目">
-      <n-input v-model:value="renameValue" placeholder="请输入项目名称" />
-      <template #action>
-        <n-button @click="showRenameModal = false">取消</n-button>
-        <n-button type="primary" @click="confirmRename">确定</n-button>
-      </template>
-    </n-modal>
-
-    <n-modal
-      v-model:show="showTrashModal"
-      preset="card"
-      title="项目回收站"
-      class="project-trash-modal"
-      :bordered="false"
-    >
-      <div v-if="trashedProjects.length" class="grid grid-cols-3 gap-3">
-        <div
-          v-for="project in trashedProjects"
-          :key="project.id"
-          class="group relative min-w-0"
-        >
-          <div class="relative mb-2 flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]">
-            <video
-              v-if="project.thumbnail && isVideoUrl(project.thumbnail)"
-              :src="project.thumbnail"
-              class="h-full w-full object-cover"
-              muted
-              playsinline
-            />
-            <img
-              v-else-if="project.thumbnail"
-              :src="project.thumbnail"
-              :alt="project.name"
-              class="h-full w-full object-cover"
-            />
-            <n-icon v-else :size="34" class="text-[var(--text-secondary)]"><DocumentOutline /></n-icon>
-            <div class="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
-              <span class="text-sm text-white">已移入回收站</span>
-            </div>
-            <div class="absolute right-2 top-2 z-10">
-              <n-dropdown :options="getTrashProjectActions(project)" @select="key => handleTrashProjectAction(key, project)" placement="bottom-end">
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg bg-white/90 text-gray-700 shadow-sm transition-colors hover:bg-white dark:bg-gray-800/90 dark:text-gray-100 dark:hover:bg-gray-800"
-                  @click.stop
-                >
-                  <n-icon :size="17"><EllipsisHorizontalOutline /></n-icon>
-                </button>
-              </n-dropdown>
-            </div>
-          </div>
-          <p class="truncate text-sm font-medium text-[var(--text-primary)]">{{ project.name }}</p>
-          <p class="mt-0.5 text-xs text-[var(--text-secondary)]">删除于 {{ formatDate(project.deletedAt) }}</p>
-        </div>
-      </div>
-      <div v-else class="flex min-h-52 flex-col items-center justify-center text-[var(--text-secondary)]">
-        <n-icon :size="44"><TrashOutline /></n-icon>
-        <p class="mt-3 text-sm">回收站是空的</p>
-      </div>
-      <template v-if="trashedProjects.length" #footer>
-        <div class="flex justify-end">
-          <n-button size="small" type="error" ghost @click="confirmEmptyTrash">清空回收站</n-button>
-        </div>
-      </template>
-    </n-modal>
-  </div>
-</template>
-
 <script setup>
 /**
- * Home view component | 首页视图组件
- * Entry point with project list and creation input
+ * Home view | 主页视图
+ * Workspace content area with canvas list
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon, NDropdown, NModal, NInput, NButton, useDialog } from 'naive-ui'
-import { 
-  AddOutline, 
-  SendOutline,
+import {
   RefreshOutline,
-  DocumentOutline,
-  FolderOutline,
   EllipsisHorizontalOutline,
-  CreateOutline,
-  CopyOutline,
   SettingsOutline,
-  TrashOutline,
-  ChevronDownOutline,
-  SunnyOutline,
-  MoonOutline
+  TrashOutline
 } from '@vicons/ionicons5'
-import { 
-  projects, 
+import {
+  projects,
   trashedProjects,
-  initProjectsStore, 
-  createProject, 
-  deleteProject, 
+  activeProjects,
+  initProjectsStore,
+  createProject,
   restoreProject,
   permanentlyDeleteProject,
   emptyProjectTrash,
-  duplicateProject, 
-  renameProject 
+  renameProject,
+  deleteProject
 } from '../stores/projects'
 import { useModelStore } from '../stores/pinia'
-import { pendingReferenceImages } from '../stores/canvas'
-import { isDark, toggleTheme } from '../stores/theme'
+import { useUIStore } from '../stores/ui'
 import ApiSettings from '../components/ApiSettings.vue'
+import CanvasList from '../components/layout/CanvasList.vue'
 
 const router = useRouter()
 const dialog = useDialog()
 const modelStore = useModelStore()
+const uiStore = useUIStore()
 
-// API Settings state | API 设置状态
-const showApiSettings = ref(false)
-const showTrashModal = ref(false)
-const isApiConfigured = computed(() => !!modelStore.currentApiKey)
+// ─── Manage mode | 管理模式 ───
+const isManaging = ref(false)
+const selectedIds = ref([])
 
-// Refresh API config state | 刷新 API 配置状态
-const refreshApiConfig = () => {
-  // 通过 computed 自动更新，不需要手动刷新
-}
-
-// Video refs for hover play | 视频引用用于悬停播放
-const videoRefs = new Map()
-
-// Set video ref | 设置视频引用
-const setVideoRef = (projectId, el) => {
-  if (el) {
-    videoRefs.set(projectId, el)
+const toggleSelect = (id) => {
+  const idx = selectedIds.value.indexOf(id)
+  if (idx === -1) {
+    selectedIds.value.push(id)
   } else {
-    videoRefs.delete(projectId)
+    selectedIds.value.splice(idx, 1)
   }
 }
 
-// Handle thumbnail hover | 处理缩略图悬停
-const handleThumbnailHover = (project, isHovering) => {
-  if (!isVideoUrl(project.thumbnail)) return
-  
-  const video = videoRefs.get(project.id)
-  if (!video) return
-  
-  if (isHovering) {
-    video.play().catch(() => {
-      // Ignore play errors (e.g., autoplay policy)
-    })
+const toggleSelectAll = () => {
+  if (selectedIds.value.length === filteredProjects.value.length) {
+    selectedIds.value = []
   } else {
-    video.pause()
-    video.currentTime = 0 // Reset to start
+    selectedIds.value = filteredProjects.value.map(p => p.id)
   }
 }
 
-// Input state | 输入状态
-const inputText = ref('')
-const referenceInputRef = ref(null)
-const referenceImages = ref([])
-
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif|svg)$/i
-const MAX_REFERENCE_IMAGES = 9
-
-const handleReferenceImageChange = (event) => {
-  const input = event.target
-  const files = Array.from(input.files || [])
-  input.value = ''
-  if (!files.length) return
-
-  for (const file of files) {
-    if (referenceImages.value.length >= MAX_REFERENCE_IMAGES) {
-      window.$message?.warning(`最多添加 ${MAX_REFERENCE_IMAGES} 张参考图`)
-      break
-    }
-
-    const looksLikeImage = file.type.startsWith('image/') || IMAGE_EXT_RE.test(file.name)
-    if (!looksLikeImage) {
-      window.$message?.warning(`「${file.name}」不是图片文件，请选择图片`)
-      continue
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      window.$message?.warning(`「${file.name}」超过 10MB（${(file.size / 1024 / 1024).toFixed(1)}MB），请压缩后再试`)
-      continue
-    }
-
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (referenceImages.value.length >= MAX_REFERENCE_IMAGES) return
-      referenceImages.value = [...referenceImages.value, { name: file.name, dataUrl: reader.result }]
-      window.$message?.success(`已添加参考图「${file.name}」`)
-    }
-    reader.onerror = () => window.$message?.error(`「${file.name}」读取失败，请重试`)
-    reader.readAsDataURL(file)
-  }
+const exitManageMode = () => {
+  isManaging.value = false
+  selectedIds.value = []
 }
 
-const removeReferenceImage = (index) => {
-  referenceImages.value.splice(index, 1)
-}
-
-// Homepage image generation settings | 首页生图配置
-const selectedImageModelKey = ref('')
-const selectedImageSize = ref('')
-const selectedImageRatioMode = ref('auto')
-const selectedImageQuality = ref('medium')
-const selectedResolution = ref('2k')
-const imageCount = ref(1)
-const showImageSettings = ref(false)
-
-const imageModelOptions = computed(() => modelStore.availableImageModels || [])
-const selectedImageModel = computed(() =>
-  imageModelOptions.value.find(model => model.key === selectedImageModelKey.value) || imageModelOptions.value[0]
-)
-const selectedImageModelLabel = computed(() => selectedImageModel.value?.label || '选择模型')
-const imageModelDropdownOptions = computed(() => imageModelOptions.value.map(model => ({
-  label: model.label,
-  key: model.key
-})))
-
-const ratioLabel = (size) => {
-  if (!size || !size.includes('x')) return size || '自动'
-  const [width, height] = size.split('x').map(Number)
-  if (!width || !height) return size
-  const ratio = width / height
-  const knownRatios = [
-    [21 / 9, '21:9'], [16 / 9, '16:9'], [3 / 2, '3:2'], [4 / 3, '4:3'],
-    [1, '1:1'], [3 / 4, '3:4'], [2 / 3, '2:3'], [9 / 16, '9:16'], [9 / 21, '9:21']
-  ]
-  return knownRatios.find(([value]) => Math.abs(ratio - value) < 0.03)?.[1] || `${width}:${height}`
-}
-
-const ratioDefinitions = [
-  { label: '1:1', fallback: '1x1' },
-  { label: '2:3', fallback: '2x3' },
-  { label: '3:2', fallback: '3x2' },
-  { label: '4:5', fallback: '4x5' },
-  { label: '5:4', fallback: '5x4' },
-  { label: '16:9', fallback: '16x9' },
-  { label: '9:16', fallback: '9x16' },
-  { label: '21:9', fallback: '21x9' },
-  { label: '9:21', fallback: '9x21' },
-  { label: '3:4', fallback: '3x4' },
-  { label: '4:3', fallback: '4x3' },
-  { label: '1:2', fallback: '1x2' },
-  { label: '2:1', fallback: '2x1' },
-  { label: '1:3', fallback: '1x3' },
-  { label: '3:1', fallback: '3x1' }
-]
-
-const ratioOptions = computed(() => {
-  const sizes = selectedImageModel.value?.sizes || []
-  return ratioDefinitions.map(definition => ({
-    label: definition.label,
-    key: sizes.find(size => ratioLabel(size) === definition.label) || definition.fallback
-  }))
-})
-const selectedRatioLabel = computed(() => selectedImageRatioMode.value === 'auto'
-  ? '自适应'
-  : ratioOptions.value.find(option => option.key === selectedImageSize.value)?.label || '自动')
-
-const HOME_QUALITY_OPTIONS = [
-  { label: '低', key: 'low' },
-  { label: '中', key: 'medium' },
-  { label: '高', key: 'high' }
-]
-const qualityOptions = computed(() => HOME_QUALITY_OPTIONS)
-const selectedQualityLabel = computed(() => qualityOptions.value.find(option => option.key === selectedImageQuality.value)?.label || '中')
-const resolutionOptions = [
-  { label: '1K', key: '1k' },
-  { label: '2K', key: '2k' },
-  { label: '4K', key: '4k' }
-]
-const selectedResolutionLabel = computed(() => resolutionOptions.find(option => option.key === selectedResolution.value)?.label || '2K')
-const countDropdownOptions = [1, 2, 3, 4].map(count => ({ label: `${count} 张`, key: count }))
-
-const resolutionForSize = (size) => {
-  if (!size || !size.includes('x')) return '2k'
-  const longestSide = Math.max(...size.split('x').map(Number))
-  if (longestSide >= 3800) return '4k'
-  if (longestSide >= 1800) return '2k'
-  return '1k'
-}
-
-const ratioPreviewStyle = (label) => {
-  const [width, height] = String(label).split(':').map(Number)
-  if (!width || !height) return {}
-  const max = 28
-  const scale = Math.min(max / width, 16 / height)
-  return { width: `${Math.max(8, Math.round(width * scale))}px`, height: `${Math.max(6, Math.round(height * scale))}px` }
-}
-
-const syncImageSettings = () => {
-  const model = selectedImageModel.value
-  if (!model) return
-  selectedImageModelKey.value = model.key
-  if (model.sourceProvider && modelStore.currentProvider !== model.sourceProvider) {
-    modelStore.setProvider(model.sourceProvider)
-  }
-  const options = ratioOptions.value
-  if (!options.some(option => option.key === selectedImageSize.value)) {
-    selectedImageSize.value = model.defaultParams?.size || options[0]?.key || ''
-  }
-  const qualities = qualityOptions.value
-  if (!qualities.some(option => option.key === selectedImageQuality.value)) {
-    const configuredQuality = model.defaultParams?.quality
-    selectedImageQuality.value = ['low', 'medium', 'high'].includes(configuredQuality) ? configuredQuality : 'medium'
-  }
-}
-
-watch(imageModelOptions, syncImageSettings, { immediate: true })
-watch(selectedImageModelKey, syncImageSettings)
-
-const selectImageModel = (key) => {
-  selectedImageModelKey.value = key
-  const selected = imageModelOptions.value.find(model => model.key === key)
-  if (selected?.sourceProvider) modelStore.setProvider(selected.sourceProvider)
-  modelStore.selectedImageModel = key
-  syncImageSettings()
-}
-
-const selectImageSize = (size) => {
-  if (size === 'auto') {
-    selectedImageRatioMode.value = 'auto'
-    selectedImageSize.value = selectedImageModel.value?.defaultParams?.size || ratioOptions.value[0]?.key || ''
-    return
-  }
-  selectedImageRatioMode.value = 'ratio'
-  selectedImageSize.value = size
-}
-
-const selectImageQuality = (quality) => {
-  selectedImageQuality.value = quality
-}
-
-const selectImageResolution = (resolution) => {
-  selectedResolution.value = resolution
-  const currentRatio = selectedRatioLabel.value
-  const candidate = ratioOptions.value.find(option => option.label === currentRatio && resolutionForSize(option.key) === resolution)
-  if (candidate) selectedImageSize.value = candidate.key
-}
-
-const selectImageCount = (count) => {
-  imageCount.value = Number(count)
-}
-
-const openImageModelSettings = () => {
-  dialog.warning({
-    title: '暂无图片模型',
-    content: '请先在 API 设置中添加图片模型，再开始生图。',
-    positiveText: '去设置',
+const confirmBatchDelete = () => {
+  if (selectedIds.value.length === 0) return
+  const count = selectedIds.value.length
+  dialog.error({
+    title: '批量删除画布',
+    content: `确定要删除 ${count} 个画布吗？删除后可在回收站中恢复。`,
+    positiveText: '删除',
     negativeText: '取消',
-    onPositiveClick: () => { showApiSettings.value = true }
+    onPositiveClick: () => {
+      selectedIds.value.forEach(id => deleteProject(id))
+      window.$message?.success(`已将 ${count} 个画布移入回收站`)
+      selectedIds.value = []
+      // If no more items, exit manage mode
+      if (filteredProjects.value.length === 0) {
+        exitManageMode()
+      }
+    }
   })
 }
 
-const saveGenerationSettings = () => {
-  sessionStorage.setItem('ai-canvas-generation-settings', JSON.stringify({
-    model: selectedImageModelKey.value,
-    size: selectedImageSize.value,
-    quality: selectedImageQuality.value,
-    resolution: selectedResolution.value,
-    n: imageCount.value
-  }))
-
-  // Pass reference images in memory: sessionStorage (~5MB) cannot hold base64 images | 参考图通过内存传递，sessionStorage 容量装不下 base64 图片
-  pendingReferenceImages.value = referenceImages.value.map(img => ({ ...img }))
+const enterManageMode = () => {
+  isManaging.value = true
+  selectedIds.value = []
 }
 
-// Rename modal state | 重命名弹窗状态
+// ─── View-based project filtering | 基于视图的项目过滤 ───
+const filteredProjects = computed(() => {
+  switch (uiStore.currentView) {
+    case 'trash':
+      return trashedProjects.value
+    case 'recent':
+      return [...activeProjects.value]
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+        .slice(0, 10)
+    case 'folder':
+      return activeProjects.value.filter(p => p.folder === uiStore.currentFolder)
+    case 'shared':
+      return []
+    case 'all':
+    default:
+      return activeProjects.value
+  }
+})
+
+const isTrashView = computed(() => uiStore.currentView === 'trash')
+
+// ─── API Settings | API 设置 ───
+const showApiSettings = ref(false)
+const isApiConfigured = computed(() => !!modelStore.currentApiKey)
+const refreshApiConfig = () => {}
+
+// ─── Rename modal | 重命名弹窗 ───
 const showRenameModal = ref(false)
 const renameValue = ref('')
 const renameTargetId = ref(null)
 
-// Format date | 格式化日期
-const formatDate = (date) => {
-  if (!date) return ''
-  const d = new Date(date)
-  const now = new Date()
-  const diff = now - d
-  
-  // Less than 1 minute | 小于1分钟
-  if (diff < 60000) return '刚刚'
-  // Less than 1 hour | 小于1小时
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  // Less than 1 day | 小于1天
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  // Less than 7 days | 小于7天
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}天前`
-  // Format as date | 格式化为日期
-  return `${d.getMonth() + 1}/${d.getDate()}`
+const confirmRename = () => {
+  if (renameTargetId.value && renameValue.value.trim()) {
+    renameProject(renameTargetId.value, renameValue.value.trim())
+    window.$message?.success('已重命名')
+  }
+  showRenameModal.value = false
+  renameTargetId.value = null
+  renameValue.value = ''
 }
 
-// Get project actions | 获取项目操作选项
-const getProjectActions = (project) => [
-  { label: '重命名', key: 'rename', icon: () => h(NIcon, null, { default: () => h(CreateOutline) }) },
-  { label: '复制', key: 'duplicate', icon: () => h(NIcon, null, { default: () => h(CopyOutline) }) },
-  { type: 'divider' },
-  { label: '删除', key: 'delete', icon: () => h(NIcon, null, { default: () => h(TrashOutline) }) }
-]
+// ─── CanvasList event handlers | 画布列表事件处理 ───
+const handleCanvasDelete = (id) => {
+  // CanvasCard already calls deleteProject internally
+  window.$message?.success('已移入回收站')
+}
 
-// Handle project action | 处理项目操作
-const handleProjectAction = (key, project) => {
-  switch (key) {
-    case 'rename':
-      renameTargetId.value = project.id
-      renameValue.value = project.name
-      showRenameModal.value = true
-      break
-    case 'duplicate':
-      const newId = duplicateProject(project.id)
-      if (newId) {
-        window.$message?.success('项目已复制')
-      }
-      break
-    case 'delete':
-      dialog.warning({
-        title: '移入回收站',
-        content: `确定要将项目「${project.name}」移入回收站吗？之后可以恢复。`,
-        positiveText: '移入回收站',
-        negativeText: '取消',
-        onPositiveClick: () => {
-          deleteProject(project.id)
-          window.$message?.success('项目已移入回收站')
-        }
-      })
-      break
+const handleCanvasRename = (id) => {
+  const project = projects.value.find(p => p.id === id)
+  if (project) {
+    renameTargetId.value = id
+    renameValue.value = project.name
+    showRenameModal.value = true
   }
 }
 
-const handleRestoreProject = project => {
+// ─── Trash view actions | 回收站视图操作 ───
+const handleRestoreProject = (project) => {
   if (restoreProject(project.id)) {
     window.$message?.success(`已恢复项目「${project.name}」`)
   }
@@ -771,7 +159,7 @@ const handleTrashProjectAction = (key, project) => {
   if (key === 'permanent-delete') confirmPermanentDelete(project)
 }
 
-const confirmPermanentDelete = project => {
+const confirmPermanentDelete = (project) => {
   dialog.error({
     title: '永久删除项目',
     content: `确定永久删除项目「${project.name}」吗？删除后无法恢复。`,
@@ -797,20 +185,8 @@ const confirmEmptyTrash = () => {
   })
 }
 
-// Confirm rename | 确认重命名
-const confirmRename = () => {
-  if (renameTargetId.value && renameValue.value.trim()) {
-    renameProject(renameTargetId.value, renameValue.value.trim())
-    window.$message?.success('已重命名')
-  }
-  showRenameModal.value = false
-  renameTargetId.value = null
-  renameValue.value = ''
-}
-
-// Check API key before navigation | 跳转前检查 API Key
+// ─── Navigation | 导航 ───
 const checkApiKeyAndNavigate = (callback) => {
-  
   if (!isApiConfigured.value) {
     dialog.warning({
       title: '未配置 API Key',
@@ -823,71 +199,212 @@ const checkApiKeyAndNavigate = (callback) => {
   return true
 }
 
-// Create new project | 创建新项目
-const createNewProject = () => {
+const createNewCanvas = () => {
   checkApiKeyAndNavigate(() => {
-    const id = createProject('未命名项目')
-    saveGenerationSettings()
+    const folder = uiStore.currentView === 'folder' ? uiStore.currentFolder : null
+
+    let name = '未命名项目'
+    if (folder) {
+      // 获取今天的日期 YYYYMMDD
+      const now = new Date()
+      const dateStr = now.getFullYear().toString() +
+        String(now.getMonth() + 1).padStart(2, '0') +
+        String(now.getDate()).padStart(2, '0')
+
+      // 计算当天该分类下已有的画布数量
+      const todayPrefix = `${dateStr}-${folder}-`
+      const existingCount = activeProjects.value.filter(p =>
+        p.folder === folder && p.name && p.name.startsWith(todayPrefix)
+      ).length
+
+      // 生成名称
+      name = `${todayPrefix}${existingCount + 1}`
+    }
+
+    const id = createProject(name, folder)
     router.push(`/canvas/${id}`)
   })
 }
 
-// Create project with input text | 使用输入文本创建项目
-const handleCreateWithInput = () => {
-  checkApiKeyAndNavigate(() => {
-    const name = inputText.value.trim() || '未命名项目'
-    const id = createProject(name)
-    // Store the input text to be used as initial prompt
-    sessionStorage.setItem('ai-canvas-initial-prompt', inputText.value.trim())
-    saveGenerationSettings()
-    inputText.value = ''
-    router.push(`/canvas/${id}`)
-  })
-}
-
-// Open existing project | 打开已有项目
-const openProject = (project) => {
-  checkApiKeyAndNavigate(() => {
-    router.push(`/canvas/${project.id}`)
-  })
-}
-
-// Check if URL is a video | 检查 URL 是否为视频
-const isVideoUrl = (url) => {
-  if (!url || typeof url !== 'string') return false
-  const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv']
-  return videoExtensions.some(ext => url.toLowerCase().includes(ext))
-}
-
-// Import h for render functions | 导入 h 用于渲染函数
-import { h } from 'vue'
-
-// Initialize projects store on mount | 挂载时初始化项目存储
-const handleImageSettingsOutsideClick = (event) => {
-  if (!showImageSettings.value) return
-  const target = event.target
-  if (target?.closest?.('[data-testid="home-image-settings-popover"]') || target?.closest?.('[data-testid="home-image-ratio"]')) return
-  showImageSettings.value = false
+// ─── Date formatting | 日期格式化 ───
+const formatDate = (date) => {
+  if (!date) return ''
+  const d = new Date(date)
+  const diff = new Date() - d
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)}天前`
+  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 onMounted(() => {
   initProjectsStore()
-  document.addEventListener('click', handleImageSettingsOutsideClick)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleImageSettingsOutsideClick)
 })
 </script>
 
-<style scoped>
-:global(.project-trash-modal) {
-  width: min(680px, calc(100vw - 32px));
-  max-height: min(720px, calc(100vh - 48px));
-}
+<template>
+  <div class="h-full overflow-y-auto">
+    <div class="mx-auto max-w-5xl px-6 py-8">
+      <!-- ─── Workspace Header | 工作区头部 ─── -->
+      <header class="mb-8">
+        <span class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500">
+          WORKSPACE
+        </span>
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0 flex-1">
+            <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
+              {{ uiStore.viewTitle }}
+            </h1>
+            <p class="mt-1.5 text-sm leading-relaxed text-gray-400 dark:text-gray-500">
+              把素材、提示词和生成结果组织在同一个项目空间里。
+            </p>
+          </div>
 
-:global(.project-trash-modal .n-card__content) {
-  max-height: calc(100vh - 190px);
-  overflow-y: auto;
-}
+          <!-- Action buttons group | 操作按钮组 -->
+          <div class="flex shrink-0 items-center gap-2">
+            <!-- Manage button (non-trash views) | 管理按钮（非回收站视图） -->
+            <button
+              v-if="!isTrashView && filteredProjects.length > 0"
+              type="button"
+              class="flex items-center gap-1.5 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium transition-all"
+              :class="isManaging
+                ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:border-gray-500'"
+              @click="isManaging ? exitManageMode() : enterManageMode()"
+            >
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              {{ isManaging ? '退出管理' : '管理' }}
+            </button>
+
+            <!-- New canvas button (hidden in manage mode) | 新建画布按钮（管理模式下隐藏） -->
+            <button
+              v-if="!isTrashView && !isManaging"
+              type="button"
+              class="flex items-center gap-1.5 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:bg-blue-600 hover:shadow-md active:scale-[0.97]"
+              @click="createNewCanvas"
+            >
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              新建画布
+            </button>
+
+            <!-- Empty trash button | 清空回收站按钮 -->
+            <button
+              v-if="isTrashView && trashedProjects.length > 0"
+              type="button"
+              class="flex items-center gap-1.5 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-500 transition-all hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
+              @click="confirmEmptyTrash"
+            >
+              清空回收站
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- ─── Canvas List | 画布列表 ─── -->
+      <section>
+        <!-- Trash view | 回收站视图 -->
+        <template v-if="isTrashView">
+          <div v-if="trashedProjects.length > 0" class="grid grid-cols-2 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+            <div
+              v-for="project in trashedProjects"
+              :key="project.id"
+              class="group relative min-w-0"
+            >
+              <div class="relative mb-2 flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800">
+                <img
+                  v-if="project.thumbnail"
+                  :src="project.thumbnail"
+                  :alt="project.name"
+                  class="h-full w-full object-cover opacity-60"
+                />
+                <n-icon v-else :size="34" class="text-gray-300 dark:text-gray-600"><TrashOutline /></n-icon>
+                <div class="absolute right-2 top-2 z-10">
+                  <n-dropdown :options="getTrashProjectActions(project)" @select="key => handleTrashProjectAction(key, project)" placement="bottom-end">
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg bg-white/90 text-gray-700 shadow-sm transition-colors hover:bg-white dark:bg-gray-700/90 dark:text-gray-100 dark:hover:bg-gray-600"
+                      @click.stop
+                    >
+                      <n-icon :size="17"><EllipsisHorizontalOutline /></n-icon>
+                    </button>
+                  </n-dropdown>
+                </div>
+              </div>
+              <p class="truncate text-sm font-medium text-gray-700 dark:text-gray-300">{{ project.name }}</p>
+              <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">删除于 {{ formatDate(project.deletedAt) }}</p>
+            </div>
+          </div>
+          <div v-else class="flex flex-col items-center justify-center py-24 text-center">
+            <n-icon :size="48" class="mb-4 text-gray-300 dark:text-gray-600"><TrashOutline /></n-icon>
+            <p class="text-base font-medium text-gray-400 dark:text-gray-500">回收站是空的</p>
+            <p class="mt-1 text-sm text-gray-300 dark:text-gray-600">删除的画布会出现在这里</p>
+          </div>
+        </template>
+
+        <!-- Shared view (empty placeholder) | 共享视图（空占位） -->
+        <template v-else-if="uiStore.currentView === 'shared'">
+          <div class="flex flex-col items-center justify-center py-24 text-center">
+            <n-icon :size="48" class="mb-4 text-gray-300 dark:text-gray-600"><SettingsOutline /></n-icon>
+            <p class="text-base font-medium text-gray-400 dark:text-gray-500">暂无共享内容</p>
+            <p class="mt-1 text-sm text-gray-300 dark:text-gray-600">与他人共享的画布会显示在这里</p>
+          </div>
+        </template>
+
+        <!-- Normal views (all / recent / folder) | 正常视图 -->
+        <template v-else>
+          <CanvasList
+            :projects="filteredProjects"
+            :selectable="isManaging"
+            :selected-ids="selectedIds"
+            @delete="handleCanvasDelete"
+            @rename="handleCanvasRename"
+            @toggle-select="toggleSelect"
+            @toggle-select-all="toggleSelectAll"
+          >
+            <template #actions>
+              <button
+                type="button"
+                class="rounded-md px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                @click="exitManageMode"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                :disabled="selectedIds.length === 0"
+                class="flex items-center gap-1.5 rounded-md bg-red-500 px-3 py-1.5 text-sm font-medium text-white transition-all hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                @click="confirmBatchDelete"
+              >
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                删除选中 ({{ selectedIds.length }})
+              </button>
+            </template>
+          </CanvasList>
+        </template>
+      </section>
+    </div>
+
+    <!-- ─── API Settings Modal | API 设置弹窗 ─── -->
+    <ApiSettings v-model:show="showApiSettings" @saved="refreshApiConfig" />
+
+    <!-- ─── Rename Modal | 重命名弹窗 ─── -->
+    <n-modal v-model:show="showRenameModal" preset="dialog" title="重命名项目">
+      <n-input v-model:value="renameValue" placeholder="请输入项目名称" />
+      <template #action>
+        <n-button @click="showRenameModal = false">取消</n-button>
+        <n-button type="primary" @click="confirmRename">确定</n-button>
+      </template>
+    </n-modal>
+  </div>
+</template>
+
+<style scoped>
+/* Manage mode transitions handled by CanvasList */
 </style>

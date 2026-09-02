@@ -218,7 +218,7 @@ export const WORKFLOW_TEMPLATES = [
         type: 'image',
         position: { x: startPosition.x, y: startPosition.y + rowSpacing },
         data: {
-          url: '',
+          url: 'https://ffile.chatfire.site/image/covers/product01.jpg',
           label: '产品图片'
         }
       })
@@ -1045,7 +1045,7 @@ export const WORKFLOW_TEMPLATES = [
     description: '角色生成 → 剧情文字 → 绘本插画，支持角色一致性',
     icon: 'BookOutline',
     category: 'creative',
-    cover: '',
+    cover: "https://ffile.chatfire.site/image/covers/workflow03.jpeg",
     createNodes: (startPosition) => {
       const colSpacing = 420
       const rowSpacing = 280

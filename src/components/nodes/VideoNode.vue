@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <!-- Video node wrapper | 视频节点包裹层 -->
   <div class="video-node-wrapper relative" @mouseenter="showActions = true; showHandleMenu = true" @mouseleave="showActions = false; showHandleMenu = false">
     <!-- Video node | 视频节点 -->
@@ -147,6 +147,7 @@ import { TrashOutline, ExpandOutline, VideocamOutline, CopyOutline, CloseCircleO
 import { updateNode, removeNode, duplicateNode, addNode, addEdge, nodes } from '../../stores/canvas'
 import { useVideoGeneration } from '../../hooks/useApi'
 import NodeHandleMenu from './NodeHandleMenu.vue'
+import { openExternal } from '@/utils'
 
 const props = defineProps({
   id: String,
@@ -300,7 +301,7 @@ const handleDelete = () => {
 // Handle preview | 处理预览
 const handlePreview = () => {
   if (props.data.url) {
-    window.open(props.data.url, '_blank')
+    openExternal(props.data.url)
   }
 }
 

@@ -2,7 +2,7 @@
   <!-- Canvas page | 画布页面 -->
   <div class="canvas-page h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
     <!-- Main canvas area | 主画布区域 -->
-    <div class="flex-1 relative overflow-hidden">
+    <div class="flex-1 relative overflow-hidden" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
       <!-- Vue Flow canvas | Vue Flow 画布 -->
       <VueFlow
         :key="flowKey"
@@ -33,6 +33,14 @@
         <Background v-if="showGrid" :gap="20" :size="1" />
       </VueFlow>
 
+      <div v-if="isDragOverCanvas" class="canvas-drop-overlay">
+        <div class="canvas-drop-hint">
+          <span>松开鼠标，将图片放入画布</span>
+        </div>
+      </div>
+
+                </div>
+
       <!-- Multi-node selection management | 多节点框选管理 -->
       <div
         v-if="selectionOverlay"
@@ -40,27 +48,6 @@
         :style="selectionOverlay.boxStyle"
       >
         <div class="selection-action-bar" @mousedown.stop @click.stop>
-          <div class="selection-layout-menu">
-            <button type="button" class="selection-action" @click="isLayoutMenuOpen = !isLayoutMenuOpen">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></svg>
-              <span>布局</span>
-              <span class="selection-caret">⌄</span>
-            </button>
-            <div v-if="isLayoutMenuOpen" class="selection-layout-popover">
-              <button type="button" @click="layoutSelectedNodes('grid')">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></svg>
-                宫格排列
-              </button>
-              <button type="button" @click="layoutSelectedNodes('horizontal')">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
-                水平排列
-              </button>
-              <button type="button" @click="layoutSelectedNodes('vertical')">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M12 4v16M17 4v16" /></svg>
-                垂直排列
-              </button>
-            </div>
-          </div>
           <button type="button" class="selection-action" @click="duplicateSelectedNodes">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg>
             <span>创建副本</span>
@@ -209,7 +196,6 @@
         </button>
       </div>
 
-    </div>
 
     <!-- API Settings Modal | API 设置弹窗 -->
     <ApiSettings v-model:show="showApiSettings" />
@@ -387,13 +373,17 @@ import ApiSettings from '../components/ApiSettings.vue'
 import DownloadModal from '../components/DownloadModal.vue'
 import WorkflowPanel from '../components/WorkflowPanel.vue'
 import { isDark, toggleTheme } from '../stores/theme'
+import { openExternal } from '@/utils'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { invoke } from '@tauri-apps/api/core'
 
 // API Config state | API 配置状态
 const modelStore = useModelStore()
 const isApiConfigured = computed(() => !!modelStore.currentApiKey)
 
 // Initialize models on page load | 页面加载时初始化模型
-onMounted(() => {
+onMounted(async () => {
   loadAllModels()
 })
 
@@ -455,7 +445,7 @@ const router = useRouter()
 const route = useRoute()
 
 // Vue Flow instance | Vue Flow 实例
-const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals } = useVueFlow()
+const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoordinate } = useVueFlow()
 
 // Register custom node types | 注册自定义节点类型
 const nodeTypes = {
@@ -726,7 +716,7 @@ const downloadSelectedNodes = () => {
     return
   }
 
-  downloadableNodes.forEach(node => window.open(node.data.url, '_blank', 'noopener,noreferrer'))
+  downloadableNodes.forEach(node => openExternal(node.data.url))
   window.$message?.success(`已打开 ${downloadableNodes.length} 个下载链接`)
 }
 
@@ -841,7 +831,7 @@ const layoutSelectedNodes = (layout) => {
 
 const downloadSelectedHistoryAssets = () => {
   const selectedAssets = historyImageAssets.value.filter(asset => selectedHistoryIds.value.includes(asset.id))
-  selectedAssets.forEach(asset => window.open(asset.data.url, '_blank', 'noopener,noreferrer'))
+  selectedAssets.forEach(asset => openExternal(asset.data.url))
   window.$message?.success(`已打开 ${selectedAssets.length} 个图片下载链接`)
 }
 
@@ -1309,7 +1299,7 @@ watch(
 )
 
 // Initialize | 初始化
-onMounted(() => {
+onMounted(async () => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
@@ -1320,6 +1310,29 @@ onMounted(() => {
   
   // Load project data | 加载项目数据
   loadProjectById(route.params.id)
+
+  // Set up Tauri native drag-drop handler (reliable for OS file drops in WebView2)
+  // 使用 Tauri 原生拖拽 API（在 WebView2 中比 HTML5 拖拽更可靠）
+  let dragDropUnlisten = null
+  try {
+    // Try webview first (more reliable for WebView2 drag-drop on Windows)
+    // 优先使用 webview（在 Windows WebView2 中拖拽更可靠）
+    dragDropUnlisten = await getCurrentWebview().onDragDropEvent(handleTauriDragDrop)
+    console.log('[DragDrop] Tauri webview drag-drop listener registered')
+  } catch (err) {
+    console.warn('[DragDrop] Tauri webview drag-drop not available, trying window:', err)
+    try {
+      dragDropUnlisten = await getCurrentWindow().onDragDropEvent(handleTauriDragDrop)
+      console.log('[DragDrop] Tauri window drag-drop listener registered')
+    } catch (err2) {
+      console.warn('[DragDrop] Tauri window drag-drop not available:', err2)
+    }
+  }
+  canvasDragDropUnlisten = dragDropUnlisten
+
+  // Prevent default browser behavior for file drag on window | 防止浏览器默认的文件拖拽行为
+  window.addEventListener('dragover', preventWindowDrop)
+  window.addEventListener('drop', preventWindowDrop)
 
   // Apply image settings selected on the home page | 应用首页选择的生图配置
   const rawGenerationSettings = sessionStorage.getItem('ai-canvas-generation-settings')
@@ -1351,11 +1364,165 @@ onMounted(() => {
   }
 })
 
+// Drag & drop image files from file system | 从文件系统拖拽图片文件到画布
+let canvasDragDropUnlisten = null
+
+// Tauri native drag-drop handler | Tauri 原生拖拽处理
+// 使用 Tauri 原生 API 处理 OS 文件拖拽，比 HTML5 drag-drop 在 WebView2 中更可靠
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif']
+
+const isImageFile = (filePath) => {
+  const ext = filePath.split('.').pop()?.toLowerCase() || ''
+  return IMAGE_EXTENSIONS.includes(ext)
+}
+
+const addDroppedImageNode = ({ dataUrl, fileName, position }) => {
+  const nodeId = addNode('image', position, {
+    url: dataUrl,
+    base64: dataUrl,
+    label: fileName || '拖入图片',
+    fileName: fileName || '拖入图片'
+  })
+  const maxZIndex = Math.max(0, ...nodes.value.map(node => node.zIndex || 0))
+  updateNode(nodeId, { zIndex: maxZIndex + 1 })
+  setTimeout(() => updateNodeInternals(nodeId), 50)
+  return nodeId
+}
+
+const handleTauriDragDrop = async (event) => {
+  console.log('[DragDrop] Tauri event received:', event.payload?.type, 'paths:', event.payload?.paths)
+  const payload = event.payload
+  switch (payload.type) {
+    case 'enter':
+      console.log('[DragDrop] Tauri drag enter')
+      isDragOverCanvas.value = true
+      break
+    case 'over':
+      isDragOverCanvas.value = true
+      break
+    case 'drop': {
+      isDragOverCanvas.value = false
+      const filePaths = payload.paths || []
+      console.log('[DragDrop] Tauri drop, paths:', filePaths)
+      const imagePaths = filePaths.filter(isImageFile)
+      if (!imagePaths.length) {
+        console.log('[DragDrop] No image files found in dropped paths')
+        return
+      }
+
+      for (const [index, filePath] of imagePaths.entries()) {
+        try {
+          // Tauri returns physical pixels; Vue Flow expects CSS pixels | Tauri 返回物理像素，画布使用 CSS 像素
+          const canvasPosition = screenToFlowCoordinate({
+            x: payload.position.x / window.devicePixelRatio + index * 40,
+            y: payload.position.y / window.devicePixelRatio + index * 40
+          })
+          // Copy into project storage so the node does not depend on the source path | 复制进项目存储，不依赖原文件路径
+          const image = await invoke('read_dropped_image', { path: filePath })
+          addDroppedImageNode({
+            dataUrl: image.dataUrl,
+            fileName: image.fileName,
+            position: canvasPosition
+          })
+        } catch (err) {
+          console.error('[DragDrop] Failed to import image:', filePath, err)
+          window.$message?.error(`图片导入失败：${String(err)}`)
+        }
+      }
+      // Save project after drop | 拖拽完成后保存项目
+      saveProject()
+      break
+    }
+    case 'leave':
+      isDragOverCanvas.value = false
+      break
+  }
+}
+
+
+// HTML5 drag-drop fallback handler | HTML5 拖拽后备处理器
+const isDragOverCanvas = ref(false)
+
+// Prevent file drop on window from navigating | 防止文件拖到窗口外导致页面跳转
+const preventWindowDrop = (e) => { e.preventDefault() }
+
+const onDragOver = (event) => {
+  const hasFiles = event.dataTransfer?.types?.includes('Files')
+  if (hasFiles) {
+    isDragOverCanvas.value = true
+    console.log('[DragDrop] HTML5 dragover - files detected')
+  }
+}
+
+const onDragLeave = (event) => {
+  const rect = event.currentTarget.getBoundingClientRect()
+  const x = event.clientX
+  const y = event.clientY
+  if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+    isDragOverCanvas.value = false
+  }
+}
+
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(reader.result)
+  reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+  reader.readAsDataURL(file)
+})
+
+const onDrop = async (event) => {
+  isDragOverCanvas.value = false
+  console.log('[DragDrop] HTML5 drop event, types:', event.dataTransfer?.types)
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) {
+    console.log('[DragDrop] HTML5 drop: no files')
+    return
+  }
+  console.log('[DragDrop] HTML5 drop, files:', files.length)
+
+  const imageFiles = Array.from(files).filter(f => {
+    const ext = f.name.split('.').pop()?.toLowerCase() || ''
+    return f.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)
+  })
+  if (!imageFiles.length) {
+    console.log('[DragDrop] HTML5 drop: no image files')
+    return
+  }
+
+  for (const [index, file] of imageFiles.entries()) {
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      const canvasPosition = screenToFlowCoordinate({
+        x: event.clientX + index * 40,
+        y: event.clientY + index * 40
+      })
+      const fileName = file.name.replace(/\.[^.]+$/, '')
+      addDroppedImageNode({
+        dataUrl,
+        fileName,
+        position: canvasPosition
+      })
+    } catch (err) {
+      console.error('[DragDrop] HTML5 image import failed:', file.name, err)
+      window.$message?.error(`图片导入失败：${file.name}`)
+    }
+  }
+  // FileReader is asynchronous, so save only after every node exists | 全部节点创建后再保存
+  saveProject()
+}
+
 // Cleanup on unmount | 卸载时清理
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
+  // Clean up Tauri native drag-drop listener | 清理 Tauri 原生拖拽监听器
+  if (canvasDragDropUnlisten) {
+    canvasDragDropUnlisten()
+    canvasDragDropUnlisten = null
+  }
+  window.removeEventListener('dragover', preventWindowDrop)
+  window.removeEventListener('drop', preventWindowDrop)
   // Save project before leaving | 离开前保存项目
   saveProject()
 })
@@ -1553,4 +1720,36 @@ onUnmounted(() => {
 .history-image-card.selected .history-select-mark { border-color: var(--accent-color); background: var(--accent-color); color: white; }
 .history-empty { display: flex; height: 100%; min-height: 180px; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 14px; }
 @media (max-width: 760px) { .history-image-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.canvas-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px dashed var(--accent-color, #6366f1);
+  border-radius: 12px;
+  pointer-events: none;
+  animation: dropOverlayPulse 1.5s ease-in-out infinite;
+}
+@keyframes dropOverlayPulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+.canvas-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary, #fff);
+  font-size: 15px;
+  font-weight: 500;
+}
+.canvas-drop-hint svg {
+  width: 36px;
+  height: 36px;
+  opacity: 0.8;
+}
 </style>

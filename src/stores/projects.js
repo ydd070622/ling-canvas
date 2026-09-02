@@ -6,14 +6,44 @@ import { ref, computed, watch } from 'vue'
 
 // Storage key | 存储键
 const STORAGE_KEY = 'ai-canvas-projects'
-const TRASH_STORAGE_KEY = 'ai-canvas-trashed-projects'
 
 // Generate unique ID | 生成唯一ID
 const generateId = () => `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
-// Projects list | 项目列表
+// Default field values for migration | 旧数据迁移的默认值
+const DEFAULT_PROJECT_FIELDS = {
+  folder: null,
+  visibility: 'all',
+  cardCount: 0,
+  creator: '我创建',
+  deletedAt: null
+}
+
+/**
+ * Migrate project data with default fields | 迁移项目数据，补充缺失字段
+ */
+const migrateProject = (p) => {
+  const migrated = { ...p }
+  for (const [key, defaultValue] of Object.entries(DEFAULT_PROJECT_FIELDS)) {
+    if (migrated[key] === undefined) {
+      migrated[key] = defaultValue
+    }
+  }
+  return migrated
+}
+
+// All projects list (including trashed) | 全部项目列表（含回收站）
 export const projects = ref([])
-export const trashedProjects = ref([])
+
+// Trashed projects (soft-deleted) | 回收站项目（软删除）
+export const trashedProjects = computed(() =>
+  projects.value.filter(p => p.deletedAt).sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt))
+)
+
+// Active projects (excluding trashed) | 活跃项目（不含回收站）
+export const activeProjects = computed(() =>
+  projects.value.filter(p => !p.deletedAt)
+)
 
 // Current project ID | 当前项目ID
 export const currentProjectId = ref(null)
@@ -31,20 +61,12 @@ export const loadProjects = () => {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored)
-      // Convert date strings back to Date objects | 将日期字符串转换回 Date 对象
-      projects.value = parsed.map(p => ({
-        ...p,
-        createdAt: new Date(p.createdAt),
-        updatedAt: new Date(p.updatedAt)
-      }))
-    }
-    const storedTrash = localStorage.getItem(TRASH_STORAGE_KEY)
-    if (storedTrash) {
-      trashedProjects.value = JSON.parse(storedTrash).map(p => ({
+      // Convert date strings back to Date objects & migrate | 将日期字符串转换回 Date 对象并迁移数据
+      projects.value = parsed.map(p => migrateProject({
         ...p,
         createdAt: new Date(p.createdAt),
         updatedAt: new Date(p.updatedAt),
-        deletedAt: new Date(p.deletedAt)
+        deletedAt: p.deletedAt ? new Date(p.deletedAt) : null
       }))
     }
   } catch (err) {
@@ -67,8 +89,9 @@ const cleanNodeForStorage = (node) => {
     delete cleanedData.base64
   }
   
-  // If url is a base64 or blob URL, it cannot/should not be persisted | base64 与 blob 地址都无法跨会话持久化
-  if (cleanedData.url?.startsWith?.('data:') || cleanedData.url?.startsWith?.('blob:')) {
+  // If url is a base64 data URL, keep it only if it's from external source | 如果 url 是 base64，只有外部来源才保留
+  if (cleanedData.url?.startsWith?.('data:')) {
+    // For uploaded images, we can't persist them in localStorage | 上传的图片无法持久化到 localStorage
     delete cleanedData.url
   }
   
@@ -140,24 +163,13 @@ export const saveProjects = () => {
   }
 }
 
-const saveTrashedProjects = () => {
-  try {
-    localStorage.setItem(
-      TRASH_STORAGE_KEY,
-      JSON.stringify(trashedProjects.value.map(cleanProjectForStorage))
-    )
-  } catch (err) {
-    console.error('Failed to save trashed projects:', err)
-    window.$message?.error('回收站保存失败，请清理浏览器存储空间')
-  }
-}
-
 /**
  * Create a new project | 创建新项目
  * @param {string} name - Project name | 项目名称
+ * @param {string|null} folder - Folder name | 分类名称
  * @returns {string} - New project ID | 新项目ID
  */
-export const createProject = (name = '未命名项目') => {
+export const createProject = (name = '未命名项目', folder = null) => {
   const id = generateId()
   const now = new Date()
   
@@ -167,6 +179,11 @@ export const createProject = (name = '未命名项目') => {
     thumbnail: '',
     createdAt: now,
     updatedAt: now,
+    folder: folder,
+    visibility: 'all',
+    cardCount: 0,
+    creator: '我创建',
+    deletedAt: null,
     // Canvas data | 画布数据
     canvasData: {
       nodes: [],
@@ -219,6 +236,11 @@ export const updateProjectCanvas = (id, canvasData) => {
   }
   project.updatedAt = new Date()
   
+  // Auto-update cardCount from nodes | 自动更新卡片数量
+  if (canvasData.nodes) {
+    project.cardCount = canvasData.nodes.length
+  }
+
   // Auto-update thumbnail from last edited image/video node | 自动从最后编辑的图片/视频节点更新缩略图
   if (canvasData.nodes) {
     const mediaNodes = canvasData.nodes
@@ -255,42 +277,47 @@ export const getProjectCanvas = (id) => {
 }
 
 /**
- * Delete project | 删除项目
+ * Delete project (soft delete to trash) | 删除项目（软删除到回收站）
  * @param {string} id - Project ID | 项目ID
  */
 export const deleteProject = (id) => {
-  const index = projects.value.findIndex(p => p.id === id)
-  if (index === -1) return false
-  const [project] = projects.value.splice(index, 1)
-  trashedProjects.value = [{ ...project, deletedAt: new Date() }, ...trashedProjects.value]
-  saveProjects()
-  saveTrashedProjects()
-  return true
+  const project = projects.value.find(p => p.id === id)
+  if (project) {
+    project.deletedAt = new Date()
+    saveProjects()
+  }
 }
 
+/**
+ * Restore project from trash | 从回收站恢复项目
+ * @param {string} id - Project ID | 项目ID
+ */
 export const restoreProject = (id) => {
-  const index = trashedProjects.value.findIndex(p => p.id === id)
-  if (index === -1) return false
-  const [project] = trashedProjects.value.splice(index, 1)
-  const { deletedAt, ...restored } = project
-  restored.updatedAt = new Date()
-  projects.value = [restored, ...projects.value]
-  saveProjects()
-  saveTrashedProjects()
-  return true
+  const project = projects.value.find(p => p.id === id)
+  if (project && project.deletedAt) {
+    delete project.deletedAt
+    project.updatedAt = new Date()
+    saveProjects()
+    return true
+  }
+  return false
 }
 
+/**
+ * Permanently delete a project | 永久删除项目
+ * @param {string} id - Project ID | 项目ID
+ */
 export const permanentlyDeleteProject = (id) => {
-  const originalLength = trashedProjects.value.length
-  trashedProjects.value = trashedProjects.value.filter(p => p.id !== id)
-  if (trashedProjects.value.length === originalLength) return false
-  saveTrashedProjects()
-  return true
+  projects.value = projects.value.filter(p => p.id !== id)
+  saveProjects()
 }
 
+/**
+ * Empty the trash (permanently delete all trashed projects) | 清空回收站
+ */
 export const emptyProjectTrash = () => {
-  trashedProjects.value = []
-  saveTrashedProjects()
+  projects.value = projects.value.filter(p => !p.deletedAt)
+  saveProjects()
 }
 
 /**
@@ -305,13 +332,13 @@ export const duplicateProject = (id) => {
   const newId = generateId()
   const now = new Date()
   
-  const newProject = {
+  const newProject = migrateProject({
     ...JSON.parse(JSON.stringify(source)), // Deep clone | 深拷贝
     id: newId,
     name: `${source.name} (副本)`,
     createdAt: now,
     updatedAt: now
-  }
+  })
   
   projects.value = [newProject, ...projects.value]
   saveProjects()
@@ -376,7 +403,7 @@ export const initProjectsStore = () => {
   loadProjects()
   
   // Create sample project if empty | 如果为空则创建示例项目
-  if (projects.value.length === 0 && trashedProjects.value.length === 0) {
+  if (projects.value.length === 0) {
     const id = createProject('示例项目')
     const project = projects.value.find(p => p.id === id)
     if (project) {
@@ -414,6 +441,7 @@ export const initProjectsStore = () => {
         ],
         viewport: { x: 100, y: 50, zoom: 0.8 }
       }
+      project.cardCount = 2
       saveProjects()
     }
   }
@@ -423,13 +451,9 @@ export const initProjectsStore = () => {
 if (typeof window !== 'undefined') {
   window.__aiCanvasProjects = {
     projects,
-    trashedProjects,
     loadProjects,
     saveProjects,
     createProject,
-    deleteProject,
-    restoreProject,
-    permanentlyDeleteProject,
-    emptyProjectTrash
+    deleteProject
   }
 }

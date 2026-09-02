@@ -44,20 +44,7 @@
           </div>
         </div>
 
-        <div v-if="addingProvider" class="add-provider-form">
-          <n-input
-            v-model:value="newProviderName"
-            size="small"
-            placeholder="供应商名称"
-            autofocus
-            @keyup.enter="confirmAddProvider"
-          />
-          <div class="flex gap-2">
-            <n-button size="tiny" type="primary" class="flex-1" @click="confirmAddProvider">添加</n-button>
-            <n-button size="tiny" class="flex-1" @click="addingProvider = false">取消</n-button>
-          </div>
-        </div>
-        <button v-else type="button" class="add-provider-button" @click="addingProvider = true">
+        <button type="button" class="add-provider-button" @click="addBlankProvider">
           <n-icon :size="16"><AddOutline /></n-icon>
           添加供应商
         </button>
@@ -84,13 +71,14 @@
                 测试连接
               </n-button>
               <n-button
+                v-if="!isLinkapi"
                 size="small"
                 quaternary
                 type="error"
-                @click="isCustomProvider ? deleteCurrentProvider() : clearProviderConfiguration(currentProvider)"
+                @click="deleteCurrentProvider()"
               >
                 <template #icon><n-icon><TrashOutline /></n-icon></template>
-                {{ isCustomProvider ? '删除' : '清除配置' }}
+                删除
               </n-button>
             </div>
           </div>
@@ -227,8 +215,6 @@ const dialog = useDialog()
 const showModal = ref(props.show)
 const saving = ref(false)
 const testing = ref(false)
-const addingProvider = ref(false)
-const newProviderName = ref('')
 const draggingProviderKey = ref('')
 const dragOverProviderKey = ref('')
 const activeModelFilter = ref('all')
@@ -245,6 +231,7 @@ const formData = reactive({
 const providerOptions = computed(() => modelStore.providerList)
 const currentProvider = computed(() => providerOptions.value.find(item => item.key === formData.provider))
 const isCustomProvider = computed(() => !!currentProvider.value?.isCustom)
+const isLinkapi = computed(() => currentProvider.value?.key === 'linkapi')
 const remoteModels = computed(() => remoteModelsByProvider.value[formData.provider] || [])
 
 const modelFilters = [
@@ -356,11 +343,9 @@ const endProviderDrag = () => {
 
 const hasProviderKey = key => !!modelStore.apiKeysByProvider[key]
 
-const confirmAddProvider = () => {
-  const key = modelStore.addCustomProvider(newProviderName.value)
+const addBlankProvider = () => {
+  const key = modelStore.addCustomProvider('新供应商')
   if (!key) return
-  newProviderName.value = ''
-  addingProvider.value = false
   formData.provider = key
   modelStore.setProvider(key)
   updateForm()
@@ -520,7 +505,27 @@ const deleteProvider = provider => {
 }
 
 const deleteCurrentProvider = () => {
-  if (currentProvider.value) deleteProvider(currentProvider.value)
+  if (currentProvider.value) {
+    const provider = currentProvider.value
+    dialog.warning({
+      title: '删除供应商',
+      content: `确定删除“${provider.label}”及其本地配置吗？`,
+      positiveText: '删除',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        const wasSelected = formData.provider === provider.key
+        modelStore.removeProvider(provider.key)
+        const cache = { ...remoteModelsByProvider.value }
+        delete cache[provider.key]
+        remoteModelsByProvider.value = cache
+        if (wasSelected) {
+          formData.provider = modelStore.currentProvider
+          updateForm()
+        }
+        message.success('供应商已删除')
+      }
+    })
+  }
 }
 
 const clearProviderConfiguration = provider => {
@@ -608,7 +613,6 @@ const clearProviderConfiguration = provider => {
 .provider-dot { height: 7px; width: 7px; border-radius: 999px; background: #22c55e; }
 .add-provider-button { display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px dashed var(--border-color); border-radius: 10px; padding: 10px; color: var(--text-secondary); font-size: 13px; }
 .add-provider-button:hover { border-color: var(--accent-color); color: var(--accent-color); }
-.add-provider-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-color); padding-top: 12px; }
 
 .settings-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 16px; }
 .config-card, .models-card { border: 1px solid var(--border-color); border-radius: 14px; background: var(--bg-secondary); padding: 18px; }
