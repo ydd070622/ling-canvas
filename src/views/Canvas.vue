@@ -1,6 +1,6 @@
 <template>
   <!-- Canvas page | 画布页面 -->
-  <div class="canvas-page h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
+  <div class="canvas-page h-full w-full flex flex-col bg-[var(--bg-primary)]">
     <!-- Main canvas area | 主画布区域 -->
     <div class="flex-1 relative overflow-hidden" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
       <!-- Vue Flow canvas | Vue Flow 画布 -->
@@ -18,14 +18,19 @@
         :selection-key-code="true"
         :selection-mode="'partial'"
         :pan-on-drag="[1, 2]"
+        :pan-activation-key-code="'Space'"
         :snap-to-grid="true"
         :snap-grid="[20, 20]"
+        :is-valid-connection="isValidConnection"
         @connect="onConnect"
+        @connect-start="onConnectStart"
+        @connect-end="onConnectEnd"
         @node-click="onNodeClick"
         @pane-click="onPaneClick"
         @dblclick="onCanvasDoubleClick"
         @selection-end="refreshSelectionOverlay"
-        @node-drag-stop="refreshSelectionOverlay"
+        @node-drag-start="startBatchOperation"
+        @node-drag-stop="handleNodeDragStop"
         @viewport-change="handleViewportChange"
         @edges-change="onEdgesChange"
         class="canvas-flow"
@@ -38,8 +43,6 @@
           <span>松开鼠标，将图片放入画布</span>
         </div>
       </div>
-
-                </div>
 
       <!-- Multi-node selection management | 多节点框选管理 -->
       <div
@@ -63,8 +66,8 @@
         </div>
       </div>
 
-      <!-- Canvas title | 画布名称 -->
-      <div class="absolute left-4 top-4 z-10">
+      <!-- Canvas title | 画布名称（位于标题栏下方） -->
+      <div class="absolute left-4 top-2 z-10">
         <input
           v-if="isTitleEditing"
           ref="titleInput"
@@ -174,6 +177,27 @@
         </button>
       </div>
 
+      <!-- 拖线到空白：快速新建并自动连线 | Quick add on connect-to-pane -->
+      <div
+        v-if="showQuickAdd"
+        class="flow-quick-add"
+        :style="{ left: `${quickAddState.screenX}px`, top: `${quickAddState.screenY}px` }"
+        @mousedown.stop
+        @click.stop
+      >
+        <div class="flow-quick-add-title">新建节点并自动连线</div>
+        <button
+          v-for="opt in quickAddOptions"
+          :key="opt.type"
+          class="flow-quick-add-item nodrag"
+          @click="handleQuickAdd(opt)"
+        >
+          <span class="qa-dot" :class="`qa-${opt.type}`"></span>
+          <span>{{ opt.name }}</span>
+          <small>{{ opt.desc }}</small>
+        </button>
+      </div>
+
       <!-- Bottom controls | 底部控制 -->
       <div class="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-color)] p-1.5 shadow-sm z-10">
         <button @click="zoomIn" class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors" title="放大">
@@ -195,7 +219,7 @@
           <n-icon :size="17"><SunnyOutline v-if="isDark" /><MoonOutline v-else /></n-icon>
         </button>
       </div>
-
+    </div>
 
     <!-- API Settings Modal | API 设置弹窗 -->
     <ApiSettings v-model:show="showApiSettings" />
@@ -360,13 +384,17 @@ import {
   AppsOutline,
   TimeOutline,
   VolumeMediumOutline,
-  DocumentTextOutline
+  DocumentTextOutline,
+  SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, removeNode, removeEdge, initSampleData, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation } from '../stores/canvas'
-import { loadAllModels } from '../stores/models'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
-import { projects, initProjectsStore, updateProject, renameProject, currentProject } from '../stores/projects'
+import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
+import { getConnectionSemantics, isContentNodeType, validateCanvasConnection } from '../config/nodeRegistry'
+
+// Window close handler for saving | 窗口关闭处理函数（用于保存）
+let handleBeforeUnload = null
 
 // API Settings component | API 设置组件
 import ApiSettings from '../components/ApiSettings.vue'
@@ -382,11 +410,6 @@ import { invoke } from '@tauri-apps/api/core'
 const modelStore = useModelStore()
 const isApiConfigured = computed(() => !!modelStore.currentApiKey)
 
-// Initialize models on page load | 页面加载时初始化模型
-onMounted(async () => {
-  loadAllModels()
-})
-
 // Chat templates | 问答模板
 const CHAT_TEMPLATES = {
   imagePrompt: {
@@ -401,45 +424,25 @@ const CHAT_TEMPLATES = {
   }
 }
 
-// Current template | 当前模板
-const currentTemplate = ref('imagePrompt')
-
 // Chat hook with image prompt template | 问答 hook
-const { 
-  loading: chatLoading, 
-  status: chatStatus, 
-  currentResponse, 
-  send: sendChat 
-} = useChat({
+const { send: sendChat } = useChat({
   systemPrompt: CHAT_TEMPLATES.imagePrompt.systemPrompt,
   model: CHAT_TEMPLATES.imagePrompt.model
 })
 
 // Workflow orchestrator hook | 工作流编排 hook
 const {
-  isAnalyzing: workflowAnalyzing,
-  isExecuting: workflowExecuting,
-  currentStep: workflowStep,
-  totalSteps: workflowTotalSteps,
-  executionLog: workflowLog,
   analyzeIntent,
   executeWorkflow,
-  createTextToImageWorkflow,
-  createMultiAngleStoryboard,
   WORKFLOW_TYPES
 } = useWorkflowOrchestrator()
 
 // Custom node components | 自定义节点组件
-import TextNode from '../components/nodes/TextNode.vue'
-import ImageConfigNode from '../components/nodes/ImageConfigNode.vue'
 import VideoNode from '../components/nodes/VideoNode.vue'
-import ImageNode from '../components/nodes/ImageNode.vue'
-import VideoConfigNode from '../components/nodes/VideoConfigNode.vue'
-import LLMConfigNode from '../components/nodes/LLMConfigNode.vue'
 import GroupNode from '../components/nodes/GroupNode.vue'
-import ImageRoleEdge from '../components/edges/ImageRoleEdge.vue'
-import PromptOrderEdge from '../components/edges/PromptOrderEdge.vue'
-import ImageOrderEdge from '../components/edges/ImageOrderEdge.vue'
+import SimpleTextNode from '../components/nodes/SimpleTextNode.vue'
+import SimpleImageNode from '../components/nodes/SimpleImageNode.vue'
+import FlowEdge from '../components/edges/FlowEdge.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -449,20 +452,15 @@ const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoo
 
 // Register custom node types | 注册自定义节点类型
 const nodeTypes = {
-  text: markRaw(TextNode),
-  imageConfig: markRaw(ImageConfigNode),
+  text: markRaw(SimpleTextNode),
   video: markRaw(VideoNode),
-  image: markRaw(ImageNode),
-  videoConfig: markRaw(VideoConfigNode),
-  llmConfig: markRaw(LLMConfigNode),
+  image: markRaw(SimpleImageNode),
   group: markRaw(GroupNode)
 }
 
 // Register custom edge types | 注册自定义边类型
 const edgeTypes = {
-  imageRole: markRaw(ImageRoleEdge),
-  promptOrder: markRaw(PromptOrderEdge),
-  imageOrder: markRaw(ImageOrderEdge)
+  flowEdge: markRaw(FlowEdge)
 }
 
 // UI state | UI状态
@@ -514,10 +512,7 @@ const projectName = computed(() => {
 const nodeTypeLabels = {
   text: '文本',
   image: '图片',
-  video: '视频',
-  imageConfig: '图像生成',
-  videoConfig: '视频生成',
-  llmConfig: 'LLM'
+  video: '视频'
 }
 
 const getNodeTypeLabel = (type) => nodeTypeLabels[type] || '节点'
@@ -583,8 +578,7 @@ watch(showAssetHistoryModal, (isOpen) => {
 const tools = [
   { id: 'text', name: '文本', icon: TextOutline, action: () => addNewNode('text') },
   { id: 'image', name: '图片', icon: ImageOutline, action: () => addNewNode('image') },
-  { id: 'imageConfig', name: '文生图', icon: ColorPaletteOutline, action: () => addNewNode('imageConfig') },
-  { id: 'videoConfig', name: '视频生成', icon: VideocamOutline, action: () => addNewNode('videoConfig') },
+  { id: 'video', name: '视频', icon: VideocamOutline, action: () => addNewNode('video') },
   { id: 'undo', name: '撤销', icon: ArrowUndoOutline, action: () => undo(), disabled: () => !canUndo() },
   { id: 'redo', name: '重做', icon: ArrowRedoOutline, action: () => redo(), disabled: () => !canRedo() }
 ]
@@ -616,11 +610,16 @@ const addNewNode = async (type) => {
   const viewportCenterY = -viewport.value.y / viewport.value.zoom + (window.innerHeight / 2) / viewport.value.zoom
   
   // Add node at viewport center | 在视口中心添加节点
-  const nodeId = addNode(type, { x: viewportCenterX - 100, y: viewportCenterY - 100 })
+  const nodeId = addNode(type, { x: viewportCenterX - 100, y: viewportCenterY - 100 }, { expanded: true })
+  nodes.value = nodes.value.map(node => ({
+    ...node,
+    selected: node.id === nodeId,
+    data: { ...node.data, expanded: node.id === nodeId }
+  }))
   
   // Set highest z-index | 设置最高层级
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
-  updateNode(nodeId, { zIndex: maxZIndex + 1 })
+  updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
   
   // Force Vue Flow to recalculate node dimensions | 强制 Vue Flow 重新计算节点尺寸
   setTimeout(() => {
@@ -779,19 +778,6 @@ const groupSelectedNodes = () => {
     refreshSelectionOverlay()
   })
   window.$message?.success(`已将 ${selectedIds.size} 个节点打组`)
-  return
-
-  {
-  const groupId = `group-${Date.now()}`
-  const selectedIds = new Set(selectedCanvasNodes.value.map(node => node.id))
-  nodes.value = nodes.value.map(node => (
-    selectedIds.has(node.id)
-      ? { ...node, data: { ...node.data, groupId } }
-      : node
-  ))
-  manualSaveHistory()
-  window.$message?.success(`已将 ${selectedIds.size} 个节点打组`)
-  }
 }
 
 const layoutSelectedNodes = (layout) => {
@@ -905,104 +891,187 @@ const handleAddWorkflow = ({ workflow, options }) => {
   window.$message?.success(`已添加工作流: ${workflow.name}`)
 }
 
+// ===== Flow 连线系统：语义标签 + 类型校验 + 快速新建 =====
+// Flow connection system: semantic labels + type validation + quick add
+
+const FLOW_NODE_TYPES = ['text', 'image', 'video']
+
+// 连接合法性校验 | Connection validity check
+const isValidConnection = (connection) => {
+  return validateCanvasConnection(connection, nodes.value, edges.value).valid
+}
+
+// 拖线到空白：快速新建菜单 | Quick add menu state
+const showQuickAdd = ref(false)
+const quickAddState = ref({ flowX: 0, flowY: 0, screenX: 0, screenY: 0, source: null, sourceHandle: null })
+
+const QUICK_ADD_TARGETS = {
+  text: [
+    { type: 'image', name: '图片', desc: '提示词 → 生图' },
+    { type: 'video', name: '视频', desc: '描述 → 生视频' },
+    { type: 'text', name: '文本', desc: '引用 → 改写' }
+  ],
+  image: [
+    { type: 'text', name: '文本', desc: '图片 → 视觉理解' },
+    { type: 'image', name: '图片', desc: '参考图 → 重绘' },
+    { type: 'video', name: '视频', desc: '作为首帧' }
+  ],
+  video: []
+}
+
+const quickAddOptions = computed(() => {
+  const sourceNode = nodes.value.find(n => n.id === quickAddState.value.source)
+  return sourceNode ? (QUICK_ADD_TARGETS[sourceNode.type] || []) : []
+})
+
+const onConnectEnd = (params) => {
+  // Vue Flow 1.48 的 connectEnd 直接传原生事件；兼容部分版本 { event, connection } 结构
+  const event = params?.event || params
+  const connection = params?.connection || null
+  const mouseEvent = event?.clientX !== undefined ? event : null
+
+  // 连接已成功建立（边数比拖动开始多）则不弹新建菜单 | Skip when a connection was created
+  if (edges.value.length > (connectStartEdgeCount.value ?? edges.value.length)) return
+
+  // 松手落在节点 / 端口上（非法连接被拒绝的场景）也不弹 | Skip when dropped on a node/handle
+  const target = mouseEvent?.target
+  if (target?.closest?.('.vue-flow__handle, .vue-flow__node, .flow-select-menu')) return
+
+  // 拖线起点信息：connectStart 记录优先，其次 connection 结构
+  const sourceNodeId = connection?.source || connectStartNodeId.value
+  const sourceHandleId = connection?.sourceHandle || connectStartHandleId.value
+  const sourceNode = nodes.value.find(n => n.id === sourceNodeId)
+  if (!sourceNode || !isContentNodeType(sourceNode.type)) {
+    return
+  }
+  if (!(QUICK_ADD_TARGETS[sourceNode.type] || []).length) return
+
+  if (!mouseEvent) return
+  const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
+  const flowPos = screenToFlowCoordinate({ x: mouseEvent.clientX, y: mouseEvent.clientY })
+  quickAddState.value = {
+    flowX: flowPos.x,
+    flowY: flowPos.y,
+    screenX: canvasBounds ? mouseEvent.clientX - canvasBounds.left : mouseEvent.clientX,
+    screenY: canvasBounds ? mouseEvent.clientY - canvasBounds.top : mouseEvent.clientY,
+    source: sourceNodeId,
+    sourceHandle: sourceHandleId
+  }
+  showQuickAdd.value = true
+}
+
+// 记录拖动开始时的源端口与边数，用于区分"连上了"还是"拖到空白" | Connect start state
+const connectStartEdgeCount = ref(null)
+const connectStartNodeId = ref(null)
+const connectStartHandleId = ref(null)
+
+const onConnectStart = (params) => {
+  connectStartEdgeCount.value = edges.value.length
+  connectStartNodeId.value = params?.nodeId || null
+  connectStartHandleId.value = params?.handleId || null
+  showQuickAdd.value = false
+}
+
+// 快速新建节点并自动连线 | Quick create target node and auto-wire
+const handleQuickAdd = (opt) => {
+  const sourceNode = nodes.value.find(n => n.id === quickAddState.value.source)
+  if (!sourceNode) {
+    showQuickAdd.value = false
+    return
+  }
+
+  // 目标槽位：图片→视频默认首帧，其余→视频默认描述槽，其他节点用左输入
+  const targetHandle = opt.type === 'video'
+    ? (sourceNode.type === 'image' ? 'first-frame' : 'prompt')
+    : 'left'
+
+  const nodeId = addNode(opt.type, { x: quickAddState.value.flowX - 100, y: quickAddState.value.flowY - 150 }, { expanded: true })
+  nodes.value = nodes.value.map(node => ({
+    ...node,
+    selected: node.id === nodeId,
+    data: { ...node.data, expanded: node.id === nodeId }
+  }))
+
+  const validation = validateCanvasConnection({
+    source: sourceNode.id,
+    target: nodeId,
+    sourceHandle: quickAddState.value.sourceHandle || 'right',
+    targetHandle
+  }, nodes.value, edges.value)
+  if (!validation.valid) {
+    removeNode(nodeId)
+    showQuickAdd.value = false
+    window.$message?.warning(validation.reason)
+    return
+  }
+  const semantics = validation.semantics || getConnectionSemantics(sourceNode.type, opt.type, targetHandle)
+  addEdge({
+    source: sourceNode.id,
+    target: nodeId,
+    sourceHandle: quickAddState.value.sourceHandle || 'right',
+    targetHandle,
+    type: 'flowEdge',
+    data: { label: semantics?.label || '', color: semantics?.color || '#e8912e', order: 1 }
+  })
+
+  const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
+  updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
+  setTimeout(() => updateNodeInternals(nodeId), 50)
+  showQuickAdd.value = false
+  window.$message?.success(`已创建${opt.name}节点并自动连线`)
+}
+
 // Handle connection | 处理连接
 const onConnect = (params) => {
-  // Check connection types | 检查连接类型
   const sourceNode = nodes.value.find(n => n.id === params.source)
   const targetNode = nodes.value.find(n => n.id === params.target)
-  
-  if (sourceNode?.type === 'image' && targetNode?.type === 'videoConfig') {
-    // Use imageRole edge type | 使用图片角色边类型
-    addEdge({
-      ...params,
-      type: 'imageRole',
-      data: { imageRole: 'first_frame_image' } // Default to first frame | 默认首帧
-    })
-  } else if (sourceNode?.type === 'text' && targetNode?.type === 'imageConfig') {
-    // Use promptOrder edge type | 使用提示词顺序边类型
-    // Calculate next order number | 计算下一个顺序号
-    const existingTextEdges = edges.value.filter(e => 
-      e.target === params.target && e.type === 'promptOrder'
-    )
-    const nextOrder = existingTextEdges.length + 1
-    
-    addEdge({
-      ...params,
-      type: 'promptOrder',
-      data: { promptOrder: nextOrder }
-    })
-  } else if (sourceNode?.type === 'image' && targetNode?.type === 'imageConfig') {
-    // Use imageOrder edge type | 使用图片顺序边类型
-    // Calculate next order number | 计算下一个顺序号
-    const existingImageEdges = edges.value.filter(e =>
-      e.target === params.target && e.type === 'imageOrder'
-    )
-
-    // Get @ mentioned image count from connected TextNodes | 获取已连接 TextNode 中 @ 提及的图片数量
-    let mentionedImageCount = 0
-    const connectedTextEdges = edges.value.filter(e => e.target === params.target)
-    for (const edge of connectedTextEdges) {
-      const sourceNode = nodes.value.find(n => n.id === edge.source)
-      if (sourceNode?.type === 'text') {
-        const content = sourceNode.data?.content || ''
-        // Count @ mentions of image nodes | 统计图片节点的 @ 提及
-        const mentionRegex = /@\[([^\]|]+)(?:\|([^\]]+))?\]/g
-        let match
-        while ((match = mentionRegex.exec(content)) !== null) {
-          const mentionedNode = nodes.value.find(n => n.id === match[1])
-          if (mentionedNode?.type === 'image') {
-            mentionedImageCount++
-          }
-        }
-      }
-    }
-
-    // Next order = existing edges + mentioned image count + 1 | 下一个序号 = 现有边数 + @提及图片数 + 1
-    const nextOrder = existingImageEdges.length + mentionedImageCount + 1
-
-    addEdge({
-      ...params,
-      type: 'imageOrder',
-      data: { imageOrder: nextOrder }
-    })
-  } else if (sourceNode?.type === 'llmConfig' && targetNode?.type === 'imageConfig') {
-    // LLM output as prompt for image generation | LLM 输出作为图片生成提示词
-    const existingTextEdges = edges.value.filter(e =>
-      e.target === params.target && e.type === 'promptOrder'
-    )
-    const nextOrder = existingTextEdges.length + 1
-
-    addEdge({
-      ...params,
-      type: 'promptOrder',
-      data: { promptOrder: nextOrder }
-    })
-  } else if (sourceNode?.type === 'llmConfig' && targetNode?.type === 'videoConfig') {
-    // LLM output as prompt for video generation | LLM 输出作为视频生成提示词
-    addEdge({
-      ...params,
-      type: 'promptOrder',
-      data: { promptOrder: 1 }
-    })
-  } else {
-    addEdge(params)
+  const validation = validateCanvasConnection(params, nodes.value, edges.value)
+  if (!validation.valid) {
+    window.$message?.warning(validation.reason)
+    return
   }
+
+  const semantics = validation.semantics || getConnectionSemantics(sourceNode.type, targetNode.type, params.targetHandle)
+  const sameTargetHandleCount = edges.value.filter(edge =>
+    edge.target === params.target && (edge.targetHandle || 'left') === (params.targetHandle || 'left')
+  ).length
+  addEdge({
+    ...params,
+    type: 'flowEdge',
+    data: {
+      label: semantics?.label || '',
+      color: semantics?.color || '#e8912e',
+      order: sameTargetHandleCount + 1
+    }
+  })
 }
 const onNodeClick = (event) => {
-  // nodes.value.forEach(node => {
-  //   updateNode(node.id, { selected: false })
-  // })
-  
-  // // Select clicked node | 选中的节点
-  // const clickedNode = nodes.value.find(n => n.id === event.node.id)
-  // if (clickedNode) {
-  //   updateNode(event.node.id, { selected: true })
-  // }
+  const clickedId = event.node.id
+  // 点击节点：展开并选中自己，不影响其他节点的展开状态（连线需要多节点同时展开）
+  nodes.value = nodes.value.map(node => ({
+    ...node,
+    selected: node.id === clickedId,
+    data: {
+      ...node.data,
+      expanded: node.id === clickedId ? true : node.data.expanded
+    }
+  }))
+  // 展开/收缩后刷新节点几何，保证端口与边位置正确 | Refresh bounds after expand/collapse
+  nextTick(() => {
+    nodes.value.forEach(node => {
+      if (FLOW_NODE_TYPES.includes(node.type)) updateNodeInternals(node.id)
+    })
+  })
 }
 
 // Handle viewport change | 处理视口变化
 const handleViewportChange = (newViewport) => {
   updateViewport(newViewport)
+  refreshSelectionOverlay()
+}
+
+const handleNodeDragStop = () => {
+  endBatchOperation()
   refreshSelectionOverlay()
 }
 
@@ -1014,6 +1083,7 @@ const onEdgesChange = (changes) => {
   if (hasRemoval) {
     // Trigger history save after edge removal | 边删除后触发历史保存
     nextTick(() => {
+      normalizeEdgeOrders()
       manualSaveHistory()
     })
   }
@@ -1022,14 +1092,27 @@ const onEdgesChange = (changes) => {
 // Handle pane click | 处理画布点击
 const onPaneClick = () => {
   showNodeMenu.value = false
-  // Clear all selections | 清除所有选中
-  // nodes.value = nodes.value.map(node => ({
-  //   ...node,
-  //   selected: false
-  // }))
+  showQuickAdd.value = false
+  nodes.value = nodes.value.map(node => ({
+    ...node,
+    selected: false,
+    data: { ...node.data, expanded: false }
+  }))
+  nextTick(() => {
+    nodes.value.forEach(node => {
+      if (FLOW_NODE_TYPES.includes(node.type)) updateNodeInternals(node.id)
+    })
+  })
 }
 
 const onCanvasDoubleClick = (event) => {
+  // Check if double-click is inside a node | 检查双击是否在节点内部
+  const clickedNode = event.target.closest('.vue-flow__node')
+  if (clickedNode) {
+    // Double-click inside node, don't show menu | 节点内双击，不显示菜单
+    return
+  }
+
   if (event?.target?.closest?.('.vue-flow__pane')) {
     // Group body is pointer-events: none, so its area hits the pane; skip menu there | 组内双击穿透到 pane，需按分组区域排除
     const insideGroup = nodes.value.some((node) => {
@@ -1114,7 +1197,7 @@ const cancelInlineRename = () => {
 // Confirm delete | 确认删除
 const confirmDelete = () => {
   const projectId = route.params.id
-  // deleteProject(projectId) // TODO: import deleteProject
+  deleteProject(projectId)
   showDeleteModal.value = false
   window.$message?.success('项目已删除')
   router.push('/')
@@ -1197,7 +1280,9 @@ const sendMessage = async () => {
           image_prompt: result?.image_prompt || content,
           video_prompt: result?.video_prompt || content,
           character: result?.character,
-          shots: result?.shots
+          shots: result?.shots,
+          multi_angle: result?.multi_angle,
+          picture_book: result?.picture_book
         }
         
         window.$message?.info(`执行工作流: ${result?.description || '文生图'}`)
@@ -1208,14 +1293,12 @@ const sendMessage = async () => {
         window.$message?.success('工作流已启动')
       } catch (err) {
         console.error('Workflow error:', err)
-        // Fallback to simple text-to-image | 回退到文生图
-        window.$message?.warning('使用默认文生图工作流')
-        await createTextToImageWorkflow(content, { x: baseX, y: baseY })
+        window.$message?.error(err.message || '工作流执行失败')
       }
     } else {
       // Manual mode: just create nodes | 手动模式：仅创建节点
-      const imageConfigNodeId = addNode('imageConfig', { x: baseX + 400, y: baseY }, {
-        label: '文生图',
+      const imageNodeId = addNode('image', { x: baseX + 400, y: baseY }, {
+        label: '图片',
         ...(homepageGenerationSettings.value || {})
       })
 
@@ -1228,9 +1311,11 @@ const sendMessage = async () => {
 
         addEdge({
           source: textNodeId,
-          target: imageConfigNodeId,
+          target: imageNodeId,
           sourceHandle: 'right',
-          targetHandle: 'left'
+          targetHandle: 'left',
+          type: 'flowEdge',
+          data: { label: '提示词', color: '#e8912e', order: 1 }
         })
       }
 
@@ -1243,10 +1328,11 @@ const sendMessage = async () => {
         })
         addEdge({
           source: referenceNodeId,
-          target: imageConfigNodeId,
+          target: imageNodeId,
           sourceHandle: 'right',
           targetHandle: 'left',
-          data: { imageOrder: index + 1 }
+          type: 'flowEdge',
+          data: { label: '参考图', color: '#4c8bf5', order: index + 1 }
         })
       })
       homepageReferenceImages.value = []
@@ -1304,10 +1390,16 @@ onMounted(async () => {
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
   document.addEventListener('dblclick', onCanvasDoubleClick, true)
-  
+
+  // Save before window/tab close | 窗口/标签页关闭前保存
+  handleBeforeUnload = (e) => {
+    saveProject()
+  }
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
   // Initialize projects store | 初始化项目存储
   initProjectsStore()
-  
+
   // Load project data | 加载项目数据
   loadProjectById(route.params.id)
 
@@ -1384,7 +1476,7 @@ const addDroppedImageNode = ({ dataUrl, fileName, position }) => {
     fileName: fileName || '拖入图片'
   })
   const maxZIndex = Math.max(0, ...nodes.value.map(node => node.zIndex || 0))
-  updateNode(nodeId, { zIndex: maxZIndex + 1 })
+  updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
   setTimeout(() => updateNodeInternals(nodeId), 50)
   return nodeId
 }
@@ -1516,6 +1608,13 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
+
+  // Clean up beforeunload listener | 清理窗口关闭前保存监听器
+  if (handleBeforeUnload) {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+    handleBeforeUnload = null
+  }
+
   // Clean up Tauri native drag-drop listener | 清理 Tauri 原生拖拽监听器
   if (canvasDragDropUnlisten) {
     canvasDragDropUnlisten()
@@ -1640,7 +1739,7 @@ onUnmounted(() => {
 .dark .selection-layout-popover { border-color: #383838; background: #252527; box-shadow: 0 12px 30px rgb(0 0 0 / 46%); }
 .selection-layout-popover button { display: flex; align-items: center; gap: 8px; border-radius: 7px; padding: 8px; color: var(--text-primary); text-align: left; white-space: nowrap; }
 .selection-layout-popover button:hover { background: var(--bg-tertiary); }
-.canvas-flow .vue-flow__node.selected { filter: drop-shadow(0 0 0.6rem color-mix(in srgb, var(--accent-color) 42%, transparent)); }
+.canvas-flow .vue-flow__node.selected { filter: drop-shadow(0 8px 18px rgba(215, 149, 84, 0.2)); }
 .canvas-flow .vue-flow__nodesselection-rect { opacity: 0; border: 0; background: transparent; pointer-events: none; }
 .canvas-flow .vue-flow__pane,
 .canvas-flow .vue-flow__container { cursor: default; }

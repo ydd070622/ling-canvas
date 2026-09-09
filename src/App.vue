@@ -3,13 +3,20 @@
  * Root App component | 根组件
  * Provides naive-ui config, global layout with sidebar, and router view
  */
-import { computed, defineComponent } from 'vue'
+import { computed, defineComponent, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { NConfigProvider, NMessageProvider, NDialogProvider, darkTheme, useMessage } from 'naive-ui'
 import { isDark } from './stores/theme'
 import AppSidebar from './components/layout/AppSidebar.vue'
+import TitleBar from './components/layout/TitleBar.vue'
 
 const route = useRoute()
+
+// Tauri v2 injects this only inside the webview | 仅在 Tauri webview 内注入
+const isTauri = '__TAURI_INTERNALS__' in window
+
+// Rounded frame is dropped while the window is maximized | 最大化时摘掉圆角外框
+const isMaximized = ref(false)
 
 // 判断当前是否在画布页面 | Check if current route is canvas page
 const isCanvasPage = computed(() => route.path.startsWith('/canvas'))
@@ -62,14 +69,21 @@ const themeOverrides = {
     <n-message-provider>
       <MessageBridge />
       <n-dialog-provider>
-        <!-- 画布页面：全屏显示，无侧边栏 | Canvas page: fullscreen, no sidebar -->
-        <router-view v-if="isCanvasPage" />
-        <!-- 其他页面：侧边栏 + 内容区 | Other pages: sidebar + content -->
-        <div v-else class="flex h-screen w-screen overflow-hidden">
-          <AppSidebar />
-          <main class="flex-1 overflow-auto bg-white dark:bg-gray-900">
+        <!-- 圆角外壳：窗口本身透明，外框由这一层画出 | Rounded shell drawn over the transparent window -->
+        <div class="app-layout" :class="{ 'app-rounded': isTauri && !isMaximized }">
+          <TitleBar @maximized-change="isMaximized = $event" />
+
+          <!-- 画布页面：无侧边栏 | Canvas page: no sidebar -->
+          <div v-if="isCanvasPage" class="min-h-0 flex-1 overflow-hidden">
             <router-view />
-          </main>
+          </div>
+          <!-- 其他页面：侧边栏 + 内容区 | Other pages: sidebar + content -->
+          <div v-else class="flex min-h-0 flex-1 overflow-hidden">
+            <AppSidebar />
+            <main class="flex-1 overflow-auto bg-white dark:bg-[#1a1a1a]">
+              <router-view />
+            </main>
+          </div>
         </div>
       </n-dialog-provider>
     </n-message-provider>

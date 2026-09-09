@@ -130,33 +130,8 @@ export const saveProjects = () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanedProjects))
   } catch (err) {
     if (err.name === 'QuotaExceededError') {
-      console.warn('localStorage quota exceeded, attempting aggressive cleanup...')
-      
-      // Remove thumbnails and limit old projects | 移除缩略图并限制旧项目
-      const minimalProjects = cleanedProjects.map((project, index) => ({
-        ...project,
-        thumbnail: '', // Remove all thumbnails | 移除所有缩略图
-        // Keep only essential canvas data for older projects | 旧项目只保留基本画布数据
-        canvasData: index > 10 ? { nodes: [], edges: [], viewport: project.canvasData?.viewport } : project.canvasData
-      }))
-      
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(minimalProjects))
-        console.log('Saved with aggressive cleanup')
-        window.$message?.warning('存储空间不足，已自动清理部分数据')
-      } catch (retryErr) {
-        console.error('Still failed after aggressive cleanup:', retryErr)
-        // Last resort: only keep first 5 projects | 最后手段：只保留前5个项目
-        try {
-          const essentialProjects = minimalProjects.slice(0, 5)
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(essentialProjects))
-          projects.value = projects.value.slice(0, 5)
-          window.$message?.warning('存储空间严重不足，已保留最近 5 个项目')
-        } catch (finalErr) {
-          console.error('Cannot save even minimal data:', finalErr)
-          window.$message?.error('存储失败，请清理浏览器存储空间')
-        }
-      }
+      console.error('Project storage quota exceeded; existing projects were left untouched.', err)
+      window.$message?.error('本地存储空间不足，本次修改尚未保存；系统没有删除任何旧项目')
     } else {
       console.error('Failed to save projects:', err)
     }
@@ -420,13 +395,14 @@ export const initProjectsStore = () => {
           },
           {
             id: 'node_1',
-            type: 'imageConfig',
+            type: 'image',
             position: { x: 500, y: 150 },
             data: {
               prompt: '',
               model: 'doubao-seedream-4-5-251128',
               size: '512x512',
-              label: '文生图'
+              label: '图片',
+              expanded: true
             }
           }
         ],
@@ -436,7 +412,9 @@ export const initProjectsStore = () => {
             source: 'node_0',
             target: 'node_1',
             sourceHandle: 'right',
-            targetHandle: 'left'
+            targetHandle: 'left',
+            type: 'flowEdge',
+            data: { label: '提示词', color: '#e8912e', order: 1 }
           }
         ],
         viewport: { x: 100, y: 50, zoom: 0.8 }

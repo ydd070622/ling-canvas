@@ -69,7 +69,7 @@ function isFolderActive(folderName) {
   <aside
     class="
       flex flex-col h-full w-[220px] flex-shrink-0
-      bg-[#f5f6f8] dark:bg-[#1e1e2e]
+      bg-[#f5f6f8] dark:bg-[#0d0d0d]
       border-r border-gray-200/60 dark:border-gray-700/50
       transition-all duration-300
       select-none
@@ -129,7 +129,7 @@ function isFolderActive(folderName) {
     </nav>
 
     <!-- 底部工具栏 | Bottom toolbar -->
-    <div class="flex items-center justify-between px-3 py-2.5 border-t border-gray-200/60 dark:border-gray-700/50">
+    <div class="flex items-center justify-between px-3 py-2.5 border-t border-gray-200/60 dark:border-gray-800/50">
       <!-- 主题切换 | Theme toggle -->
       <button
         class="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 hover:text-gray-700 dark:hover:text-gray-200 transition-colors cursor-pointer"
@@ -166,17 +166,18 @@ function isFolderActive(folderName) {
 
 /* 导航项基础样式 | Nav item base styles */
 .sidebar-nav-item {
-  @apply flex items-center gap-3 px-3.5 py-[11px] rounded-md text-[17px]
+  @apply flex items-center gap-3 px-[14px] py-[11px] rounded-md text-[17px]
     text-gray-600 dark:text-gray-300
     hover:bg-gray-200/50 dark:hover:bg-gray-700/50
-    transition-all duration-150 cursor-pointer w-full;
+    transition-all duration-200 ease-in-out cursor-pointer w-full;
 }
 
 /* 导航项激活状态 | Nav item active state */
 .sidebar-nav-item--active {
-  @apply bg-blue-50 text-blue-600 font-medium
-    dark:bg-blue-900/25 dark:text-blue-400
-    hover:bg-blue-100/80 dark:hover:bg-blue-900/35;
+  @apply bg-blue-500/10 text-blue-600 font-semibold
+    dark:bg-blue-500/15 dark:text-blue-400
+    border-l-4 border-blue-500 dark:border-blue-400
+    hover:bg-blue-500/15 dark:hover:bg-blue-500/20;
 }
 
 /* 纯文字图标 | Text-based icon */
@@ -184,12 +185,25 @@ function isFolderActive(folderName) {
   @apply w-[22px] h-[22px] flex-shrink-0 text-[15px] font-bold leading-none
     flex items-center justify-center rounded-md
     bg-gray-200/60 dark:bg-gray-700/50
-    text-gray-500 dark:text-gray-400;
+    text-gray-500 dark:text-gray-400
+    transition-all duration-200 ease-in-out;
+}
+
+/* 激活状态的图标 | Active icon */
+.sidebar-nav-item--active .nav-text-icon {
+  @apply bg-blue-500/20 dark:bg-blue-500/25
+    text-blue-600 dark:text-blue-400;
 }
 
 /* 计数徽章 | Count badge */
 .sidebar-count-badge {
-  @apply text-[14px] text-gray-400 dark:text-gray-500 tabular-nums;
+  @apply text-[14px] text-gray-400 dark:text-gray-500 tabular-nums
+    transition-all duration-200 ease-in-out;
+}
+
+/* 激活状态的徽章 | Active badge */
+.sidebar-nav-item--active .sidebar-count-badge {
+  @apply text-blue-600 dark:text-blue-400 font-medium;
 }
 
 /* 底部工具按钮 | Bottom tool button */

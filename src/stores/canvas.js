@@ -2,14 +2,20 @@
  * Canvas store | 画布状态管理
  * Manages nodes, edges and canvas state
  */
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
 import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
-import { IMAGE_MODELS, VIDEO_MODELS, CHAT_MODELS, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, DEFAULT_CHAT_MODEL } from '../config/models'
+import { createDefaultNodeData } from '../config/nodeRegistry'
+import { migrateCanvasDocument } from '../utils/migrateCanvasDocument'
 
 // Node ID counter | 节点ID计数器
 let nodeId = 0
-const getNodeId = () => `node_${nodeId++}`
+const createUniqueId = (prefix) => {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${globalThis.crypto.randomUUID()}`
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+const getNodeId = () => createUniqueId('node')
+const getEdgeId = () => createUniqueId('edge')
 
 // Current project ID | 当前项目ID
 export const currentProjectId = ref(null)
@@ -36,6 +42,7 @@ const history = ref([])
 const historyIndex = ref(-1)
 const MAX_HISTORY = 50
 let isRestoring = false
+let historyTimeout = null
 
 // Position change threshold for history | 位置变化阈值
 const POSITION_THRESHOLD = 10
@@ -59,6 +66,9 @@ const saveToHistory = (force = false) => {
     edges: JSON.parse(JSON.stringify(edges.value))
   }
 
+  const current = history.value[historyIndex.value]
+  if (current && JSON.stringify(current) === JSON.stringify(state)) return
+
   // Remove future history if we're not at the end | 如果不在末尾，删除未来历史
   if (historyIndex.value < history.value.length - 1) {
     history.value = history.value.slice(0, historyIndex.value + 1)
@@ -75,11 +85,26 @@ const saveToHistory = (force = false) => {
   }
 }
 
+// Coalesce rapid form edits into a single undo step.
+const scheduleHistorySave = () => {
+  if (isRestoring || isBatchOperation) return
+  if (historyTimeout) clearTimeout(historyTimeout)
+  historyTimeout = setTimeout(() => {
+    historyTimeout = null
+    saveToHistory()
+  }, 350)
+}
+
 /**
  * Start batch operation | 开始批量操作
  * Records the starting state for batch operations
  */
 export const startBatchOperation = () => {
+  if (historyTimeout) {
+    clearTimeout(historyTimeout)
+    historyTimeout = null
+    saveToHistory()
+  }
   isBatchOperation = true
   batchStartState = {
     nodes: JSON.parse(JSON.stringify(nodes.value)),
@@ -105,6 +130,7 @@ export const endBatchOperation = () => {
 
   if (hasSignificantChanges) {
     saveToHistory(true)
+    debouncedSave()
   }
 
   isBatchOperation = false
@@ -178,7 +204,7 @@ export const addNode = (type, position = { x: 100, y: 100 }, data = {}) => {
     type,
     position,
     data: {
-      ...getDefaultNodeData(type),
+      ...createDefaultNodeData(type),
       ...data,
       createdAt: data.createdAt || now,
       updatedAt: data.updatedAt || now
@@ -186,6 +212,7 @@ export const addNode = (type, position = { x: 100, y: 100 }, data = {}) => {
   }
   nodes.value = [...nodes.value, newNode]
   saveToHistory() // Save after adding node | 添加节点后保存
+  debouncedSave()
   return id
 }
 
@@ -215,7 +242,7 @@ export const addNodes = (nodeSpecs, autoBatch = true) => {
       type,
       position,
       data: {
-        ...getDefaultNodeData(type),
+        ...createDefaultNodeData(type),
         ...data,
         createdAt: data.createdAt || now,
         updatedAt: data.updatedAt || now
@@ -233,73 +260,50 @@ export const addNodes = (nodeSpecs, autoBatch = true) => {
   return ids
 }
 
-// Get default data for node type | 获取节点类型的默认数据
-const getDefaultNodeData = (type) => {
-  switch (type) {
-    case 'text':
-      return {
-        content: '',
-        label: '文本输入',
-        publicProps: {}  // 公共属性（可被 @ 引用）
-      }
-    case 'imageConfig': {
-      const imageModel = IMAGE_MODELS.find(m => m.key === DEFAULT_IMAGE_MODEL) || IMAGE_MODELS[0]
-      return {
-        prompt: '',
-        model: DEFAULT_IMAGE_MODEL,
-        size: imageModel?.defaultParams?.size || '1x1',
-        quality: imageModel?.defaultParams?.quality || 'standard',
-        label: '文生图'
-      }
-    }
-    case 'videoConfig': {
-      const videoModel = VIDEO_MODELS.find(m => m.key === DEFAULT_VIDEO_MODEL) || VIDEO_MODELS[0]
-      return {
-        prompt: '',
-        ratio: videoModel?.defaultParams?.ratio || '16:9',
-        duration: videoModel?.defaultParams?.duration || 5,
-        model: DEFAULT_VIDEO_MODEL,
-        label: '图生视频'
-      }
-    }
-    case 'video':
-      return {
-        url: '',
-        duration: 0,
-        label: '视频节点'
-      }
-    case 'image':
-      return {
-        url: '',
-        label: '图片节点',
-        publicProps: { name: '图片' }  // 公共属性（可被 @ 引用）
-      }
-    case 'llmConfig':
-      return {
-        systemPrompt: '',
-        model: DEFAULT_CHAT_MODEL,
-        outputFormat: 'text',
-        outputContent: '',
-        label: 'LLM文本生成',
-        publicProps: {}  // 公共属性（可被 @ 引用）
-      }
-    default:
-      return {}
-  }
-}
-
 // Update node data | 更新节点数据
 export const updateNode = (id, data) => {
-  nodes.value = nodes.value.map(node => 
-    node.id === id ? { ...node, data: { ...node.data, ...data } } : node
+  const now = Date.now()
+  nodes.value = nodes.value.map(node =>
+    node.id === id ? { ...node, data: { ...node.data, ...data, updatedAt: data.updatedAt || now } } : node
   )
+  scheduleHistorySave()
+  debouncedSave()
+}
+
+// Update Vue Flow node-level properties without mixing them into node data.
+export const updateNodeMeta = (id, patch) => {
+  nodes.value = nodes.value.map(node => node.id === id ? { ...node, ...patch } : node)
+  scheduleHistorySave()
+  debouncedSave()
 }
 
 // Remove node | 删除节点
 export const removeNode = (id) => {
+  const removedNode = nodes.value.find(node => node.id === id)
+  if (removedNode?.type === 'group') {
+    nodes.value = nodes.value.map(node => {
+      if (node.parentNode !== id) return node
+      const { parentNode, extent, ...rest } = node
+      const { groupId, ...data } = node.data || {}
+      return {
+        ...rest,
+        position: {
+          x: (removedNode.position?.x || 0) + (node.position?.x || 0),
+          y: (removedNode.position?.y || 0) + (node.position?.y || 0)
+        },
+        data
+      }
+    })
+  } else {
+    nodes.value = nodes.value.map(node => node.type === 'group'
+      ? { ...node, data: { ...node.data, memberIds: (node.data?.memberIds || []).filter(memberId => memberId !== id) } }
+      : node)
+  }
   nodes.value = nodes.value.filter(node => node.id !== id)
   edges.value = edges.value.filter(edge => edge.source !== id && edge.target !== id)
   saveToHistory() // Save after removing node | 删除节点后保存
+  if (currentProjectId.value) deleteImage(`${currentProjectId.value}:${id}`).catch(() => {})
+  debouncedSave()
 }
 
 // Duplicate node | 复制节点
@@ -324,17 +328,20 @@ export const duplicateNode = (id) => {
   }
   nodes.value = [...nodes.value, newNode]
   saveToHistory() // Save after duplicating node | 复制节点后保存
+  debouncedSave()
   return newId
 }
 
 // Add edge | 添加边
 export const addEdge = (params) => {
   const newEdge = {
-    id: `edge_${params.source}_${params.target}`,
-    ...params
+    ...params,
+    id: params.id || getEdgeId()
   }
   edges.value = [...edges.value, newEdge]
   saveToHistory() // Save after adding edge | 添加连线后保存
+  debouncedSave()
+  return newEdge.id
 }
 
 /**
@@ -356,8 +363,8 @@ export const addEdges = (edgeSpecs, autoBatch = true) => {
 
   edgeSpecs.forEach(params => {
     const newEdge = {
-      id: `edge_${params.source}_${params.target}`,
-      ...params
+      ...params,
+      id: params.id || getEdgeId()
     }
     edges.value = [...edges.value, newEdge]
     ids.push(newEdge.id)
@@ -377,12 +384,34 @@ export const updateEdge = (id, data) => {
     edge.id === id ? { ...edge, data: { ...edge.data, ...data } } : edge
   )
   saveToHistory() // Save after updating edge | 更新连线后保存
+  debouncedSave()
 }
 
 // Remove edge | 删除边
 export const removeEdge = (id) => {
   edges.value = edges.value.filter(edge => edge.id !== id)
+  normalizeEdgeOrders()
   saveToHistory() // Save after removing edge | 删除连线后保存
+  debouncedSave()
+}
+
+export const normalizeEdgeOrders = () => {
+  const groups = new Map()
+  edges.value.forEach(edge => {
+    const key = `${edge.target}:${edge.targetHandle || 'left'}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(edge)
+  })
+  const orderById = new Map()
+  groups.forEach(group => {
+    group
+      .sort((a, b) => (Number(a.data?.order) || 0) - (Number(b.data?.order) || 0))
+      .forEach((edge, index) => orderById.set(edge.id, index + 1))
+  })
+  edges.value = edges.value.map(edge => ({
+    ...edge,
+    data: { ...(edge.data || {}), order: orderById.get(edge.id) || 1 }
+  }))
 }
 
 // Clear canvas | 清空画布
@@ -390,33 +419,7 @@ export const clearCanvas = () => {
   nodes.value = []
   edges.value = []
   nodeId = 0
-}
-
-// Initialize with sample data | 使用示例数据初始化
-export const initSampleData = () => {
-  clearCanvas()
-  
-  // Add text node | 添加文本节点
-  addNode('text', { x: 150, y: 150 }, {
-    content: '一只金毛寻回犬在草地上奔跑，摇着尾巴，脸上带着快乐的表情。它的毛发在阳光下闪耀，眼神充满了对自由的渴望，全身散发着阳光、友善的气息。',
-    label: '文本输入'
-  })
-  
-  // Add image config node | 添加文生图配置节点
-  addNode('imageConfig', { x: 450, y: 150 }, {
-    prompt: '',
-    model: 'doubao-seedream-4-5-251128',
-    ratio: '16:9 | 4张 | 高清',
-    label: '文生图'
-  })
-  
-  // Add edge between nodes | 添加节点之间的边
-  addEdge({
-    source: 'node_0',
-    target: 'node_1',
-    sourceHandle: 'right',
-    targetHandle: 'left'
-  })
+  debouncedSave()
 }
 
 /**
@@ -431,23 +434,16 @@ export const loadProject = (projectId) => {
   const canvasData = getProjectCanvas(projectId)
   
   if (canvasData) {
+    const migratedCanvasData = migrateCanvasDocument(canvasData)
     // Restore nodes | 恢复节点
-    nodes.value = canvasData.nodes || []
-    edges.value = canvasData.edges || []
-    canvasViewport.value = canvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
+    nodes.value = migratedCanvasData.nodes || []
+    edges.value = migratedCanvasData.edges || []
+    canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
     restoreProjectImages(projectId)
     
-    // Update node ID counter | 更新节点ID计数器
-    const maxId = nodes.value.reduce((max, node) => {
-      const match = node.id.match(/node_(\d+)/)
-      if (match) {
-        return Math.max(max, parseInt(match[1], 10))
-      }
-      return max
-    }, -1)
-    nodeId = maxId + 1
+    nodeId = nodes.value.length
   } else {
     // Empty project | 空项目
     clearCanvas()
@@ -473,15 +469,23 @@ export const loadProject = (projectId) => {
 export const saveProject = () => {
   if (!currentProjectId.value) return
   const projectId = currentProjectId.value
-  updateProjectCanvas(projectId, {
+  // Never put Vue Flow's live reactive objects into the project store. Vue Flow
+  // enriches nodes during mount (dimensions, dragging state, handle bounds, ...).
+  // Sharing those objects with persistence can turn one internal layout update
+  // into a cascade of project/localStorage updates.
+  const snapshot = JSON.parse(JSON.stringify({
+    schemaVersion: 2,
     nodes: nodes.value,
     edges: edges.value,
     viewport: canvasViewport.value
+  }))
+  updateProjectCanvas(projectId, {
+    ...snapshot
   })
   persistProjectImages(projectId)
 }
 
-// Already-persisted image keys with payload length, avoids rewriting unchanged images | 已写入 IndexedDB 的图片键及长度，避免重复写入
+// Already-persisted asset fingerprints, avoids rewriting unchanged binary payloads.
 const savedImageKeys = new Map()
 
 /**
@@ -494,9 +498,10 @@ const persistProjectImages = (projectId) => {
     const dataUrl = base64 || (node.data?.url?.startsWith?.('data:') ? node.data.url : '')
     if (!dataUrl) return
     const key = `${projectId}:${node.id}`
-    if (savedImageKeys.get(key) === dataUrl.length) return
+    const fingerprint = `${dataUrl.length}:${dataUrl.slice(0, 64)}:${dataUrl.slice(-64)}`
+    if (savedImageKeys.get(key) === fingerprint) return
     saveImage(key, dataUrl)
-      .then(() => savedImageKeys.set(key, dataUrl.length))
+      .then(() => savedImageKeys.set(key, fingerprint))
       .catch(() => {})
   })
 }
@@ -586,6 +591,7 @@ const restoreState = (state) => {
   edges.value = JSON.parse(JSON.stringify(state.edges))
   setTimeout(() => {
     isRestoring = false
+    debouncedSave()
   }, 100)
 }
 
@@ -605,9 +611,5 @@ export const canRedo = () => historyIndex.value < history.value.length - 1
  */
 export const manualSaveHistory = () => {
   saveToHistory()
-}
-
-// Watch for changes and auto-save (only save to project, not history) | 监听变化并自动保存（仅保存项目，不保存历史）
-watch([nodes, edges], () => {
   debouncedSave()
-}, { deep: true })
+}

@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ling Canvas · 节点设计原型 v1</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    /* 无限画布背景 */
+    --page-bg: #f8f9fa;
+    --dot-color: #c6cfdb;
+
+    /* 卡片 */
+    --card-bg: #ffffff;
+    --card-border: #ececec;
+    --card-radius: 16px;
+
+    /* 文字 */
+    --t-strong: #444a52;
+    --t-mid: #6b7280;
+    --t-weak: #9aa0a8;
+    --t-faint: #b3aea6;
+
+    /* 内容区 */
+    --body-bg: #f2f3f5;
+    --body-border: #e5e7ea;
+
+    /* 底部控制区（暖白） */
+    --footer-bg: #fbfaf7;
+    --footer-border: #eee9e1;
+
+    /* 药丸 */
+    --pill-bg: #ffffff;
+    --pill-border: #e6e0d7;
+
+    /* 强调色（Flow 橙） */
+    --accent: #e8912e;
+    --accent-deep: #c96a1e;
+    --accent-text-dot: #e8912e;
+
+    /* 视频/图片节点色点 */
+    --dot-video: #a67bd8;
+
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  }
+
+  body {
+    background-color: var(--page-bg);
+    background-image: radial-gradient(circle, var(--dot-color) 1.6px, transparent 1.6px);
+    background-size: 28px 28px;
+    color: var(--t-strong);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page-head {
+    padding: 28px 32px 8px;
+  }
+  .page-head h1 { font-size: 18px; font-weight: 650; letter-spacing: .01em; }
+  .page-head p { margin-top: 6px; color: var(--t-weak); font-size: 13px; }
+
+  .stage-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 26px 40px;
+    align-items: flex-start;
+    padding: 20px 32px 80px;
+  }
+
+  .stage { display: flex; flex-direction: column; align-items: flex-start; }
+  .stage-caption {
+    margin-bottom: 12px;
+    color: var(--t-mid);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .stage-caption::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #b9bfc9;
+  }
+
+  /* ============ 悬浮节点（节点所处的画布坐标系） ============ */
+  .float-node { position: relative; display: flex; flex-direction: column; align-items: center; }
+  .float-node .float-inner { position: relative; }
+
+  /* ============ 药丸悬浮工具栏 ============ */
+  .float-toolbar {
+    display: flex; align-items: center; gap: 2px;
+    padding: 5px 9px;
+    margin-bottom: 12px;
+    background: var(--card-bg);
+    border: 1px solid #f0f0f0;
+    border-radius: 999px;
+    box-shadow: 0 2px 4px rgba(20, 30, 45, .04), 0 10px 26px rgba(20, 30, 45, .10);
+  }
+  .float-toolbar .tb-group { display: flex; align-items: center; gap: 2px; }
+  .float-toolbar .tb-sep { width: 1px; height: 18px; background: #e9e9e9; margin: 0 6px; }
+  .float-toolbar button {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px;
+    border: 0; border-radius: 9px;
+    background: transparent;
+    color: #5f6672;
+    cursor: pointer;
+    font-size: 12.5px; font-weight: 650;
+    font-family: inherit;
+    line-height: 1;
+  }
+  .float-toolbar button:hover { background: #f3f4f5; }
+  .float-toolbar button.tb-active { background: #eceeef; color: #3c4450; border-radius: 50%; }
+  .float-toolbar .tb-icon { width: 16px; height: 16px; display: block; }
+
+  /* ============ 端口（侧边橙色圆形手柄） ============ */
+  .port {
+    position: absolute;
+    top: 50%;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 32%, #ec9a3c 0%, #d97c1c 58%, #c46a12 100%);
+    border: 4px solid #ffffff;
+    box-shadow: 0 2px 8px rgba(60, 30, 0, .22);
+    transform: translateY(-50%);
+    z-index: 3;
+  }
+  .port-left { left: -15px; }
+  .port-right { right: -15px; }
+
+  /* ============ 卡片 ============ */
+  .card {
+    position: relative;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--card-radius);
+    box-shadow: 0 1px 2px rgba(30, 40, 55, .03), 0 14px 34px rgba(30, 40, 55, .07);
+  }
+
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 16px 10px;
+  }
+  .card-head .hd-left { display: flex; align-items: center; gap: 8px; }
+  .card-head .hd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text-dot); }
+  .card-head .hd-dot.video { background: var(--dot-video); }
+  .card-head .hd-title { font-size: 13px; font-weight: 500; color: #474d55; }
+  .card-head .hd-right { font-size: 12px; color: #a5a5a5; }
+
+  /* ============ 文本节点 ============ */
+  .text-node { width: 428px; }
+  .text-body {
+    margin: 0 12px;
+    background: var(--body-bg);
+    border: 1px solid var(--body-border);
+    border-radius: 10px;
+    min-height: 400px;
+    padding: 30px 18px;
+    font-size: 15px;
+    color: var(--t-weak);
+    line-height: 1.6;
+  }
+  .text-collapsed { width: 380px; border-color: transparent; }
+  .text-collapsed .text-body { margin: 8px; min-height: 240px; border-radius: 12px; }
+
+  /* 收缩态：卡片上方标签 */
+  .collapsed-label {
+    font-size: 12.5px;
+    font-weight: 550;
+    color: #4c525a;
+    margin: 0 0 8px 2px;
+  }
+
+  /* ============ 图片节点 ============ */
+  .image-node { width: 468px; }
+  .image-dash {
+    margin: 0 12px 12px;
+    border: 1px dashed #d7d1c8;
+    border-radius: 12px;
+    min-height: 300px;
+    background: #fdfdfc;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px;
+  }
+  .image-dash .img-icon { color: #98a3b0; }
+  .image-dash .img-icon svg { width: 34px; height: 34px; }
+  .upload-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 34px; padding: 0 16px;
+    background: #ffffff;
+    border: 1px solid #e8e3db;
+    border-radius: 999px;
+    box-shadow: 0 3px 8px rgba(70, 50, 20, .08);
+    font-size: 12.5px; color: #4c525a;
+    cursor: pointer;
+  }
+  .upload-pill svg { width: 13px; height: 13px; }
+  .image-collapsed { width: 430px; border-color: transparent; }
+  .image-collapsed .image-dash { margin: 7px; min-height: 214px; gap: 0; }
+
+  /* ============ 视频节点 ============ */
+  .video-node { width: 588px; }
+  .video-media {
+    position: relative;
+    margin: 0 12px;
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    background:
+      radial-gradient(130% 110% at 62% 8%, #d9b47e 0%, #b78c58 34%, #7a5a36 62%, #3f2d1a 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  }
+  .play-btn {
+    position: absolute; left: 50%; top: 50%;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+    display: flex; align-items: center; justify-content: center;
+    transform: translate(-50%, -50%);
+  }
+  .play-btn svg { width: 22px; height: 22px; margin-left: 3px; fill: #3f3a33; }
+  .video-collapsed { width: 500px; }
+  .video-collapsed .video-media { margin: 0; border-radius: 14px; box-shadow: 0 1px 2px rgba(30,40,55,.03), 0 14px 34px rgba(30,40,55,.10); }
+
+  /* ============ 底部生成区 ============ */
+  .card-footer {
+    margin: 0 12px 12px;
+    background: var(--footer-bg);
+    border: 1px solid var(--footer-border);
+    border-radius: 12px;
+    padding: 10px 12px 12px;
+  }
+  .footer-row-1 { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 6px; }
+  .plus-btn {
+    flex: 0 0 auto;
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px dashed #d9d2c8;
+    border-radius: 10px;
+    background: transparent;
+    color: #9b948b;
+    cursor: pointer;
+  }
+  .plus-btn svg { width: 15px; height: 15px; }
+  .preset-chip {
+    align-self: center;
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 13px;
+    background: #ffffff;
+    border: 1px solid #eae4db;
+    border-radius: 14px;
+    font-size: 12px; color: #4c525a;
+    cursor: pointer;
+  }
+  .preset-chip svg { width: 13px; height: 13px; color: #d78b3f; }
+
+  /* 首帧 / 尾帧 chip */
+  .frame-chip {
+    width: 46px; height: 56px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    cursor: pointer;
+  }
+  .frame-chip .fc-box {
+    width: 46px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px dashed #d9d2c8;
+    border-radius: 10px;
+    background: transparent;
+    color: #9b948b;
+  }
+  .frame-chip .fc-box svg { width: 14px; height: 14px; }
+  .frame-chip .fc-label {
+    font-size: 10.5px; color: #9c6b3d; letter-spacing: .02em;
+  }
+
+  .prompt-line {
+    min-height: 34px;
+    display: flex; align-items: center;
+    padding: 6px 4px;
+    font-size: 13px;
+    color: var(--t-faint);
+  }
+
+  .footer-row-2 { display: flex; align-items: center; gap: 6px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    flex: 0 1 auto; min-width: 0;
+    height: 32px; padding: 0 10px;
+    background: var(--pill-bg);
+    border: 1px solid var(--pill-border);
+    border-radius: 999px;
+    font-size: 12px; color: #5c5c5c;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .pill .pd-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .pill .pd-dot.orange { background: var(--accent); }
+  .pill.pill-model { flex: 1 1 auto; overflow: hidden; }
+  .pill .pd-dot.blue { background: #4c8bf5; }
+  .pill .pd-ic { display: flex; color: #8a827a; }
+  .pill .pd-ic svg { width: 13px; height: 13px; }
+  .pill .chev { display: flex; color: #a39d95; }
+  .pill .chev svg { width: 11px; height: 11px; }
+  .pill .pill-arrow { margin: 0 -2px 0 4px; }
+
+  .send-btn {
+    margin-left: auto;
+    width: 34px; height: 34px;
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%;
+    background: var(--accent-deep);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(160, 75, 10, .30);
+  }
+  .send-btn svg { width: 15px; height: 15px; margin-left: 1px; margin-top: 1px; }
+
+  .footer-row-2 .spacer { flex: 1 1 auto; }
+
+  /* ============ 连线示例区 ============ */
+  .stage-full { width: 100%; max-width: 1264px; }
+  .demo-canvas {
+    position: relative;
+    width: 1200px;
+    height: 620px;
+    overflow: hidden;
+    border: 1px solid #ececec;
+    border-radius: 18px;
+    background-color: var(--page-bg);
+    background-image: radial-gradient(circle, var(--dot-color) 1.6px, transparent 1.6px);
+    background-size: 28px 28px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.5);
+  }
+  .demo-canvas .demo-node { position: absolute; }
+  .demo-canvas .port { width: 22px; height: 22px; border-width: 3px; }
+  .demo-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .demo-edges path { stroke: #d99e55; stroke-width: 2; fill: none; }
+  .demo-edge-label {
+    position: absolute;
+    padding: 2px 8px;
+    background: rgba(255, 255, 255, .92);
+    border: 1px solid #f0e3d2;
+    border-radius: 999px;
+    color: #b0793a;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    box-shadow: 0 2px 6px rgba(120, 80, 20, .08);
+    transform: translate(-50%, -50%);
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Ling Canvas · 节点设计原型 v1</h1>
+  <p>对照参考图的 6 个状态：文本节点（展开/自动收缩）、图片节点（展开/收缩）、视频节点（展开/收缩）。静态复刻，仅用于确认视觉。</p>
+</div>
+
+<div class="stage-grid">
+
+  <!-- ================================================================ -->
+  <!-- 1. 文本节点 · 展开态 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">文本 · 展开（选中）</div>
+    <div class="float-node">
+      <div class="float-inner">
+        <!-- 悬浮工具栏 -->
+        <div class="float-toolbar">
+          <div class="tb-group">
+            <button title="圆形工具"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8.5"/></svg></button>
+            <button title="标题1">H1</button>
+            <button title="标题2">H2</button>
+            <button title="标题3">H3</button>
+          </div>
+          <div class="tb-sep"></div>
+          <div class="tb-group">
+            <button class="tb-active" title="正文">T</button>
+            <button title="文字颜色">A</button>
+            <button title="加粗">B</button>
+            <button title="斜体"><i>I</i></button>
+            <button title="编号列表"><span style="font-size:11px;font-weight:650">1.</span></button>
+          </div>
+          <div class="tb-sep"></div>
+          <div class="tb-group">
+            <button title="创建副本"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg></button>
+            <button title="展开"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+            <button title="全屏"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 7h10v10H7zM7 4.5v2.5M17 7h2.5M20 4.5 17 7M7 17H4.5M4 19.5 7 17" opacity=".9" transform="rotate(45 12 12)"/></svg></button>
+            <button title="更多"><svg class="tb-icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+          </div>
+          <div class="tb-sep"></div>
+          <div class="tb-group">
+            <button title="删除"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M10 4h4M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7"/></svg></button>
+            <button title="更多操作"><svg class="tb-icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡片 -->
+        <div class="card text-node">
+          <div class="card-head">
+            <span class="hd-left"><span class="hd-dot"></span><span class="hd-title">文本</span></span>
+            <span class="hd-right">Markdown</span>
+          </div>
+          <div class="text-body">输入需求、笔记或提示词。</div>
+          <div class="card-footer">
+            <div class="footer-row-1">
+              <button class="plus-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+              <span class="preset-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></svg>预设</span>
+            </div>
+            <div class="prompt-line">描述你想生成或改写的内容...</div>
+            <div class="footer-row-2">
+              <span class="pill pill-model"><span class="pd-dot orange"></span>Choose text model<span class="pill-arrow chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill">1x<span class="chev" style="margin-left:7px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill"><span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg></span>高级<span class="chev" style="margin-left:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <button class="send-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z"/></svg></button>
+            </div>
+          </div>
+          <!-- 端口 -->
+          <span class="port port-left"></span>
+          <span class="port port-right"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 2. 文本节点 · 自动收缩 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">文本 · 自动收缩</div>
+    <span class="collapsed-label">文本</span>
+    <div class="card text-collapsed">
+      <div class="text-body">输入需求、笔记或提示词。</div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 3. 图片节点 · 展开态 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">图片 · 展开（选中）</div>
+    <div class="float-node">
+      <div class="float-inner">
+        <!-- 悬浮工具栏 -->
+        <div class="float-toolbar">
+          <div class="tb-group">
+            <button title="上传"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg></button>
+            <button title="创建副本"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg></button>
+            <button title="裁剪"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3v14h14"/><path d="M3 7h14v14"/></svg></button>
+            <button title="下载"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11M8.5 11.5 12 15l3.5-3.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg></button>
+          </div>
+          <div class="tb-sep"></div>
+          <div class="tb-group">
+            <button title="展开"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+            <button title="图层"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 3 8l9 5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+            <button title="删除"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M10 4h4M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7"/></svg></button>
+            <button title="更多"><svg class="tb-icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡片 -->
+        <div class="card image-node">
+          <div class="card-head">
+            <span class="hd-left"><span class="hd-dot"></span><span class="hd-title">图片</span></span>
+            <span class="hd-right">空</span>
+          </div>
+          <div class="image-dash">
+            <span class="img-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15.5l-4.2-4.2a1.5 1.5 0 0 0-2.1 0L6 20"/></svg></span>
+            <span class="upload-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>上传</span>
+          </div>
+          <div class="card-footer">
+            <div class="footer-row-1">
+              <button class="plus-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+            </div>
+            <div class="prompt-line">描述要生成的画面...</div>
+            <div class="footer-row-2">
+              <span class="pill pill-model"><span class="pd-dot blue"></span>gemini-3-pro-…<span class="pill-arrow chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill"><span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8V5.8A1.8 1.8 0 0 1 5.8 4H8M16 4h2.2A1.8 1.8 0 0 1 20 5.8V8M20 16v2.2a1.8 1.8 0 0 1-1.8 1.8H16M8 20H5.8A1.8 1.8 0 0 1 4 18.2V16"/></svg></span>自适应·1K<span class="chev" style="margin-left:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill"><span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg></span>高级<span class="chev" style="margin-left:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill">x1<span class="chev" style="margin-left:7px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <button class="send-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z"/></svg></button>
+            </div>
+          </div>
+          <span class="port port-left"></span>
+          <span class="port port-right"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 4. 图片节点 · 收缩 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">图片 · 收缩</div>
+    <span class="collapsed-label">图片</span>
+    <div class="card image-collapsed">
+      <div class="image-dash">
+        <span class="img-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15.5l-4.2-4.2a1.5 1.5 0 0 0-2.1 0L6 20"/></svg></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 5. 视频节点 · 展开态 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">视频 · 展开（选中）</div>
+    <div class="float-node">
+      <div class="float-inner">
+        <!-- 悬浮工具栏 -->
+        <div class="float-toolbar">
+          <div class="tb-group">
+            <button title="静音"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 9.5v5a1 1 0 0 0 1 1h2.8L11 18.6c.5.4 1.2.1 1.2-.5V5.9c0-.6-.7-.9-1.2-.5L7.8 8.5H5a1 1 0 0 0-1 1z"/><path d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></svg></button>
+            <button title="下载"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v11M8.5 11.5 12 15l3.5-3.5"/><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg></button>
+            <button title="裁剪"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3v14h14"/><path d="M3 7h14v14"/></svg></button>
+            <button title="展开"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>
+          </div>
+          <div class="tb-sep"></div>
+          <div class="tb-group">
+            <button title="创建副本"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></svg></button>
+            <button title="图层"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 3 8l9 5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+            <button title="删除"><svg class="tb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 7h16M10 4h4M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7"/></svg></button>
+            <button title="更多"><svg class="tb-icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 卡片 -->
+        <div class="card video-node">
+          <div class="card-head">
+            <span class="hd-left"><span class="hd-dot video"></span><span class="hd-title">视频</span></span>
+            <span class="hd-right">视频</span>
+          </div>
+          <div class="video-media">
+            <span class="play-btn"><svg viewBox="0 0 24 24"><path d="M8 5.5v13c0 .8.9 1.3 1.6.9l10.2-6.5c.6-.4.6-1.3 0-1.7L9.6 4.6c-.7-.4-1.6.1-1.6.9z"/></svg></span>
+          </div>
+          <div class="card-footer">
+            <div class="footer-row-1" style="align-items:flex-end">
+              <button class="plus-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+              <span class="frame-chip">
+                <span class="fc-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg></span>
+                <span class="fc-label">首帧</span>
+              </span>
+              <span class="frame-chip">
+                <span class="fc-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg></span>
+                <span class="fc-label">尾帧</span>
+              </span>
+            </div>
+            <div class="prompt-line">描述希望画面如何动起来...</div>
+            <div class="footer-row-2">
+              <span class="pill pill-model"><span class="pd-dot orange"></span>Choose video model<span class="pill-arrow chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill"><span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 12h18M9 5v14"/></svg></span>首尾帧<span class="chev" style="margin-left:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill">自适应·1080p·5s<span class="chev" style="margin-left:7px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <span class="pill"><span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg></span>高级<span class="chev" style="margin-left:4px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+              <button class="send-btn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z"/></svg></button>
+            </div>
+          </div>
+          <span class="port port-left"></span>
+          <span class="port port-right"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 6. 视频节点 · 收缩 -->
+  <!-- ================================================================ -->
+  <section class="stage">
+    <div class="stage-caption">视频 · 收缩</div>
+    <span class="collapsed-label">视频</span>
+    <div class="card video-collapsed">
+      <div class="video-media">
+        <span class="play-btn"><svg viewBox="0 0 24 24"><path d="M8 5.5v13c0 .8.9 1.3 1.6.9l10.2-6.5c.6-.4.6-1.3 0-1.7L9.6 4.6c-.7-.4-1.6.1-1.6.9z"/></svg></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- 7. 无限画布连线示例：文本 → 图片 → 视频 -->
+  <!-- ================================================================ -->
+  <section class="stage stage-full">
+    <div class="stage-caption">连线示例 · 左侧=输入 右侧=输出 · 上游输出=下游输入 · 多线入同一节点按连接顺序编号引用</div>
+    <div class="demo-canvas">
+      <!-- 连线层 -->
+      <svg class="demo-edges" viewBox="0 0 1200 620">
+        <!-- 文本1 -> 图片（提示词） -->
+        <path d="M308 148 C 330 148, 330 127, 350 127" />
+        <!-- 图片 -> 视频（首帧） -->
+        <path d="M710 127 C 742 127, 742 255, 770 255" />
+        <!-- 文本2 -> 视频（运动描述，多线汇聚） -->
+        <path d="M308 508 C 520 508, 640 255, 770 255" />
+      </svg>
+      <div class="demo-edge-label" style="left:331px;top:118px">提示词</div>
+      <div class="demo-edge-label" style="left:740px;top:176px">首帧</div>
+      <div class="demo-edge-label" style="left:520px;top:392px">运动描述</div>
+
+      <!-- 文本节点 1：角色设定（收缩态 · 带输出端口） -->
+      <div class="card text-collapsed demo-node" style="left:8px;top:20px;width:300px">
+        <span class="collapsed-label">文本</span>
+        <div class="text-body" style="font-size:13.5px;color:#8a8f96">角色设定：一只金毛寻回犬，阳光友善…</div>
+        <span class="port port-right"></span>
+      </div>
+
+      <!-- 图片节点：生成主视觉（收缩态 · 带输入/输出端口） -->
+      <div class="card image-collapsed demo-node" style="left:350px;top:20px;width:360px">
+        <span class="collapsed-label">图片</span>
+        <div class="image-dash" style="min-height:200px">
+          <span class="img-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15.5l-4.2-4.2a1.5 1.5 0 0 0-2.1 0L6 20"/></svg></span>
+        </div>
+        <span class="port port-left"></span>
+        <span class="port port-right"></span>
+      </div>
+
+      <!-- 文本节点 2：运动描述（收缩态 · 带输出端口） -->
+      <div class="card text-collapsed demo-node" style="left:8px;top:380px;width:300px">
+        <span class="collapsed-label">文本</span>
+        <div class="text-body" style="font-size:13.5px;color:#8a8f96">运动描述：镜头缓缓推进，尾巴欢快地摆动…</div>
+        <span class="port port-right"></span>
+      </div>
+
+      <!-- 视频节点：接收首帧 + 运动描述（收缩态 · 带输入端口） -->
+      <div class="card video-collapsed demo-node" style="left:770px;top:150px;width:400px">
+        <span class="collapsed-label">视频</span>
+        <div class="video-media" style="height:210px;aspect-ratio:auto">
+          <span class="play-btn" style="width:44px;height:44px"><svg viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M8 5.5v13c0 .8.9 1.3 1.6.9l10.2-6.5c.6-.4.6-1.3 0-1.7L9.6 4.6c-.7-.4-1.6.1-1.6.9z"/></svg></span>
+        </div>
+        <span class="port port-left"></span>
+      </div>
+    </div>
+    <div class="page-head" style="padding:14px 2px 0">
+      <p style="color:#8a8f96;font-size:12.5px;line-height:1.7">
+        多连线规则：任一节点左侧端口可汇聚多条线（按连接顺序编号为 {{Image 1}}、{{Image 2}}…），右侧端口可扇出多条线；
+        文本→图片=提示词、图片→视频=首帧、文本→视频=运动描述、视频→文本=描述总结、图片→图片=参考图/重绘源。
+      </p>
+    </div>
+  </section>
+
+</div>
+
+</body>
+</html>

@@ -7,6 +7,7 @@ import workflowCover2 from '@/assets/workflow02.jpeg'
 
 import scene01 from '@/assets/scene01.jpeg'
 import shot01 from '@/assets/shot01.jpeg'
+import { migrateCanvasDocument } from '@/utils/migrateCanvasDocument'
 
 // Multi-angle prompts | 多角度提示词模板
 export const MULTI_ANGLE_PROMPTS = {
@@ -43,7 +44,7 @@ export const MULTI_ANGLE_PROMPTS = {
 /**
  * Workflow Templates | 工作流模板
  */
-export const WORKFLOW_TEMPLATES = [
+const LEGACY_WORKFLOW_TEMPLATES = [
   {
     id: 'multi-angle-storyboard',
     name: '多角度分镜',
@@ -1218,6 +1219,12 @@ export const WORKFLOW_TEMPLATES = [
     }
   }
 ]
+
+// Templates are exported exclusively in the current content-node schema.
+export const WORKFLOW_TEMPLATES = LEGACY_WORKFLOW_TEMPLATES.map(workflow => ({
+  ...workflow,
+  createNodes: (...args) => migrateCanvasDocument(workflow.createNodes(...args))
+}))
 
 /**
  * Get workflow template by ID | 根据ID获取工作流模板

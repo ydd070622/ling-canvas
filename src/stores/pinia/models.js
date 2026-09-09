@@ -294,6 +294,18 @@ export const useModelStore = defineStore('model', () => {
     return [...merged.values()]
   }
 
+  // 空元数据（启用内置模型时存储的条目只有 key/label）不覆盖内置定义
+  // | Empty metadata must not shadow built-in sizes/defaultParams
+  const stripEmptyMeta = (m) => {
+    const out = { ...m }
+    if (Array.isArray(out.sizes) && out.sizes.length === 0) delete out.sizes
+    if (Array.isArray(out.ratios) && out.ratios.length === 0) delete out.ratios
+    if (Array.isArray(out.durs) && out.durs.length === 0) delete out.durs
+    if (!out.defaultParams || Object.keys(out.defaultParams).length === 0) delete out.defaultParams
+    if (Array.isArray(out.resolutions) && out.resolutions.length === 0) delete out.resolutions
+    return out
+  }
+
   const allChatModels = computed(() => mergeModelsByKey([
     ...CHAT_MODELS.map(m => ({ ...m, isCustom: false })),
     ...customChatModels.value.map(m => ({
@@ -312,7 +324,7 @@ export const useModelStore = defineStore('model', () => {
 
   const allImageModels = computed(() => mergeModelsByKey([
     ...IMAGE_MODELS.map(m => ({ ...m, isCustom: false })),
-    ...customImageModels.value.map(m => ({
+    ...customImageModels.value.map(m => stripEmptyMeta({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
@@ -320,7 +332,7 @@ export const useModelStore = defineStore('model', () => {
       defaultParams: { quality: 'standard', style: 'vivid' }
     })),
     // 添加当前渠道的自定义模型
-    ...(customImageModelsByProvider.value[currentProvider.value] || []).map(m => ({
+    ...(customImageModelsByProvider.value[currentProvider.value] || []).map(m => stripEmptyMeta({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
@@ -332,21 +344,21 @@ export const useModelStore = defineStore('model', () => {
 
   const allVideoModels = computed(() => mergeModelsByKey([
     ...VIDEO_MODELS.map(m => ({ ...m, isCustom: false })),
-    ...customVideoModels.value.map(m => ({
+    ...customVideoModels.value.map(m => stripEmptyMeta({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
-      ratios: ['16x9', '9:16', '1:1'],
-      durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
+      ratios: [],
+      durs: [],
       defaultParams: { ratio: '16:9', duration: 5 }
     })),
     // 添加当前渠道的自定义模型
-    ...(customVideoModelsByProvider.value[currentProvider.value] || []).map(m => ({
+    ...(customVideoModelsByProvider.value[currentProvider.value] || []).map(m => stripEmptyMeta({
       label: m.label || m.key,
       key: m.key,
       isCustom: true,
-      ratios: ['16x9', '9:16', '1:1'],
-      durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
+      ratios: [],
+      durs: [],
       defaultParams: { ratio: '16:9', duration: 5 },
       provider: [currentProvider.value]
     }))
@@ -433,6 +445,27 @@ export const useModelStore = defineStore('model', () => {
       sourceProvider: m.sourceProvider
     }))
   )
+
+  // ============ Computed: Grouped Model Options (by provider) ============
+
+  // 供应商 key → 显示名（别名优先）
+  const providerLabelMap = computed(() => {
+    const map = {}
+    providerList.value.forEach(p => { map[p.key] = p.label })
+    return map
+  })
+
+  // 转成 FlowSelect 分组格式：{ value, label, group }
+  const toGroupedOptions = (items) => items.map(m => ({
+    value: m.key,
+    label: m.label,
+    group: (m.sourceProvider && (providerLabelMap.value[m.sourceProvider] || m.sourceProvider)) || ''
+  }))
+
+  // 按供应商分组的模型选项（节点下拉用）
+  const groupedChatModelOptions = computed(() => toGroupedOptions(allChatModelOptions.value))
+  const groupedImageModelOptions = computed(() => toGroupedOptions(allImageModelOptions.value))
+  const groupedVideoModelOptions = computed(() => toGroupedOptions(allVideoModelOptions.value))
 
   // ============ Computed: Model Options for UI (filtered by provider - deprecated, use all* instead) ============
 
@@ -734,6 +767,12 @@ export const useModelStore = defineStore('model', () => {
     allImageModelOptions,
     allVideoModelOptions,
     allChatModelOptions,
+
+    // Grouped model options (by provider, for flow node dropdowns)
+    groupedChatModelOptions,
+    groupedImageModelOptions,
+    groupedVideoModelOptions,
+    providerLabelMap,
 
     // Selected models
     selectedChatModel,

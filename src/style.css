@@ -23,6 +23,8 @@ html, body, #app {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  /* 窗口透明，圆角由 .app-layout 自绘，这三层必须透出背景 */
+  background: transparent;
 }
 
 /* Light mode variables | 浅色模式变量 */
@@ -39,9 +41,9 @@ html, body, #app {
 
 /* Dark mode variables | 深色模式变量 */
 .dark {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
+  --bg-primary: #090909;
+  --bg-secondary: #161616;
+  --bg-tertiary: #242424;
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
   --border-color: #334155;
@@ -50,9 +52,39 @@ html, body, #app {
 }
 
 body {
-  background-color: var(--bg-primary);
   color: var(--text-primary);
-  transition: background-color 0.3s, color 0.3s;
+  transition: color 0.3s;
+}
+
+/* 应用外壳 | App shell：承接原 body 的不透明背景，并画出圆角外框 */
+.app-layout {
+  /* 用视口单位而非 100%：n-config-provider 会在 #app 与本层之间插一个
+     height:auto 的 div，百分比高度会退化成内容高度，外壳就塌了 */
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background-color: var(--bg-primary);
+  transition: background-color 0.3s;
+}
+
+.app-rounded {
+  border-radius: 12px;
+}
+
+/* 描边环画在内侧：.app-layout 撑满窗口，向外的 box-shadow 会被窗口边界裁掉 */
+.app-rounded::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  border: 1px solid #e0e0e8;
+  pointer-events: none;
+}
+
+.dark .app-rounded::after {
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 /* Vue Flow styles override | Vue Flow 样式覆盖 */
@@ -73,7 +105,7 @@ body {
   stroke-width: 2;
 }
 
-.vue-flow__handle {
+.vue-flow__handle:not(.handle) {
   width: 10px;
   height: 10px;
   background-color: var(--accent-color) !important;

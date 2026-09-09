@@ -173,7 +173,7 @@ export const useImageGeneration = () => {
         model: params.model,
         prompt: params.prompt,
         size: params.size || modelConfig?.defaultParams?.size || '2048x2048',
-        // n: params.n || 1
+        n: params.n || 1
       }
 
       // Add reference image if provided | 添加参考图
@@ -240,6 +240,7 @@ export const useVideoGeneration = () => {
     if (params.last_frame_image) requestData.last_frame_image = params.last_frame_image
     if (params.ratio) requestData.size = params.ratio
     if (params.dur) requestData.seconds = params.dur
+    if (params.resolution) requestData.resolution = params.resolution
 
     // 适配请求参数
     const adaptedParams = adaptRequest('video', requestData)

@@ -49,11 +49,11 @@ const handleDelete = () => {
 
 <template>
   <div
-    class="canvas-card group cursor-pointer rounded-xl bg-white shadow-sm ring-1 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg"
+    class="canvas-card group cursor-pointer rounded-xl bg-white dark:bg-[#161616] shadow-sm ring-1 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg"
     :class="[
       selected
         ? 'ring-blue-500 shadow-blue-100 dark:shadow-blue-900/30 dark:ring-blue-400'
-        : 'ring-gray-100 hover:ring-gray-200 dark:ring-gray-700 dark:hover:ring-gray-600'
+        : 'ring-gray-100 hover:ring-gray-200 dark:ring-gray-700/50 dark:hover:ring-gray-600'
     ]"
     @mouseenter="isHovered = true"
     @mouseleave="isHovered = false"
@@ -147,16 +147,10 @@ const handleDelete = () => {
     </div>
 
     <!-- Info area | 底部信息区 -->
-    <div class="rounded-b-xl border-t border-gray-100 px-3 py-2.5 dark:border-gray-700">
+    <div class="rounded-b-xl px-3 py-2.5">
       <h3 class="truncate text-sm font-bold leading-snug text-gray-800 dark:text-gray-200">
         {{ project.name }}
       </h3>
-      <p class="mt-1 text-xs leading-relaxed text-gray-400">
-        {{ project.cardCount || 0 }} 张卡片 · {{ project.creator || '我创建' }}
-      </p>
-      <p class="mt-0.5 text-xs leading-relaxed text-gray-400">
-        {{ formattedDate }}
-      </p>
     </div>
   </div>
 </template>

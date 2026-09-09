@@ -7,7 +7,9 @@ edition = "2021"
 
 [lib]
 name = "ling_canvas_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+# cdylib/staticlib 仅 Tauri 移动端需要；windows-gnu 下链接 cdylib 会触发
+# ld "export ordinal too large"，桌面端只保留 rlib。
+crate-type = ["lib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

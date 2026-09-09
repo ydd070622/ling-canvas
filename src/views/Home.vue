@@ -3,7 +3,7 @@
  * Home view | 主页视图
  * Workspace content area with canvas list
  */
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted, h, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NIcon, NDropdown, NModal, NInput, NButton, useDialog } from 'naive-ui'
 import {
@@ -33,6 +33,20 @@ const router = useRouter()
 const dialog = useDialog()
 const modelStore = useModelStore()
 const uiStore = useUIStore()
+
+// Debug: Track render count | 调试：跟踪渲染次数
+let renderCount = 0
+onMounted(() => {
+  console.log('[Home] Mounted, render count:', ++renderCount)
+})
+
+// Watch for project changes to track re-renders | 监听项目变化以跟踪重新渲染
+watch(
+  () => activeProjects.value.length,
+  (newVal, oldVal) => {
+    console.log(`[Home] Projects changed from ${oldVal} to ${newVal}, re-rendering...`)
+  }
+)
 
 // ─── Manage mode | 管理模式 ───
 const isManaging = ref(false)
