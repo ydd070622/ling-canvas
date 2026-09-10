@@ -83,6 +83,7 @@
             :options="modelSelectOptions"
             :model-value="selectedModel"
             :display="selectedModelLabel"
+            empty-text="请先去设置配置文本模型"
             dot="orange"
             @update:model-value="handleModelChange"
           />
@@ -110,7 +111,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { NodeToolbar, NodePort, FlowSelect } from './base'
 import { useNodeActions } from '../../composables/useNodeActions'
 import { useUpstreamInputs } from '../../composables/useUpstreamInputs'
@@ -129,25 +130,21 @@ const { upstreamText, upstreamImages } = useUpstreamInputs(props.id)
 const editorRef = ref(null)
 const modelStore = useModelStore()
 
-const selectedModel = computed(() => props.data?.model || modelStore.selectedChatModel)
-const selectedModelLabel = computed(() => modelStore.getChatModel?.(selectedModel.value)?.label || selectedModel.value || 'Choose text model')
-/** 有效模型：旧数据/无模型名时回退到设置中启用的对话模型 */
-const effectiveModel = computed(() => {
-  const current = selectedModel.value
-  if (modelStore.getChatModel?.(current)) return current
-  const fallback = modelStore.selectedChatModel && modelStore.getChatModel?.(modelStore.selectedChatModel)
-    ? modelStore.selectedChatModel
-    : 'gpt-4o-mini'
-  return fallback
+const modelSelectOptions = computed(() => modelStore.groupedChatModelOptions || [])
+const selectedModel = computed(() => {
+  const options = modelSelectOptions.value
+  const configuredKeys = new Set(options.map(option => option.value))
+  if (configuredKeys.has(props.data?.model)) return props.data.model
+  if (configuredKeys.has(modelStore.selectedChatModel)) return modelStore.selectedChatModel
+  return options[0]?.value || ''
 })
-/** 设置中启用的模型，按供应商分组；当前值缺失时置顶"当前使用" */
-const modelSelectOptions = computed(() => {
-  const list = modelStore.groupedChatModelOptions || []
-  const hasCurrent = list.some(o => o.value === selectedModel.value)
-  if (hasCurrent || !selectedModel.value) return list
-  const current = { value: selectedModel.value, label: selectedModelLabel.value, group: '当前使用' }
-  return list.length ? [current, ...list] : [current]
-})
+const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
+const selectedModelLabel = computed(() => selectedModelOption.value?.label || '请先配置文本模型')
+/** 仅使用设置中已启用的文本模型，不回退到内置模型。 */
+const effectiveModel = computed(() => selectedModel.value)
+watch(selectedModel, value => {
+  if ((props.data?.model || '') !== value) update({ model: value })
+}, { immediate: true })
 const countOptions = ['1', '2', '3', '5'].map(v => ({ value: v, label: `${v}x` }))
 
 const chatOptions = { get model() { return effectiveModel.value } }
@@ -157,7 +154,11 @@ const isExpanded = computed(() => props.data?.expanded === true)
 
 const handleContentInput = (e) => update({ content: e.target.value })
 const handlePromptInput = (e) => update({ prompt: e.target.value })
-const handleModelChange = (value) => update({ model: value })
+const handleModelChange = (value) => {
+  const option = modelSelectOptions.value.find(item => item.value === value)
+  if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
+  update({ model: value })
+}
 const handleCountChange = (value) => update({ count: Number(value) })
 
 const collapse = () => update({ expanded: false })
@@ -201,6 +202,10 @@ const applyList = () => {
 const handleSend = async () => {
   const prompt = String(props.data?.prompt || '').trim()
   const source = String(props.data?.content || '').trim()
+  if (!effectiveModel.value) {
+    window.$message?.warning('请先前往设置，在模型配置中启用文本模型')
+    return
+  }
   if (!modelStore.currentApiKey) {
     window.$message?.warning('请先配置 API Key')
     return

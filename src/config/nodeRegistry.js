@@ -20,7 +20,7 @@ export const NODE_DEFINITIONS = Object.freeze({
       label: '文本',
       content: '',
       prompt: '',
-      model: DEFAULT_CHAT_MODEL,
+      model: '',
       expanded: true
     })
   },
@@ -31,7 +31,7 @@ export const NODE_DEFINITIONS = Object.freeze({
       label: '图片',
       url: '',
       prompt: '',
-      model: DEFAULT_IMAGE_MODEL,
+      model: '',
       size: imageModel?.defaultParams?.size || imageModel?.sizes?.[0] || '1x1',
       count: 1,
       expanded: true
@@ -49,7 +49,7 @@ export const NODE_DEFINITIONS = Object.freeze({
       label: '视频',
       url: '',
       prompt: '',
-      model: DEFAULT_VIDEO_MODEL,
+      model: '',
       ratio: videoModel?.defaultParams?.ratio || '16:9',
       duration: videoModel?.defaultParams?.duration || 5,
       resolution: videoModel?.defaultResolution || videoModel?.resolutions?.[0] || '1080p',

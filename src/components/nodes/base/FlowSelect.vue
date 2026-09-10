@@ -42,7 +42,7 @@
             </button>
           </template>
         </template>
-        <div v-else class="flow-select-empty">暂无选项</div>
+        <div v-else class="flow-select-empty">{{ emptyText }}</div>
       </div>
     </Teleport>
   </span>
@@ -61,7 +61,9 @@ const props = defineProps({
   /** 左侧色点：orange / blue / purple */
   dot: { type: String, default: '' },
   /** 高级滑杆图标 */
-  showIcon: { type: Boolean, default: false }
+  showIcon: { type: Boolean, default: false },
+  /** 下拉列表为空时的提示 */
+  emptyText: { type: String, default: '暂无选项' }
 })
 const emit = defineEmits(['update:modelValue', 'change'])
 

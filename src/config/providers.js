@@ -260,8 +260,7 @@ export const getDefaultProvider = () => {
 
 // 获取渠道的默认 Base URL
 export const getDefaultBaseUrl = (providerKey) => {
-  const config = getProviderConfig(providerKey)
-  return config.defaultBaseUrl || ''
+  return PROVIDERS[providerKey]?.defaultBaseUrl || ''
 }
 
 // 获取渠道配置

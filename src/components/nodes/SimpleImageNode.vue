@@ -88,6 +88,7 @@
             :options="modelSelectOptions"
             :model-value="selectedModel"
             :display="selectedModelLabel"
+            empty-text="请先去设置配置图片模型"
             dot="blue"
             @update:model-value="handleModelChange"
           />
@@ -157,33 +158,27 @@ const previewOpen = ref(false)
 const modelStore = useModelStore()
 const { loading: generating, generate } = useImageGeneration()
 
-const selectedModel = computed(() => props.data?.model || modelStore.selectedImageModel)
-const currentModel = computed(() => modelStore.getImageModel(selectedModel.value))
-/** 有效模型：旧数据/无模型名时回退到设置中启用的图片模型，避免用对话模型调用生图接口 */
-const effectiveModel = computed(() => {
-  const current = selectedModel.value
-  if (modelStore.getImageModel(current)) return current
-  const fallback = modelStore.selectedImageModel && modelStore.getImageModel(modelStore.selectedImageModel)
-    ? modelStore.selectedImageModel
-    : 'nano-banana-pro'
-  return fallback
+const modelSelectOptions = computed(() => modelStore.groupedImageModelOptions || [])
+const selectedModel = computed(() => {
+  const options = modelSelectOptions.value
+  const configuredKeys = new Set(options.map(option => option.value))
+  if (configuredKeys.has(props.data?.model)) return props.data.model
+  if (configuredKeys.has(modelStore.selectedImageModel)) return modelStore.selectedImageModel
+  return options[0]?.value || ''
 })
+const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
+const currentModel = computed(() =>
+  modelStore.availableImageModels.find(model => model.key === selectedModel.value)
+  || modelStore.getImageModel(selectedModel.value)
+)
+/** 仅使用设置中已启用的图片模型，不回退到内置模型。 */
+const effectiveModel = computed(() => selectedModel.value)
 /** 有效模型的完整配置（后端定义的 sizes / 默认参数） */
 const effectiveModelConfig = computed(() => modelStore.getImageModel(effectiveModel.value))
-const selectedModelLabel = computed(() => currentModel.value?.label || selectedModel.value || 'Choose image model')
-const modelOptions = computed(() => {
-  if (modelStore.imageModelOptions.length) return modelStore.imageModelOptions
-  const model = currentModel.value
-  return [{ key: selectedModel.value, label: model?.label || selectedModel.value }]
-})
-/** 设置中启用的模型，按供应商分组；当前值缺失时置顶"当前使用" */
-const modelSelectOptions = computed(() => {
-  const list = modelStore.groupedImageModelOptions || []
-  const hasCurrent = list.some(o => o.value === selectedModel.value)
-  if (hasCurrent || !selectedModel.value) return list
-  const current = { value: selectedModel.value, label: selectedModelLabel.value, group: '当前使用' }
-  return list.length ? [current, ...list] : [current]
-})
+const selectedModelLabel = computed(() => selectedModelOption.value?.label || currentModel.value?.label || '请先配置图片模型')
+watch(selectedModel, value => {
+  if ((props.data?.model || '') !== value) update({ model: value })
+}, { immediate: true })
 const sizeOptions = computed(() => {
   const sizes = currentModel.value?.sizes || []
   return sizes.length ? sizes : [props.data?.size || currentModel.value?.defaultParams?.size || '1x1']
@@ -269,6 +264,8 @@ const handleDownload = () => {
 
 const handlePromptInput = (e) => update({ prompt: e.target.value })
 const handleModelChange = (value) => {
+  const option = modelSelectOptions.value.find(item => item.value === value)
+  if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
   const model = modelStore.getImageModel(value)
   update({ model: value, size: model?.defaultParams?.size || model?.sizes?.[0] || '1x1' })
 }
@@ -278,6 +275,10 @@ const collapse = () => update({ expanded: false })
 
 const handleSend = async () => {
   const prompt = String(props.data?.prompt || '').trim()
+  if (!effectiveModel.value) {
+    window.$message?.warning('请先前往设置，在模型配置中启用图片模型')
+    return
+  }
   if (!modelStore.currentApiKey) {
     window.$message?.warning('请先配置 API Key')
     return

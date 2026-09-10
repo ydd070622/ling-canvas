@@ -172,6 +172,7 @@
 
 <script setup>
 import { computed, markRaw, reactive, ref, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import {
   NButton,
   NIcon,
@@ -410,11 +411,19 @@ const testConnection = async () => {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), 15000)
   try {
-    const headers = { Accept: 'application/json' }
-    if (formData.apiKey.trim()) headers.Authorization = `Bearer ${formData.apiKey.trim()}`
-    const response = await fetch(getModelsEndpoint(), { headers, signal: controller.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const payload = await response.json()
+    let payload
+    if ('__TAURI_INTERNALS__' in window) {
+      payload = await invoke('fetch_models', {
+        url: getModelsEndpoint(),
+        apiKey: formData.apiKey.trim()
+      })
+    } else {
+      const headers = { Accept: 'application/json' }
+      if (formData.apiKey.trim()) headers.Authorization = `Bearer ${formData.apiKey.trim()}`
+      const response = await fetch(getModelsEndpoint(), { headers, signal: controller.signal })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      payload = await response.json()
+    }
     const models = normalizeModels(payload)
     if (!models.length) throw new Error('接口已响应，但没有返回可识别的模型')
     const savedNames = new Map(remoteModels.value.map(model => [model.id, model.name]))
@@ -431,7 +440,8 @@ const testConnection = async () => {
     message.success(`连接成功，已读取 ${models.length} 个模型`)
   } catch (error) {
     connectionStatus.value = 'error'
-    message.error(error.name === 'AbortError' ? '连接超时，请检查地址' : `连接失败：${error.message}`)
+    const errorMessage = typeof error === 'string' ? error : error?.message || String(error)
+    message.error(error?.name === 'AbortError' ? '连接超时，请检查地址' : `连接失败：${errorMessage}`)
   } finally {
     window.clearTimeout(timeout)
     testing.value = false

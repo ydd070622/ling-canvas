@@ -105,6 +105,7 @@
             :options="modelSelectOptions"
             :model-value="selectedModel"
             :display="selectedModelLabel"
+            empty-text="请先去设置配置视频模型"
             dot="purple"
             @update:model-value="handleModelChange"
           />
@@ -162,26 +163,25 @@ const videoRef = ref(null)
 const isPolling = ref(false)
 const muted = ref(false)
 
-const selectedModel = computed(() => props.data?.model || modelStore.selectedVideoModel)
-const currentModel = computed(() => modelStore.getVideoModel(selectedModel.value))
-const selectedModelLabel = computed(() => currentModel.value?.label || selectedModel.value || 'Choose video model')
-/** 有效模型：旧数据/无模型名时回退到设置中启用的视频模型 */
-const effectiveModel = computed(() => {
-  const current = selectedModel.value
-  if (modelStore.getVideoModel(current)) return current
-  const fallback = modelStore.selectedVideoModel && modelStore.getVideoModel(modelStore.selectedVideoModel)
-    ? modelStore.selectedVideoModel
-    : 'doubao-seedance-1-5-pro-251215'
-  return fallback
+const modelSelectOptions = computed(() => modelStore.groupedVideoModelOptions || [])
+const selectedModel = computed(() => {
+  const options = modelSelectOptions.value
+  const configuredKeys = new Set(options.map(option => option.value))
+  if (configuredKeys.has(props.data?.model)) return props.data.model
+  if (configuredKeys.has(modelStore.selectedVideoModel)) return modelStore.selectedVideoModel
+  return options[0]?.value || ''
 })
-/** 设置中启用的模型，按供应商分组；当前值缺失时置顶"当前使用" */
-const modelSelectOptions = computed(() => {
-  const list = modelStore.groupedVideoModelOptions || []
-  const hasCurrent = list.some(o => o.value === selectedModel.value)
-  if (hasCurrent || !selectedModel.value) return list
-  const current = { value: selectedModel.value, label: selectedModelLabel.value, group: '当前使用' }
-  return list.length ? [current, ...list] : [current]
-})
+const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
+const currentModel = computed(() =>
+  modelStore.availableVideoModels.find(model => model.key === selectedModel.value)
+  || modelStore.getVideoModel(selectedModel.value)
+)
+const selectedModelLabel = computed(() => selectedModelOption.value?.label || currentModel.value?.label || '请先配置视频模型')
+/** 仅使用设置中已启用的视频模型，不回退到内置模型。 */
+const effectiveModel = computed(() => selectedModel.value)
+watch(selectedModel, value => {
+  if ((props.data?.model || '') !== value) update({ model: value })
+}, { immediate: true })
 
 const presetOptions = computed(() => {
   const model = currentModel.value
@@ -287,6 +287,8 @@ const clearSlot = (slot) => {
 
 const handlePromptInput = (e) => update({ prompt: e.target.value })
 const handleModelChange = (value) => {
+  const option = modelSelectOptions.value.find(item => item.value === value)
+  if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
   const model = modelStore.getVideoModel(value)
   update({
     model: value,
@@ -304,6 +306,10 @@ const collapse = () => update({ expanded: false })
 
 const handleSend = async () => {
   const prompt = String(props.data?.prompt || '').trim()
+  if (!effectiveModel.value) {
+    window.$message?.warning('请先前往设置，在模型配置中启用视频模型')
+    return
+  }
   if (!modelStore.currentApiKey) {
     window.$message?.warning('请先配置 API Key')
     return
