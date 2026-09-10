@@ -123,5 +123,14 @@ export const migrateCanvasDocument = (document = {}) => {
     }]
   })
 
-  return { ...document, nodes, edges, schemaVersion: 2 }
+  return {
+    ...document,
+    nodes,
+    edges,
+    schemaVersion: 2,
+    // Image binaries are stored in IndexedDB under the original node ID.
+    // Keep the one-load migration map so canvas restoration can copy those
+    // assets to the surviving, merged node before autosave drops legacy nodes.
+    _imageNodeAliases: Object.fromEntries(aliases)
+  }
 }

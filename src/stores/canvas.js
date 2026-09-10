@@ -4,7 +4,7 @@
  */
 import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
-import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
+import { saveImage, loadImage, listImageKeys } from './imageStore'
 import { createDefaultNodeData } from '../config/nodeRegistry'
 import { migrateCanvasDocument } from '../utils/migrateCanvasDocument'
 
@@ -430,6 +430,7 @@ export const loadProject = (projectId) => {
   autoSaveEnabled = false
   isRestoring = true
   currentProjectId.value = projectId
+  let imageRestorePromise = Promise.resolve()
   
   const canvasData = getProjectCanvas(projectId)
   
@@ -441,7 +442,7 @@ export const loadProject = (projectId) => {
     canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
-    restoreProjectImages(projectId)
+    imageRestorePromise = restoreProjectImages(projectId, migratedCanvasData._imageNodeAliases)
     
     nodeId = nodes.value.length
   } else {
@@ -456,11 +457,14 @@ export const loadProject = (projectId) => {
   }]
   historyIndex.value = 0
   
-  // Enable auto-save after loading | 加载后启用自动保存
-  setTimeout(() => {
-    autoSaveEnabled = true
-    isRestoring = false
-  }, 100)
+  // Do not let Vue Flow's initial layout events save a partially restored
+  // document while IndexedDB images are still being reattached.
+  imageRestorePromise.finally(() => {
+    setTimeout(() => {
+      autoSaveEnabled = true
+      isRestoring = false
+    }, 100)
+  })
 }
 
 /**
@@ -509,26 +513,61 @@ const persistProjectImages = (projectId) => {
 /**
  * Restore node images from IndexedDB after reload | 重新加载项目时从 IndexedDB 恢复节点图片
  */
-const restoreProjectImages = async (projectId) => {
+const previousSequentialNodeId = (nodeId) => {
+  const match = String(nodeId).match(/^(.*?)(\d+)$/)
+  if (!match) return ''
+  const index = Number(match[2])
+  return index > 0 ? `${match[1]}${index - 1}` : ''
+}
+
+const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
   try {
     const prefix = `${projectId}:`
     const keys = await listImageKeys(prefix)
     if (!keys.length) return
-    const nodeIds = new Set(nodes.value.map(node => node.id))
-    keys.forEach(async (key) => {
-      const nodeId = String(key).slice(prefix.length)
-      const node = nodes.value.find(n => n.id === nodeId)
+
+    const nodesById = new Map(nodes.value.map(node => [String(node.id), node]))
+    const claimedNodeIds = new Set()
+
+    for (const key of keys) {
+      const storedNodeId = String(key).slice(prefix.length)
+      const aliasedNodeId = imageNodeAliases?.[storedNodeId]
+      let node = nodesById.get(String(aliasedNodeId ?? storedNodeId))
+
+      // Projects saved once by the old migration no longer contain its alias
+      // map. Legacy config/output node pairs used consecutive IDs, with the
+      // output image immediately following the config node. Recover that
+      // deterministic relationship without guessing across unrelated nodes.
       if (!node) {
-        // Garbage-collect images of removed nodes | 清理已删除节点的图片
-        deleteImage(key).catch(() => {})
-        return
+        const previousId = previousSequentialNodeId(storedNodeId)
+        const candidate = previousId ? nodesById.get(previousId) : null
+        const candidateHasRecoverableUrl = !candidate?.data?.url || candidate.data.url.startsWith?.('blob:')
+        if (candidate?.type === 'image' && candidateHasRecoverableUrl && !claimedNodeIds.has(previousId)) {
+          node = candidate
+        }
       }
+
+      // Never delete an unmatched key here. A later schema migration or a
+      // manual recovery pass may still be able to reconnect the binary.
+      if (!node || node.type !== 'image') continue
+
       const blob = await loadImage(key)
-      if (blob && node.data && !node.data.url) {
+      const hasTemporaryBlobUrl = node.data?.url?.startsWith?.('blob:')
+      if (blob && node.data && (!node.data.url || hasTemporaryBlobUrl)) {
         node.data.url = URL.createObjectURL(blob)
+        const restoredNodeId = String(node.id)
+        claimedNodeIds.add(restoredNodeId)
+
+        // Copy the legacy asset to the surviving node ID. Keep the old key as
+        // a recovery fallback instead of destructively garbage-collecting it.
+        if (restoredNodeId !== storedNodeId) {
+          await saveImage(`${projectId}:${restoredNodeId}`, node.data.url)
+        }
       }
-    })
-  } catch { /* Ignore restore failures | 恢复失败忽略 */ }
+    }
+  } catch (error) {
+    console.warn('Failed to restore persisted project images:', error)
+  }
 }
 
 /**

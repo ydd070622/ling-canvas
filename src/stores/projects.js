@@ -89,9 +89,10 @@ const cleanNodeForStorage = (node) => {
     delete cleanedData.base64
   }
   
-  // If url is a base64 data URL, keep it only if it's from external source | 如果 url 是 base64，只有外部来源才保留
-  if (cleanedData.url?.startsWith?.('data:')) {
-    // For uploaded images, we can't persist them in localStorage | 上传的图片无法持久化到 localStorage
+  // Inline data and blob URLs are persisted in IndexedDB. A blob URL is valid
+  // only for the WebView session that created it, so saving it here guarantees
+  // a broken image after the next app restart.
+  if (cleanedData.url?.startsWith?.('data:') || cleanedData.url?.startsWith?.('blob:')) {
     delete cleanedData.url
   }
   
