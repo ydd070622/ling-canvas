@@ -24,27 +24,40 @@
         @mousedown.stop
         @click.stop
       >
-        <!-- 左侧：自适应 -->
-        <button
-          class="ratio-auto"
-          :class="{ active: modelValue === 'auto' }"
-          @click.stop="select('auto')"
-        >
-          <span class="ratio-auto-thumb"></span>
-          <span>自适应</span>
-        </button>
-        <!-- 右侧：常见比例网格 -->
-        <div class="ratio-grid">
+        <div class="ratio-options">
+          <!-- 左侧：自适应 -->
           <button
-            v-for="ratio in COMMON_RATIOS"
-            :key="ratio"
-            class="ratio-item"
-            :class="{ active: modelValue === ratio }"
-            @click.stop="select(ratio)"
+            class="ratio-auto"
+            :class="{ active: modelValue === 'auto' }"
+            @click.stop="select('auto')"
           >
-            <span class="ratio-thumb" :style="thumbStyle(ratio)"></span>
-            <span class="ratio-label">{{ ratio }}</span>
+            <span class="ratio-auto-thumb"></span>
+            <span>自适应</span>
           </button>
+          <!-- 右侧：常见比例网格 -->
+          <div class="ratio-grid">
+            <button
+              v-for="ratio in COMMON_RATIOS"
+              :key="ratio"
+              class="ratio-item"
+              :class="{ active: modelValue === ratio }"
+              @click.stop="select(ratio)"
+            >
+              <span class="ratio-thumb" :style="thumbStyle(ratio)"></span>
+              <span class="ratio-label">{{ ratio }}</span>
+            </button>
+          </div>
+        </div>
+        <div v-if="resolutionOptions.length" class="resolution-section">
+          <strong>分辨率</strong>
+          <div class="resolution-options">
+            <button
+              v-for="resolution in resolutionOptions"
+              :key="resolution.value"
+              :class="{ active: selectedResolution === resolution.value }"
+              @click.stop="selectResolution(resolution.value)"
+            >{{ resolution.label }}</button>
+          </div>
         </div>
       </div>
     </Teleport>
@@ -58,9 +71,11 @@ import { COMMON_RATIOS, ratioValue } from '../../../utils/ratio'
 
 const props = defineProps({
   modelValue: { type: String, default: 'auto' },
-  display: { type: String, default: '自适应' }
+  display: { type: String, default: '自适应' },
+  resolutionOptions: { type: Array, default: () => [] },
+  selectedResolution: { type: String, default: '' }
 })
-const emit = defineEmits(['update:modelValue', 'change'])
+const emit = defineEmits(['update:modelValue', 'change', 'update:resolution'])
 
 const open = ref(false)
 const panelPos = ref({ top: 0, left: 0 })
@@ -96,6 +111,7 @@ const select = (ratio) => {
   emit('change', ratio)
   close()
 }
+const selectResolution = resolution => emit('update:resolution', resolution)
 
 const close = () => { open.value = false }
 
@@ -143,6 +159,7 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 9999;
   display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
   background: var(--flow-card-bg);
@@ -150,6 +167,8 @@ onBeforeUnmount(() => {
   border-radius: 14px;
   box-shadow: 0 14px 34px rgba(20, 30, 45, 0.18);
 }
+
+.ratio-options { display: flex; gap: 10px; }
 
 /* 左侧：自适应竖条 */
 .ratio-auto {
@@ -235,4 +254,11 @@ onBeforeUnmount(() => {
   font-weight: 500;
   line-height: 1;
 }
+
+.resolution-section { padding-top: 10px; border-top: 1px solid var(--flow-card-border); }
+.resolution-section > strong { display: block; margin: 0 0 8px 2px; color: var(--flow-text-mid); font-size: 11px; }
+.resolution-options { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; padding: 4px; border-radius: 9px; background: var(--flow-body-bg); }
+.resolution-options button { height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--flow-text-mid); font-family: inherit; font-size: 12px; cursor: pointer; }
+.resolution-options button:hover { color: var(--flow-text-strong); }
+.resolution-options button.active { background: var(--flow-card-bg); color: var(--flow-text-strong); box-shadow: 0 1px 5px rgba(0,0,0,.12); }
 </style>

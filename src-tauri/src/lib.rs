@@ -1,7 +1,10 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
+use std::{collections::HashMap, fs, path::PathBuf};
+use tauri::State;
+use tokio::sync::oneshot;
 
 const MAX_DROPPED_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
 /// 单个 multipart 文件上限（参考图/首帧图解码后）
@@ -140,6 +143,13 @@ struct HttpRequestArgs {
     /// multipart 文件字段
     #[serde(default)]
     files: Vec<MultipartFile>,
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
+#[derive(Default)]
+struct HttpRequestState {
+    cancellations: Mutex<HashMap<String, oneshot::Sender<()>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -164,8 +174,12 @@ fn build_headers(input: &HashMap<String, String>) -> Result<HeaderMap, String> {
 }
 
 #[tauri::command]
-async fn http_request(args: HttpRequestArgs) -> Result<HttpResponse, String> {
-    let parsed_url = reqwest::Url::parse(&args.url).map_err(|err| format!("接口地址无效: {err}"))?;
+async fn http_request(
+    args: HttpRequestArgs,
+    state: State<'_, HttpRequestState>,
+) -> Result<HttpResponse, String> {
+    let parsed_url =
+        reqwest::Url::parse(&args.url).map_err(|err| format!("接口地址无效: {err}"))?;
     if !matches!(parsed_url.scheme(), "http" | "https") {
         return Err("接口地址仅支持 HTTP 或 HTTPS".into());
     }
@@ -205,9 +219,7 @@ async fn http_request(args: HttpRequestArgs) -> Result<HttpResponse, String> {
 
     let has_multipart = !args.fields.is_empty() || !args.files.is_empty();
 
-    let mut request = client
-        .request(method.clone(), parsed_url)
-        .headers(headers);
+    let mut request = client.request(method.clone(), parsed_url).headers(headers);
 
     if has_multipart {
         // 注意：multipart 时不能手动设置 Content-Type，边界由 reqwest 生成。
@@ -241,29 +253,64 @@ async fn http_request(args: HttpRequestArgs) -> Result<HttpResponse, String> {
         }
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|err| format!("上游请求失败: {err}"))?;
+    let request_future = async move {
+        let response = request
+            .send()
+            .await
+            .map_err(|err| format!("上游请求失败: {err}"))?;
 
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let body = response
-        .text()
-        .await
-        .map_err(|err| format!("读取上游响应失败: {err}"))?;
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = response
+            .text()
+            .await
+            .map_err(|err| format!("读取上游响应失败: {err}"))?;
 
-    Ok(HttpResponse {
-        status: status.as_u16(),
-        ok: status.is_success(),
-        content_type,
-        body,
-    })
+        Ok(HttpResponse {
+            status: status.as_u16(),
+            ok: status.is_success(),
+            content_type,
+            body,
+        })
+    };
+
+    let Some(request_id) = args.request_id.filter(|value| !value.is_empty()) else {
+        return request_future.await;
+    };
+
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    state
+        .cancellations
+        .lock()
+        .map_err(|_| "取消请求状态不可用".to_string())?
+        .insert(request_id.clone(), cancel_tx);
+
+    let result = tokio::select! {
+        response = request_future => response,
+        _ = cancel_rx => Err("请求已取消".to_string()),
+    };
+
+    if let Ok(mut cancellations) = state.cancellations.lock() {
+        cancellations.remove(&request_id);
+    }
+    result
+}
+
+#[tauri::command]
+fn cancel_http_request(request_id: String, state: State<'_, HttpRequestState>) -> bool {
+    let sender = state
+        .cancellations
+        .lock()
+        .ok()
+        .and_then(|mut cancellations| cancellations.remove(&request_id));
+    sender
+        .map(|cancel| cancel.send(()).is_ok())
+        .unwrap_or(false)
 }
 
 /// 按扩展名猜 MIME（本地文件没有 Content-Type 可读）。
@@ -575,11 +622,13 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(HttpRequestState::default())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             read_dropped_image,
             fetch_models,
             http_request,
+            cancel_http_request,
             fetch_binary
         ])
         .run(tauri::generate_context!())

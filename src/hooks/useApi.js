@@ -156,6 +156,7 @@ export const useImageGeneration = () => {
   const images = ref([])
   const currentImage = ref(null)
   let abortController = null
+  let generationVersion = 0
 
   /**
    * @param {Object} params { model, prompt, size, n|count, image }
@@ -163,6 +164,7 @@ export const useImageGeneration = () => {
    * @returns {Promise<Array<{url:string, revisedPrompt:string}>>}
    */
   const generate = async (params = {}, requestOptions = {}) => {
+    const runVersion = ++generationVersion
     setLoading(true)
     images.value = []
     currentImage.value = null
@@ -181,7 +183,8 @@ export const useImageGeneration = () => {
       const requestData = {
         model: params.model,
         prompt: params.prompt,
-        size: params.size || modelConfig?.defaultParams?.size || '',
+        size: params.size !== undefined ? params.size : (modelConfig?.defaultParams?.size || ''),
+        resolution: params.resolution || modelConfig?.defaultParams?.resolution || '',
         n: Number(params.n || params.count || 1)
       }
       if (referenceImages.length) requestData.image = referenceImages
@@ -198,23 +201,35 @@ export const useImageGeneration = () => {
         signal: requestOptions.signal || abortController?.signal
       })
 
+      if (runVersion !== generationVersion) {
+        const abortError = new Error('已取消生成')
+        abortError.name = 'AbortError'
+        throw abortError
+      }
+
       images.value = result
       currentImage.value = result[0] || null
       setSuccess()
       return result
     } catch (err) {
+      if (err?.name === 'AbortError') {
+        reset()
+        throw err
+      }
       setError(err)
       throw err
     } finally {
-      abortController = null
+      if (runVersion === generationVersion) abortController = null
     }
   }
 
   const stop = () => {
+    generationVersion += 1
     if (abortController) {
       abortController.abort()
       abortController = null
     }
+    reset()
   }
 
   return { loading, error, status, images, currentImage, generate, stop, reset }

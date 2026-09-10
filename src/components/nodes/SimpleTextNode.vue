@@ -70,12 +70,10 @@
           </button>
         </div>
         <div class="flow-footer-row">
-          <textarea
-            :value="data.prompt || ''"
-            class="flow-prompt-input nodrag nowheel"
+          <PromptEditor
+            :model-value="data.prompt || ''"
             placeholder="描述你想生成或改写的内容..."
-            rows="2"
-            @input="handlePromptInput"
+            @update:model-value="handlePromptInput"
           />
         </div>
         <div class="flow-footer-row">
@@ -112,7 +110,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { NodeToolbar, NodePort, FlowSelect } from './base'
+import { NodeToolbar, NodePort, FlowSelect, PromptEditor } from './base'
 import { useNodeActions } from '../../composables/useNodeActions'
 import { useUpstreamInputs } from '../../composables/useUpstreamInputs'
 import { useChat } from '../../hooks/useApi'
@@ -168,7 +166,7 @@ const { loading, send } = useChat(chatOptions)
 const isExpanded = computed(() => props.data?.expanded === true)
 
 const handleContentInput = (e) => update({ content: e.target.value })
-const handlePromptInput = (e) => update({ prompt: e.target.value })
+const handlePromptInput = value => update({ prompt: value })
 const handleModelChange = (value) => {
   const option = modelSelectOptions.value.find(item => item.value === value)
   if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
@@ -258,7 +256,7 @@ const handleAction = (action) => {
 </script>
 
 <style scoped>
-.text-card { width: 428px; }
-.flow-node-collapsed .text-card { width: 380px; }
+.text-card { width: 520px; }
+.flow-node-collapsed .text-card { width: 422px; }
 .flow-node-collapsed .flow-card-body { margin: 8px; border-radius: 12px; }
 </style>

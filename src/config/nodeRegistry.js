@@ -1,15 +1,12 @@
 import {
   DEFAULT_CHAT_MODEL,
-  DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
-  IMAGE_MODELS,
   VIDEO_MODELS
 } from './models'
 
 export const CONTENT_NODE_TYPES = Object.freeze(['text', 'image', 'video'])
 export const CANVAS_NODE_TYPES = Object.freeze([...CONTENT_NODE_TYPES, 'group'])
 
-const imageModel = IMAGE_MODELS.find(model => model.key === DEFAULT_IMAGE_MODEL) || IMAGE_MODELS[0]
 const videoModel = VIDEO_MODELS.find(model => model.key === DEFAULT_VIDEO_MODEL) || VIDEO_MODELS[0]
 
 export const NODE_DEFINITIONS = Object.freeze({
@@ -32,7 +29,9 @@ export const NODE_DEFINITIONS = Object.freeze({
       url: '',
       prompt: '',
       model: '',
-      size: imageModel?.defaultParams?.size || imageModel?.sizes?.[0] || '1x1',
+      size: null,
+      ratio: null,
+      resolution: '1K',
       count: 1,
       expanded: true
     })
@@ -50,7 +49,7 @@ export const NODE_DEFINITIONS = Object.freeze({
       url: '',
       prompt: '',
       model: '',
-      ratio: videoModel?.defaultParams?.ratio || '16:9',
+      ratio: '3:4',
       duration: videoModel?.defaultParams?.duration || 5,
       resolution: videoModel?.defaultResolution || videoModel?.resolutions?.[0] || '1080p',
       expanded: true

@@ -36,6 +36,7 @@ export const PROVIDERS = {
         if (params.size) adapted.size = params.size
         if (params.n) adapted.n = params.n
         if (params.quality) adapted.quality = params.quality
+        if (params.resolution) adapted.resolution = params.resolution
         if (params.style) adapted.style = params.style
         if (params.image) adapted.image = params.image
         return adapted

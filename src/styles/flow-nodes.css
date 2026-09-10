@@ -142,6 +142,60 @@
   box-shadow: 0 1px 2px rgba(30, 40, 55, 0.03), 0 14px 34px rgba(30, 40, 55, 0.07);
 }
 
+/* 展开态节点统一为 3:4（宽 / 高 = 0.75） */
+.flow-node-outer:not(.flow-node-collapsed) > .flow-card {
+  display: flex;
+  width: 520px;
+  height: 693.333px;
+  aspect-ratio: 3 / 4;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.flow-node-outer:not(.flow-node-collapsed) > .flow-card > .flow-card-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.text-node:not(.flow-node-collapsed) .flow-text-body,
+.image-node:not(.flow-node-collapsed) .flow-image-preview,
+.image-node:not(.flow-node-collapsed) .flow-image-dash {
+  height: 100%;
+  min-height: 0;
+}
+
+.image-node:not(.flow-node-collapsed) .flow-image-preview img {
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 有图片后，展开态也按素材真实比例撑开节点，不套用默认 3:4 画框 */
+.image-node.flow-node-has-media:not(.flow-node-collapsed) > .flow-card {
+  display: block;
+  height: auto;
+  aspect-ratio: auto;
+  overflow: visible;
+}
+
+.image-node.flow-node-has-media:not(.flow-node-collapsed) > .flow-card > .flow-card-body,
+.image-node.flow-node-has-media:not(.flow-node-collapsed) .flow-image-preview {
+  height: auto;
+  min-height: 0;
+}
+
+.image-node.flow-node-has-media:not(.flow-node-collapsed) .flow-image-preview img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.video-node:not(.flow-node-collapsed) .flow-video-media {
+  min-height: 0;
+  flex: 1 1 auto;
+  aspect-ratio: auto;
+}
+
 .dark .flow-card {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 34px rgba(0, 0, 0, 0.35);
 }
@@ -149,6 +203,30 @@
 /* 收缩态：无外框，靠阴影 + 内容界定边界 */
 .flow-node-collapsed .flow-card {
   border-color: transparent;
+}
+
+/* 空白节点收缩后仍保持默认 3:4；已有媒体的节点按素材比例展示 */
+.flow-node-collapsed:not(.flow-node-has-media) > .flow-card {
+  display: flex;
+  aspect-ratio: 3 / 4;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.flow-node-collapsed:not(.flow-node-has-media) > .flow-card > .flow-card-body,
+.flow-node-collapsed:not(.flow-node-has-media) > .flow-card > .flow-video-media {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.flow-node-collapsed:not(.flow-node-has-media) .flow-text-body,
+.flow-node-collapsed:not(.flow-node-has-media) .flow-image-dash {
+  height: 100%;
+  min-height: 0;
+}
+
+.flow-node-collapsed:not(.flow-node-has-media) .flow-video-media {
+  aspect-ratio: auto;
 }
 
 .flow-card-head {
@@ -237,7 +315,7 @@
 .flow-image-preview {
   position: relative;
   display: flex;
-  min-height: 300px;
+  min-height: 0;
   align-items: center;
   justify-content: center;
   overflow: hidden;
@@ -247,13 +325,21 @@
 
 .flow-image-preview img {
   display: block;
-  max-width: 100%;
-  max-height: 480px;
-  object-fit: contain;
+  width: 100%;
+  height: auto;
 }
 
-.flow-node-collapsed .flow-image-preview { min-height: 214px; }
-.flow-node-collapsed .flow-image-preview img { max-height: 420px; }
+.flow-node-collapsed .flow-image-preview {
+  width: 100%;
+  min-height: 0;
+  aspect-ratio: 3 / 4;
+}
+
+.flow-node-collapsed .flow-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 
 .flow-video-media {
   position: relative;
@@ -301,7 +387,8 @@
 
 /* ============ 底部生成区 ============ */
 .flow-card-footer {
-  margin: 0 12px 12px;
+  position: relative;
+  margin: 12px 12px 12px;
   padding: 10px 12px 12px;
   border: 1px solid var(--flow-footer-border);
   border-radius: 12px;
@@ -457,6 +544,12 @@
 .flow-send-btn:hover { transform: scale(1.06); }
 .flow-send-btn:disabled { cursor: wait; opacity: 0.55; transform: none; }
 .flow-send-btn svg { width: 15px; height: 15px; margin: 1px 0 0 1px; }
+.flow-send-btn.flow-send-cancel {
+  background: #f7f7f8;
+  color: #171719;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+.flow-send-btn.flow-send-cancel .flow-stop-icon { width: 14px; height: 14px; margin: 0; }
 
 .flow-footer-spacer { flex: 1 1 auto; }
 

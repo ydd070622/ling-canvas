@@ -24,6 +24,12 @@ const invokeTauri = async (command, args) => {
   return invoke(command, args)
 }
 
+const createAbortError = () => {
+  const error = new Error('已取消生成')
+  error.name = 'AbortError'
+  return error
+}
+
 /**
  * 拼接 baseUrl 与端点路径。
  * 容忍三种常见配置：base 带 /v1、base 不带 /v1、路径带或不带前导斜杠；
@@ -113,6 +119,14 @@ export const callUpstream = async ({
     || (Array.isArray(files) && files.length > 0)
 
   if (isTauriRuntime()) {
+    if (signal?.aborted) throw createAbortError()
+    const requestId = signal
+      ? `http-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      : undefined
+    const handleAbort = () => {
+      if (requestId) invokeTauri('cancel_http_request', { requestId }).catch(() => {})
+    }
+    signal?.addEventListener('abort', handleAbort, { once: true })
     let result
     try {
       result = await invokeTauri('http_request', {
@@ -123,12 +137,16 @@ export const callUpstream = async ({
           timeoutMs: timeoutMs || undefined,
           json: hasMultipart ? undefined : json,
           fields: hasMultipart ? (fields || []) : [],
-          files: hasMultipart ? (files || []) : []
+          files: hasMultipart ? (files || []) : [],
+          requestId
         }
       })
     } catch (error) {
+      if (signal?.aborted) throw createAbortError()
       // Tauri 命令失败时 rejection 可能是字符串，统一成 Error 以保证 err.message 可用
       throw new Error(typeof error === 'string' ? error : (error?.message || '请求上游失败'))
+    } finally {
+      signal?.removeEventListener('abort', handleAbort)
     }
     return {
       ok: Boolean(result?.ok),

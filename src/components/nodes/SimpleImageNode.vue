@@ -1,6 +1,9 @@
 <template>
   <!-- 图片节点：展开/收缩双态 + 上传/预览 + 参考图注入 -->
-  <div class="flow-node-outer image-node" :class="{ 'flow-node-collapsed': !isExpanded }">
+  <div
+    class="flow-node-outer image-node"
+    :class="{ 'flow-node-collapsed': !isExpanded, 'flow-node-has-media': Boolean(data.url) }"
+  >
     <!-- 收缩态标签 -->
     <span v-if="!isExpanded" class="flow-collapsed-label">{{ data.label || '图片' }}</span>
 
@@ -49,8 +52,14 @@
           <span style="color:#ef4444;font-size:12px">{{ data.error }}</span>
         </div>
         <!-- 预览 -->
-        <div v-else-if="data.url" class="flow-image-preview" @dblclick.stop="openImagePreview" @click="handleBodyClick">
-          <img :src="data.url" :alt="data.label" />
+        <div
+          v-else-if="data.url"
+          class="flow-image-preview"
+          :style="collapsedPreviewStyle"
+          @dblclick.stop="openImagePreview"
+          @click="handleBodyClick"
+        >
+          <img :src="data.url" :alt="data.label" @load="handleImageLoad" />
         </div>
         <!-- 上传空态 -->
         <div
@@ -75,12 +84,10 @@
           </button>
         </div>
         <div class="flow-footer-row">
-          <textarea
-            :value="data.prompt || ''"
-            class="flow-prompt-input nodrag nowheel"
+          <PromptEditor
+            :model-value="data.prompt || ''"
             placeholder="描述要生成的画面..."
-            rows="1"
-            @input="handlePromptInput"
+            @update:model-value="handlePromptInput"
           />
         </div>
         <div class="flow-footer-row">
@@ -95,12 +102,12 @@
           <RatioPicker
             :model-value="selectedRatio"
             :display="selectedRatioLabel"
+            :resolution-options="resolutionOptions"
+            :selected-resolution="selectedResolution"
             @change="handleRatioChange"
+            @update:resolution="handleResolutionChange"
           />
-          <span class="flow-pill nodrag">
-            <span class="pd-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg></span>高级
-            <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>
-          </span>
+          <PromptPresetPicker @select="handlePresetSelect" />
           <span class="flow-footer-spacer"></span>
           <FlowSelect
             :options="countOptions"
@@ -108,8 +115,14 @@
             :display="`x${data.count || 1}`"
             @update:model-value="handleCountChange"
           />
-          <button class="flow-send-btn nodrag" :disabled="generating" :title="generating ? '生成中' : '发送'" @click="handleSend">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z"/></svg>
+          <button
+            class="flow-send-btn nodrag"
+            :class="{ 'flow-send-cancel': isGenerating }"
+            :title="isGenerating ? '取消生成' : '发送'"
+            @click="handleGenerateAction"
+          >
+            <svg v-if="isGenerating" class="flow-stop-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+            <svg v-else viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z"/></svg>
           </button>
         </div>
       </div>
@@ -136,7 +149,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { NodeToolbar, NodePort, FlowSelect, RatioPicker } from './base'
+import { NodeToolbar, NodePort, FlowSelect, RatioPicker, PromptEditor, PromptPresetPicker } from './base'
 import { useNodeActions } from '../../composables/useNodeActions'
 import { useUpstreamInputs } from '../../composables/useUpstreamInputs'
 import { useImageGeneration } from '../../hooks/useApi'
@@ -156,7 +169,7 @@ const { upstreamText, upstreamImages } = useUpstreamInputs(props.id)
 const fileInputRef = ref(null)
 const previewOpen = ref(false)
 const modelStore = useModelStore()
-const { loading: generating, generate } = useImageGeneration()
+const { loading: generating, generate, stop: stopGeneration } = useImageGeneration()
 
 const modelSelectOptions = computed(() => modelStore.groupedImageModelOptions || [])
 const selectedModel = computed(() => {
@@ -198,21 +211,32 @@ const selectedModelLabel = computed(() => selectedModelOption.value?.label || cu
 watch(selectedModel, value => {
   if ((props.data?.model || '') !== value) update({ model: value })
 }, { immediate: true })
-const sizeOptions = computed(() => {
-  const sizes = currentModel.value?.sizes || []
-  return sizes.length ? sizes : [props.data?.size || currentModel.value?.defaultParams?.size || '1x1']
-})
 const selectedSize = computed(() => {
-  // 显式存储的 size 优先；其次按所选比例从有效模型尺寸中匹配；最后回退模型默认
+  // 自适应时不发送 size，让上游模型自行决定；明确选择比例时再映射模型尺寸。
   if (props.data?.size) return props.data.size
   if (props.data?.ratio) {
     const matched = findSizeByRatio(effectiveModelConfig.value?.sizes || [], props.data.ratio)
-    if (matched) return matched
+    return matched || props.data.ratio
   }
-  return effectiveModelConfig.value?.defaultParams?.size || sizeOptions.value[0] || '1x1'
+  return ''
 })
-const formatSize = (size) => String(size).replace(/x/g, ' × ')
 const countOptions = ['1', '2', '3', '4'].map(v => ({ value: v, label: `x${v}` }))
+
+const resolutionOptions = computed(() => {
+  const declared = currentModel.value?.imageResolutions || currentModel.value?.resolutions
+  const values = Array.isArray(declared) && declared.length
+    ? declared
+    : (/seedream/i.test(selectedModel.value) ? ['2K', '4K'] : ['1K', '2K', '4K'])
+  return values.map(value => ({ value: String(value).toUpperCase(), label: String(value).toUpperCase() }))
+})
+const selectedResolution = computed(() => {
+  const available = resolutionOptions.value.map(item => item.value)
+  const saved = String(props.data?.resolution || '').toUpperCase()
+  return available.includes(saved) ? saved : (available[0] || '')
+})
+watch(selectedResolution, value => {
+  if (value && props.data?.resolution !== value) update({ resolution: value })
+}, { immediate: true })
 
 /** 当前比例：‘auto’（自适应）或 '16:9' 等 | Current ratio value */
 const selectedRatio = computed(() => {
@@ -222,7 +246,7 @@ const selectedRatio = computed(() => {
 })
 const selectedRatioLabel = computed(() => {
   if (selectedRatio.value === 'auto') return '自适应'
-  return ratioDisplay(selectedRatio.value)
+  return ratioDisplay(selectedRatio.value, { keepColon: true })
 })
 /** 比例变更：优先映射到有效模型支持的尺寸；无匹配时存 ratio 由发送端回退 */
 const handleRatioChange = (ratio) => {
@@ -239,6 +263,21 @@ const handleRatioChange = (ratio) => {
 }
 
 const isExpanded = computed(() => props.data?.expanded === true)
+const isGenerating = computed(() => generating.value || props.data?.loading === true)
+const collapsedPreviewStyle = computed(() => (
+  isExpanded.value
+    ? undefined
+    : { aspectRatio: String(props.data?.imageAspectRatio || '3 / 4') }
+))
+
+const handleImageLoad = event => {
+  const image = event.currentTarget
+  const ratio = image?.naturalWidth && image?.naturalHeight
+    ? image.naturalWidth / image.naturalHeight
+    : 0
+  if (!ratio || Math.abs(Number(props.data?.imageAspectRatio || 0) - ratio) < 0.001) return
+  update({ imageAspectRatio: ratio })
+}
 
 /** 收缩态点击 → 展开并选中；展开态空态点击 → 上传 | Expand on collapsed click, upload on expanded empty click */
 const handleBodyClick = () => {
@@ -281,16 +320,33 @@ const handleDownload = () => {
   link.click()
 }
 
-const handlePromptInput = (e) => update({ prompt: e.target.value })
+const handlePromptInput = value => update({ prompt: value })
+const handlePresetSelect = value => update({ prompt: value })
+const handleResolutionChange = value => update({ resolution: value })
 const handleModelChange = (value) => {
   const option = modelSelectOptions.value.find(item => item.value === value)
   if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
   const model = modelStore.getImageModel(value)
-  update({ model: value, size: model?.defaultParams?.size || model?.sizes?.[0] || '1x1' })
+  const availableResolutions = model?.imageResolutions || model?.resolutions
+  const resolution = Array.isArray(availableResolutions) && availableResolutions.length
+    ? String(availableResolutions[0]).toUpperCase()
+    : (/seedream/i.test(value) ? '2K' : '1K')
+  update({ model: value, size: null, ratio: null, resolution })
 }
 const handleCountChange = (value) => update({ count: Number(value) })
 
 const collapse = () => update({ expanded: false })
+
+const cancelGeneration = () => {
+  stopGeneration()
+  update({ loading: false, error: '' })
+  window.$message?.info('已取消图片生成')
+}
+
+const handleGenerateAction = () => {
+  if (isGenerating.value) cancelGeneration()
+  else handleSend()
+}
 
 const handleSend = async () => {
   const prompt = String(props.data?.prompt || '').trim()
@@ -321,7 +377,7 @@ const handleSend = async () => {
       )
       return
     }
-    update({ loading: true, error: '', model, size: selectedSize.value })
+    update({ loading: true, error: '', model, size: selectedSize.value || null, resolution: selectedResolution.value })
     // 上游注入：文本拼入提示词，全部连入图片按边顺序作为参考图
     const parts = [upstreamText.value, prompt].filter(Boolean)
     const fullPrompt = parts.join('\n')
@@ -330,6 +386,7 @@ const handleSend = async () => {
       model,
       prompt: fullPrompt,
       size: selectedSize.value,
+      resolution: selectedResolution.value,
       n: Number(props.data?.count || 1),
       image: referenceImages
     }, { providerId: providerId.value })
@@ -346,6 +403,7 @@ const handleSend = async () => {
     })
     window.$message?.success(results.length > 1 ? `已生成 ${results.length} 张图片` : '图片生成成功')
   } catch (err) {
+    if (err?.name === 'AbortError') return
     update({ loading: false, error: err.message || '图片生成失败' })
     window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, providerLabel.value))
   }
@@ -368,8 +426,8 @@ const handleAction = (action) => {
 </script>
 
 <style scoped>
-.image-card { width: 468px; }
-.flow-node-collapsed .image-card { width: 430px; }
+.image-card { width: 520px; }
+.flow-node-collapsed .image-card { width: 478px; }
 .flow-node-collapsed .flow-card-body { margin: 7px; }
 
 .loading-spinner {

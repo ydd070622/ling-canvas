@@ -173,6 +173,7 @@ export const toTransportableReferenceImage = async value => {
  * @param {string} [input.prompt]
  * @param {string} [input.size]
  * @param {string} [input.quality]
+ * @param {string} [input.resolution]
  * @param {number} [input.count]
  * @param {string[]} [input.referenceImages]
  * @param {string} [input.fileNamePrefix]
@@ -184,6 +185,7 @@ export const buildImageEditMultipart = async (input = {}) => {
   const prompt = normalizeStringValue(input.prompt)
   const size = normalizeStringValue(input.size)
   const quality = normalizeStringValue(input.quality)
+  const resolution = normalizeStringValue(input.resolution)
   const referenceImages = normalizeReferenceImageList(input.referenceImages)
   const fileNamePrefix = normalizeStringValue(input.fileNamePrefix) || 'reference-image'
   const imageField = normalizeStringValue(input.imageField) || 'image'
@@ -197,6 +199,7 @@ export const buildImageEditMultipart = async (input = {}) => {
   fields.push({ name: 'n', value: String(desiredCount) })
   if (size) fields.push({ name: 'size', value: size })
   if (quality) fields.push({ name: 'quality', value: quality })
+  if (resolution) fields.push({ name: 'resolution', value: resolution })
 
   const files = []
   for (let index = 0; index < referenceImages.length; index += 1) {

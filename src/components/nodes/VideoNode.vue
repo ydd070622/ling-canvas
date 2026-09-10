@@ -1,6 +1,9 @@
 <template>
   <!-- 视频节点：展开/收缩 + 首帧/尾帧/描述三槽输入 -->
-  <div class="flow-node-outer video-node" :class="{ 'flow-node-collapsed': !isExpanded }">
+  <div
+    class="flow-node-outer video-node"
+    :class="{ 'flow-node-collapsed': !isExpanded, 'flow-node-has-media': Boolean(data.url) }"
+  >
     <!-- 收缩态标签 -->
     <span v-if="!isExpanded" class="flow-collapsed-label">{{ data.label || '视频' }}</span>
 
@@ -92,12 +95,10 @@
           </button>
         </div>
         <div class="flow-footer-row">
-          <textarea
-            :value="data.prompt || ''"
-            class="flow-prompt-input nodrag nowheel"
+          <PromptEditor
+            :model-value="data.prompt || ''"
             placeholder="描述希望画面如何动起来..."
-            rows="2"
-            @input="handlePromptInput"
+            @update:model-value="handlePromptInput"
           />
         </div>
         <div class="flow-footer-row">
@@ -139,7 +140,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { NodeToolbar, NodePort, FlowSelect } from './base'
+import { NodeToolbar, NodePort, FlowSelect, PromptEditor } from './base'
 import { useNodeActions } from '../../composables/useNodeActions'
 import { useUpstreamInputs } from '../../composables/useUpstreamInputs'
 import { useVideoGeneration } from '../../hooks/useApi'
@@ -303,14 +304,14 @@ const clearSlot = (slot) => {
   }
 }
 
-const handlePromptInput = (e) => update({ prompt: e.target.value })
+const handlePromptInput = value => update({ prompt: value })
 const handleModelChange = (value) => {
   const option = modelSelectOptions.value.find(item => item.value === value)
   if (option?.sourceProvider) modelStore.setProvider(option.sourceProvider)
   const model = modelStore.getVideoModel(value)
   update({
     model: value,
-    ratio: model?.defaultParams?.ratio || '16:9',
+    ratio: '3:4',
     duration: model?.defaultParams?.duration || 5,
     resolution: model?.defaultResolution || model?.resolutions?.[0] || '1080p'
   })
@@ -357,7 +358,7 @@ const handleSend = async () => {
     const result = await generate({
       model,
       prompt: prompts.join('\n'),
-      ratio: props.data?.ratio || modelConfig?.defaultParams?.ratio || '16:9',
+      ratio: props.data?.ratio || '3:4',
       dur: Number(props.data?.duration || modelConfig?.defaultParams?.duration || 5),
       resolution: props.data?.resolution || modelConfig?.defaultResolution,
       first_frame_image: slotInputs.value.first || props.data?.firstFrameImage || undefined,
@@ -389,9 +390,9 @@ const handleAction = (action) => {
 </script>
 
 <style scoped>
-.video-card { width: 588px; }
-.flow-node-collapsed .video-card { width: 500px; }
-.flow-node-collapsed .flow-video-media { height: 280px; }
+.video-card { width: 520px; }
+.flow-node-collapsed .video-card { width: 555px; }
+.flow-node-collapsed .flow-video-media { height: auto; }
 
 .video-loading, .video-error {
   position: absolute;

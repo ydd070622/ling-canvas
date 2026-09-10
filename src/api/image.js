@@ -22,6 +22,7 @@ import {
   toTransportableReferenceImage
 } from '@/utils/upstreamRequest'
 import { collectImageResults } from '@/utils/resultParser'
+import { normalizeRatioKey } from '@/utils/ratio'
 
 /** 文生图/图生图首包可能等待数分钟（尤其 4K 模型） */
 const IMAGE_TIMEOUT_MS = 300_000
@@ -38,14 +39,20 @@ const toTransportableImages = async images => {
 }
 
 /** 参考图 → chat 协议的多模态消息 */
-const buildChatImageRequest = ({ model, prompt, images }) => {
+const buildChatImageRequest = ({ model, prompt, images, size, resolution }) => {
   const content = []
   if (prompt) content.push({ type: 'text', text: prompt })
   images.forEach(url => content.push({ type: 'image_url', image_url: { url } }))
-  return {
+  const request = {
     model,
     messages: [{ role: 'user', content: content.length ? content : prompt }]
   }
+  if (size || resolution) {
+    request.image_config = {}
+    if (size) request.image_config.aspect_ratio = normalizeRatioKey(size, { fallback: String(size) })
+    if (resolution) request.image_config.image_size = String(resolution).toUpperCase()
+  }
+  return request
 }
 
 /**
@@ -87,6 +94,7 @@ export const generateImage = async (payload = {}, options = {}) => {
         prompt,
         size: payload.size,
         quality: payload.quality,
+        resolution: payload.resolution,
         count: payload.n ?? payload.count,
         referenceImages,
         fileNamePrefix: 'ling-canvas-reference',
@@ -110,7 +118,9 @@ export const generateImage = async (payload = {}, options = {}) => {
         json: buildChatImageRequest({
           model: modelKey,
           prompt,
-          images: await toTransportableImages(referenceImages)
+          images: await toTransportableImages(referenceImages),
+          size: payload.size,
+          resolution: payload.resolution
         }),
         signal,
         timeoutMs
