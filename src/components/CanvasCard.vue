@@ -62,7 +62,7 @@ const handleDelete = () => {
     <!-- Thumbnail area | 缩略图区域 -->
     <div class="thumbnail-area relative h-[160px] overflow-hidden rounded-t-xl bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800">
       <!-- Thumbnail image or placeholder | 缩略图图片或占位符 -->
-      <div v-if="project.thumbnail" class="h-full w-full">
+      <div v-if="project.thumbnail && Number(project.cardCount) > 0" class="h-full w-full">
         <img
           :src="project.thumbnail"
           :alt="project.name"
@@ -71,7 +71,7 @@ const handleDelete = () => {
       </div>
       <div
         v-else
-        class="flex h-full w-full items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900"
+        class="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-gray-50 to-gray-100 text-gray-400 dark:from-gray-800 dark:to-gray-900 dark:text-gray-500"
       >
         <svg
           class="h-12 w-12 text-gray-300 dark:text-gray-600"
@@ -86,6 +86,7 @@ const handleDelete = () => {
             d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
           />
         </svg>
+        <span class="text-xs">暂无画布内容</span>
       </div>
 
       <!-- Checkbox (manage mode) | 复选框（管理模式） -->

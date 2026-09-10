@@ -241,6 +241,9 @@ export const updateProjectCanvas = (id, canvasData) => {
       } else {
         project.thumbnail = latestNode.data.url
       }
+    } else {
+      // 画布中已没有可预览媒体时同步清除旧缩略图，避免首页误报有内容。
+      project.thumbnail = ''
     }
   }
   

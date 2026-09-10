@@ -1,12 +1,14 @@
 <script setup>
-/**
- * AppSidebar | 全局导航栏（简化版）
- * 4 个平铺导航项，纯文字图标，无折叠分组
- */
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NTooltip } from 'naive-ui'
 import {
+  HomeOutline,
+  GridOutline,
+  HeartOutline,
+  CubeOutline,
+  TrashOutline,
+  FolderOutline,
+  AddCircleOutline,
   SunnyOutline,
   MoonOutline,
   SettingsOutline
@@ -18,214 +20,184 @@ import ApiSettings from '../ApiSettings.vue'
 
 const router = useRouter()
 const ui = useUIStore()
-
-// 设置弹窗 | Settings modal
 const showApiSettings = ref(false)
 
-// 项目总数 | Total project count
 const projectCount = computed(() => activeProjects.value.length)
-
-// 回收站数量 | Trash count
 const trashCount = computed(() => trashedProjects.value.length)
+const favoriteCount = computed(() => activeProjects.value.filter(project => project.favorite).length)
+// 素材库尚未建立独立的数据源，不能用画布节点数冒充素材数量。
+const assetCount = computed(() => 0)
 
-// 意式极简项目数
-const yishiCount = computed(() =>
-  activeProjects.value.filter(p => p.folder === '意式极简').length
-)
-
-// 法式风格项目数
-const fashiCount = computed(() =>
-  activeProjects.value.filter(p => p.folder === '法式风格').length
-)
-
-// 导航到视图 | Navigate to view
-function navigateToView(view) {
+const navigateToView = (view) => {
   ui.setView(view)
-  if (router.currentRoute.value.path !== '/') {
-    router.push('/')
-  }
+  if (router.currentRoute.value.path !== '/') router.push('/')
 }
 
-// 导航到文件夹 | Navigate to folder
-function navigateToFolder(folderName) {
+const navigateToFolder = (folderName) => {
   ui.setView('folder', folderName)
-  if (router.currentRoute.value.path !== '/') {
-    router.push('/')
+  if (router.currentRoute.value.path !== '/') router.push('/')
+}
+
+const createFolder = () => {
+  const name = window.prompt('请输入文件夹名称')
+  if (!name) return
+  if (ui.addFolder(name)) {
+    navigateToFolder(name.trim())
+    window.$message?.success('文件夹已创建')
+  } else {
+    window.$message?.warning('文件夹名称为空或已存在')
   }
-}
-
-// 判断当前导航项是否激活 | Check if nav item is active
-function isViewActive(view) {
-  return ui.currentView === view
-}
-
-// 判断文件夹是否激活 | Check if folder is active
-function isFolderActive(folderName) {
-  return ui.currentView === 'folder' && ui.currentFolder === folderName
 }
 </script>
 
 <template>
-  <aside
-    class="
-      flex flex-col h-full w-[220px] flex-shrink-0
-      bg-[#f5f6f8] dark:bg-[#0d0d0d]
-      border-r border-gray-200/60 dark:border-gray-700/50
-      transition-all duration-300
-      select-none
-    "
-    :class="{ 'w-0 overflow-hidden': ui.sidebarCollapsed }"
-  >
-    <!-- 导航区域 | Navigation area -->
-    <nav class="flex-1 overflow-y-auto px-2.5 py-2 scrollbar-thin">
-      <!-- 个人分组标题 | Personal section header -->
-      <div class="section-header">个人</div>
+  <aside class="home-sidebar" :class="{ 'home-sidebar--collapsed': ui.sidebarCollapsed }">
+    <nav class="home-sidebar__nav">
+      <p class="home-sidebar__section-title">个人</p>
 
-      <div class="space-y-0.5">
-        <!-- 全部画布 -->
-        <button
-          class="sidebar-nav-item"
-          :class="{ 'sidebar-nav-item--active': isViewActive('all') }"
-          @click="navigateToView('all')"
-        >
-          <span class="nav-text-icon">全</span>
-          <span class="flex-1 text-left">全部画布</span>
-          <span class="sidebar-count-badge">{{ projectCount }}</span>
-        </button>
-
-        <!-- 意式极简 -->
-        <button
-          class="sidebar-nav-item"
-          :class="{ 'sidebar-nav-item--active': isFolderActive('意式极简') }"
-          @click="navigateToFolder('意式极简')"
-        >
-          <span class="nav-text-icon">意</span>
-          <span class="flex-1 text-left">意式极简</span>
-          <span class="sidebar-count-badge">{{ yishiCount }}</span>
-        </button>
-
-        <!-- 法式风格 -->
-        <button
-          class="sidebar-nav-item"
-          :class="{ 'sidebar-nav-item--active': isFolderActive('法式风格') }"
-          @click="navigateToFolder('法式风格')"
-        >
-          <span class="nav-text-icon">法</span>
-          <span class="flex-1 text-left">法式风格</span>
-          <span class="sidebar-count-badge">{{ fashiCount }}</span>
-        </button>
-
-        <!-- 回收站 -->
-        <button
-          class="sidebar-nav-item"
-          :class="{ 'sidebar-nav-item--active': isViewActive('trash') }"
-          @click="navigateToView('trash')"
-        >
-          <span class="nav-text-icon">废</span>
-          <span class="flex-1 text-left">回收站</span>
-          <span class="sidebar-count-badge">{{ trashCount }}</span>
-        </button>
-      </div>
-    </nav>
-
-    <!-- 底部工具栏 | Bottom toolbar -->
-    <div class="flex items-center justify-between px-3 py-2.5 border-t border-gray-200/60 dark:border-gray-800/50">
-      <!-- 主题切换 | Theme toggle -->
       <button
-        class="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 hover:text-gray-700 dark:hover:text-gray-200 transition-colors cursor-pointer"
-        @click="toggleTheme"
+        class="home-sidebar__item"
+        :class="{ 'home-sidebar__item--active': ['all', 'canvases'].includes(ui.currentView) }"
+        @click="navigateToView('all')"
       >
-        <SunnyOutline v-if="!isDark" class="w-4 h-4" />
-        <MoonOutline v-else class="w-4 h-4" />
-        <span>主题</span>
+        <span class="home-sidebar__icon"><HomeOutline /></span>
+        <span>全部画布</span>
+        <span class="home-sidebar__count">{{ projectCount }}</span>
       </button>
 
-      <!-- 设置 | Settings -->
-      <n-tooltip placement="top" :show-arrow="false">
-        <template #trigger>
-          <button class="sidebar-tool-btn" @click="showApiSettings = true">
-            <SettingsOutline class="w-4 h-4" />
-          </button>
-        </template>
-        设置
-      </n-tooltip>
+      <button
+        class="home-sidebar__item"
+        :class="{ 'home-sidebar__item--active': ui.currentView === 'templates' }"
+        @click="navigateToView('templates')"
+      >
+        <span class="home-sidebar__icon"><GridOutline /></span>
+        <span>模板中心</span>
+      </button>
+
+      <button
+        class="home-sidebar__item"
+        :class="{ 'home-sidebar__item--active': ui.currentView === 'favorites' }"
+        @click="navigateToView('favorites')"
+      >
+        <span class="home-sidebar__icon"><HeartOutline /></span>
+        <span>灵感收藏</span>
+        <span class="home-sidebar__count">{{ favoriteCount }}</span>
+      </button>
+
+      <button
+        class="home-sidebar__item"
+        :class="{ 'home-sidebar__item--active': ui.currentView === 'assets' }"
+        @click="navigateToView('assets')"
+      >
+        <span class="home-sidebar__icon"><CubeOutline /></span>
+        <span>素材库</span>
+        <span class="home-sidebar__count">{{ assetCount }}</span>
+      </button>
+
+      <button
+        class="home-sidebar__item"
+        :class="{ 'home-sidebar__item--active': ui.currentView === 'trash' }"
+        @click="navigateToView('trash')"
+      >
+        <span class="home-sidebar__icon"><TrashOutline /></span>
+        <span>回收站</span>
+        <span class="home-sidebar__count">{{ trashCount }}</span>
+      </button>
+
+      <div class="home-sidebar__divider" />
+      <p class="home-sidebar__section-title">本地空间</p>
+
+      <button
+        v-for="folder in ui.folders"
+        :key="folder"
+        class="home-sidebar__item home-sidebar__folder"
+        :class="{ 'home-sidebar__item--active': ui.currentView === 'folder' && ui.currentFolder === folder }"
+        @click="navigateToFolder(folder)"
+      >
+        <span class="home-sidebar__icon"><FolderOutline /></span>
+        <span class="truncate">{{ folder }}</span>
+      </button>
+
+      <button class="home-sidebar__item home-sidebar__create" @click="createFolder">
+        <span class="home-sidebar__icon"><AddCircleOutline /></span>
+        <span>创建文件夹</span>
+      </button>
+    </nav>
+
+    <div class="home-sidebar__footer">
+      <button class="home-sidebar__footer-btn" @click="toggleTheme">
+        <SunnyOutline v-if="!isDark" />
+        <MoonOutline v-else />
+        <span>主题</span>
+      </button>
+      <button class="home-sidebar__footer-btn" @click="showApiSettings = true">
+        <SettingsOutline />
+        <span>设置</span>
+      </button>
     </div>
 
-    <!-- API 设置弹窗 | API settings modal -->
     <ApiSettings v-model:show="showApiSettings" />
   </aside>
 </template>
 
 <style scoped>
-/* 分组标题 | Section header */
-.section-header {
-  @apply px-3.5 pt-2 pb-1.5 text-[13px] font-semibold
-    text-gray-400 dark:text-gray-500
-    uppercase tracking-wider select-none;
+.home-sidebar {
+  width: 224px;
+  height: 100%;
+  flex: 0 0 224px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(249, 251, 254, 0.96);
+  border-right: 1px solid rgba(226, 232, 240, 0.72);
+  transition: width 0.25s ease, flex-basis 0.25s ease;
+  user-select: none;
 }
 
-/* 导航项基础样式 | Nav item base styles */
-.sidebar-nav-item {
-  @apply flex items-center gap-3 px-[14px] py-[11px] rounded-md text-[17px]
-    text-gray-600 dark:text-gray-300
-    hover:bg-gray-200/50 dark:hover:bg-gray-700/50
-    transition-all duration-200 ease-in-out cursor-pointer w-full;
+.dark .home-sidebar {
+  background: #101010;
+  border-right-color: rgba(255, 255, 255, 0.08);
 }
 
-/* 导航项激活状态 | Nav item active state */
-.sidebar-nav-item--active {
-  @apply bg-blue-500/10 text-blue-600 font-semibold
-    dark:bg-blue-500/15 dark:text-blue-400
-    border-l-4 border-blue-500 dark:border-blue-400
-    hover:bg-blue-500/15 dark:hover:bg-blue-500/20;
-}
+.home-sidebar--collapsed { width: 0; flex-basis: 0; }
+.home-sidebar__nav { flex: 1; overflow-y: auto; padding: 9px 14px 16px; }
+.home-sidebar__section-title { padding: 7px 12px 8px; color: #8b97aa; font-size: 12px; font-weight: 650; letter-spacing: 0.05em; }
 
-/* 纯文字图标 | Text-based icon */
-.nav-text-icon {
-  @apply w-[22px] h-[22px] flex-shrink-0 text-[15px] font-bold leading-none
-    flex items-center justify-center rounded-md
-    bg-gray-200/60 dark:bg-gray-700/50
-    text-gray-500 dark:text-gray-400
-    transition-all duration-200 ease-in-out;
+.home-sidebar__item {
+  width: 100%; min-height: 42px; display: flex; align-items: center; gap: 11px;
+  padding: 0 12px; margin-bottom: 3px; border-radius: 10px; color: #475569;
+  font-size: 14px; font-weight: 540;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
+.home-sidebar__item:hover { background: rgba(226, 232, 240, 0.62); color: #1e293b; }
+.home-sidebar__item:active { transform: scale(0.985); }
+.home-sidebar__item--active { background: #e7f0ff; color: #3b82f6; font-weight: 650; }
+.home-sidebar__item--active:hover { background: #dce9ff; color: #2563eb; }
+.dark .home-sidebar__item { color: #aab3c2; }
+.dark .home-sidebar__item:hover { background: rgba(255, 255, 255, 0.06); color: #f1f5f9; }
+.dark .home-sidebar__item--active { background: rgba(59, 130, 246, 0.16); color: #78a9ff; }
 
-/* 激活状态的图标 | Active icon */
-.sidebar-nav-item--active .nav-text-icon {
-  @apply bg-blue-500/20 dark:bg-blue-500/25
-    text-blue-600 dark:text-blue-400;
-}
+.home-sidebar__icon { width: 20px; height: 20px; flex: 0 0 20px; display: grid; place-items: center; color: currentColor; }
+.home-sidebar__count { margin-left: auto; color: #9aa6b7; font-size: 12px; font-variant-numeric: tabular-nums; }
+.home-sidebar__item--active .home-sidebar__count { color: #5591ef; }
+.home-sidebar__divider { height: 1px; margin: 15px 10px 13px; background: #e5eaf1; }
+.dark .home-sidebar__divider { background: rgba(255, 255, 255, 0.08); }
+.home-sidebar__folder { min-height: 39px; }
+.home-sidebar__create { color: #64748b; }
 
-/* 计数徽章 | Count badge */
-.sidebar-count-badge {
-  @apply text-[14px] text-gray-400 dark:text-gray-500 tabular-nums
-    transition-all duration-200 ease-in-out;
+.home-sidebar__footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 0 16px; padding: 12px 0 15px; border-top: 1px solid #e5eaf1;
 }
-
-/* 激活状态的徽章 | Active badge */
-.sidebar-nav-item--active .sidebar-count-badge {
-  @apply text-blue-600 dark:text-blue-400 font-medium;
+.dark .home-sidebar__footer { border-top-color: rgba(255, 255, 255, 0.08); }
+.home-sidebar__footer-btn {
+  display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 8px;
+  color: #64748b; font-size: 13px; transition: background 0.18s ease, color 0.18s ease;
 }
-
-/* 底部工具按钮 | Bottom tool button */
-.sidebar-tool-btn {
-  @apply flex items-center justify-center w-8 h-8 rounded-md
-    text-gray-500 dark:text-gray-400
-    hover:bg-gray-200/50 dark:hover:bg-gray-700/50
-    hover:text-gray-700 dark:hover:text-gray-200
-    transition-all duration-150 cursor-pointer;
-}
-
-/* 自定义滚动条 | Custom scrollbar */
-.scrollbar-thin::-webkit-scrollbar {
-  width: 4px;
-}
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
-}
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  @apply bg-gray-300/60 dark:bg-gray-600/60 rounded-full;
-}
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-400/60 dark:bg-gray-500/60;
-}
+.home-sidebar__footer-btn:hover { background: #eef2f7; color: #334155; }
+.dark .home-sidebar__footer-btn { color: #94a3b8; }
+.dark .home-sidebar__footer-btn:hover { background: rgba(255, 255, 255, 0.06); color: #e2e8f0; }
+.home-sidebar__footer-btn :deep(svg) { width: 18px; height: 18px; }
+.home-sidebar__nav::-webkit-scrollbar { width: 4px; }
+.home-sidebar__nav::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(148, 163, 184, 0.35); }
 </style>

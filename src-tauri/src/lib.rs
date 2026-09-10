@@ -166,8 +166,8 @@ fn build_headers(input: &HashMap<String, String>) -> Result<HeaderMap, String> {
     for (key, value) in input {
         let name = HeaderName::from_bytes(key.as_bytes())
             .map_err(|err| format!("请求头名称无效 {key}: {err}"))?;
-        let parsed = HeaderValue::from_str(value)
-            .map_err(|err| format!("请求头内容无效 {key}: {err}"))?;
+        let parsed =
+            HeaderValue::from_str(value).map_err(|err| format!("请求头内容无效 {key}: {err}"))?;
         headers.insert(name, parsed);
     }
     Ok(headers)
@@ -422,8 +422,8 @@ fn local_path_from_asset_url(text: &str) -> String {
 /// 桌面端由本机读取是唯一可行且不引入远程上传服务的做法。
 fn read_local_binary(path_text: &str) -> Result<BinaryPayload, String> {
     let path = PathBuf::from(path_text);
-    let metadata = fs::metadata(&path)
-        .map_err(|err| format!("本地文件不可读 ({path_text}): {err}"))?;
+    let metadata =
+        fs::metadata(&path).map_err(|err| format!("本地文件不可读 ({path_text}): {err}"))?;
     if !metadata.is_file() {
         return Err(format!("不是文件: {path_text}"));
     }
@@ -461,9 +461,7 @@ async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayl
     }
 
     if raw.to_ascii_lowercase().starts_with("blob:") {
-        return Err(
-            "blob: 地址只能在应用内解析，不能交给后端读取（应在前端直接取其字节）".into(),
-        );
+        return Err("blob: 地址只能在应用内解析，不能交给后端读取（应在前端直接取其字节）".into());
     }
 
     if is_asset_protocol_url(&raw) {
@@ -479,8 +477,8 @@ async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayl
         return read_local_binary(&raw);
     }
 
-    let parsed_url = reqwest::Url::parse(&raw)
-        .map_err(|err| format!("资源地址无效 ({raw}): {err}"))?;
+    let parsed_url =
+        reqwest::Url::parse(&raw).map_err(|err| format!("资源地址无效 ({raw}): {err}"))?;
     if !matches!(parsed_url.scheme(), "http" | "https") {
         return Err(format!(
             "该来源的图片无法取字节：只支持 http(s) 外链与本地文件，收到的是 `{}:`（{raw}）",
@@ -600,7 +598,8 @@ mod tests {
     #[test]
     fn deserializes_minimal_get_payload() {
         let args: HttpRequestArgs =
-            serde_json::from_str(r#"{"url":"https://x/v1/video/task/abc","method":"GET"}"#).unwrap();
+            serde_json::from_str(r#"{"url":"https://x/v1/video/task/abc","method":"GET"}"#)
+                .unwrap();
         assert!(args.json.is_none());
         assert!(args.headers.is_empty());
         assert!(args.timeout_ms.is_none());

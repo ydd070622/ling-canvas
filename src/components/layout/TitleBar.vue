@@ -4,11 +4,17 @@
  * Frameless window has no native chrome, so minimize/maximize/close and
  * drag-to-move are drawn here. Hidden entirely when running in a plain browser.
  */
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useUIStore } from '../../stores/ui'
 
 // Tauri v2 injects this only inside the webview | 仅在 Tauri webview 内注入
 const isTauri = '__TAURI_INTERNALS__' in window
+const route = useRoute()
+const ui = useUIStore()
+const searchInput = ref(null)
+const isHomePage = computed(() => route.path === '/')
 
 // Parent drops the rounded corners while maximized | 最大化时由父组件摘掉圆角
 const emit = defineEmits(['maximized-change'])
@@ -33,6 +39,7 @@ const scheduleSync = () => {
 }
 
 onMounted(async () => {
+  window.addEventListener('keydown', handleSearchShortcut)
   if (!isTauri) return
   try {
     appWindow = getCurrentWindow()
@@ -45,6 +52,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleSearchShortcut)
   clearTimeout(syncTimer)
   if (unlistenResize) {
     unlistenResize()
@@ -64,6 +72,14 @@ const run = (action) => async () => {
 const minimize = run('minimize')
 const toggleMaximize = run('toggleMaximize')
 const close = run('close')
+
+const handleSearchShortcut = async (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && isHomePage.value) {
+    event.preventDefault()
+    await nextTick()
+    searchInput.value?.focus()
+  }
+}
 </script>
 
 <template>
@@ -72,6 +88,21 @@ const close = run('close')
       <img class="title-bar__logo" src="/logo.png" alt="Ling Canvas" />
       <span>Ling Canvas</span>
     </span>
+
+    <label v-if="isHomePage" class="title-bar__search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
+        <path d="m16.4 16.4 4.1 4.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      </svg>
+      <input
+        ref="searchInput"
+        :value="ui.searchQuery"
+        type="search"
+        placeholder="搜索画布、素材、模板..."
+        @input="ui.setSearchQuery($event.target.value)"
+      />
+      <kbd>Ctrl + K</kbd>
+    </label>
 
     <div class="title-bar__controls">
       <button class="title-bar__btn" title="最小化" @click="minimize">
@@ -113,14 +144,14 @@ const close = run('close')
 <style scoped>
 /* 标题栏容器 | Title bar container */
 .title-bar {
-  @apply flex h-9 shrink-0 items-center justify-between select-none
-    border-b border-transparent bg-transparent px-3;
+  @apply relative flex h-[48px] shrink-0 items-center justify-between select-none
+    border-b border-gray-100 bg-white px-5 dark:border-gray-800 dark:bg-[#121212];
 }
 
 /* 标题文字 | Title label */
 .title-bar__label {
-  @apply flex items-center gap-2 text-[13px] font-medium tracking-wide
-    text-gray-500 dark:text-gray-400;
+  @apply flex items-center gap-2 text-[14px] font-semibold tracking-wide
+    text-gray-700 dark:text-gray-200;
 }
 
 .title-bar__logo {
@@ -133,6 +164,31 @@ const close = run('close')
   @apply flex items-center gap-1;
 }
 
+.title-bar__search {
+  @apply absolute left-1/2 top-1/2 flex h-10 w-[430px] -translate-x-1/2 -translate-y-1/2
+    items-center gap-3 rounded-full border border-gray-200 bg-white px-4 text-gray-400
+    shadow-[0_5px_20px_rgba(31,41,55,0.08)] transition-all dark:border-gray-700 dark:bg-[#1d1d1d];
+  -webkit-app-region: no-drag;
+}
+
+.title-bar__search:focus-within {
+  @apply border-blue-300 text-blue-500 ring-4 ring-blue-50 dark:border-blue-600 dark:ring-blue-950/40;
+}
+
+.title-bar__search input {
+  @apply min-w-0 flex-1 select-text bg-transparent text-[13px] text-gray-700 outline-none
+    placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500;
+}
+
+.title-bar__search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.title-bar__search kbd {
+  @apply whitespace-nowrap rounded-md bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-400
+    dark:bg-gray-800 dark:text-gray-500;
+}
+
 /* 窗口控制按钮 | Window control buttons */
 .title-bar__btn {
   @apply flex h-7 w-9 items-center justify-center rounded-md
@@ -143,5 +199,11 @@ const close = run('close')
 /* 关闭按钮悬停用警示色 | Close button uses danger colour on hover */
 .title-bar__btn--close {
   @apply hover:bg-red-500 hover:text-white dark:hover:bg-red-600 dark:hover:text-white;
+}
+
+@media (max-width: 1050px) {
+  .title-bar__search {
+    width: 340px;
+  }
 }
 </style>

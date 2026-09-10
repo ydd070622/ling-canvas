@@ -16,6 +16,7 @@ artifacts/
 
 # Tauri / Rust build outputs
 src-tauri/target/
+src-tauri/target-msvc/
 src-tauri/gen/schemas/
 # 本机专属 cargo 配置（含硬编码 target-dir 绝对路径），勿提交
 src-tauri/.cargo/
