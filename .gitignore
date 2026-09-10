@@ -23,6 +23,9 @@ src-tauri/.cargo/
 # Local Vite logs
 .vite-dev.*.log
 
+# DSH 视觉工具临时目录（本机生成的截图/粘贴图片，勿提交）
+.dsh-vision-toolkit/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

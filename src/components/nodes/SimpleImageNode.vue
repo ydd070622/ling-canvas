@@ -167,6 +167,25 @@ const selectedModel = computed(() => {
   return options[0]?.value || ''
 })
 const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
+/**
+ * 本节点所用模型所属的渠道。
+ * 生成请求按该 provider 解析 Key/Base URL/端点，因此同一画布上不同节点
+ * 可以分属不同供应商而互不影响。
+ */
+const providerId = computed(() => (
+  // 权威来源是按模型反查渠道；下拉选项（FlowSelect 形状）仅作兜底
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE')
+  || selectedModelOption.value?.sourceProvider
+  || ''
+))
+const providerLabel = computed(() => (
+  providerId.value
+    ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value)
+    : ''
+))
+const hasProviderKey = computed(() => (
+  Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value))
+))
 const currentModel = computed(() =>
   modelStore.availableImageModels.find(model => model.key === selectedModel.value)
   || modelStore.getImageModel(selectedModel.value)
@@ -279,8 +298,12 @@ const handleSend = async () => {
     window.$message?.warning('请先前往设置，在模型配置中启用图片模型')
     return
   }
-  if (!modelStore.currentApiKey) {
-    window.$message?.warning('请先配置 API Key')
+  if (!providerId.value) {
+    window.$message?.warning('该模型未绑定供应商，请在设置中重新启用这个模型')
+    return
+  }
+  if (!hasProviderKey.value) {
+    window.$message?.warning(`请先在设置中为「${providerLabel.value}」配置 API Key`)
     return
   }
   if (!prompt && !upstreamText.value && !upstreamImages.value.length) {
@@ -303,21 +326,28 @@ const handleSend = async () => {
     const parts = [upstreamText.value, prompt].filter(Boolean)
     const fullPrompt = parts.join('\n')
     const referenceImages = upstreamImages.value.map(item => item.url)
-    const refImage = referenceImages.length > 1 ? referenceImages : referenceImages[0] || null
     const result = await generate({
       model,
       prompt: fullPrompt,
       size: selectedSize.value,
       n: Number(props.data?.count || 1),
-      image: refImage
-    })
-    const url = result?.[0]?.url
+      image: referenceImages
+    }, { providerId: providerId.value })
+
+    const results = Array.isArray(result) ? result : []
+    const url = results[0]?.url
     if (!url) throw new Error('接口未返回图片地址')
-    update({ url, loading: false, updatedAt: Date.now() })
-    window.$message?.success('图片生成成功')
+    // 卡片目前只展示单图；不要把多张 base64 塞进节点 data，
+    // 否则会随 localStorage 保存撑爆配额（详见 stores/projects.js 的 cleanNodeForStorage）
+    update({
+      url,
+      loading: false,
+      updatedAt: Date.now()
+    })
+    window.$message?.success(results.length > 1 ? `已生成 ${results.length} 张图片` : '图片生成成功')
   } catch (err) {
     update({ loading: false, error: err.message || '图片生成失败' })
-    window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, modelStore.providerLabel))
+    window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, providerLabel.value))
   }
 }
 

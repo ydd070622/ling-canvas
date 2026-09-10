@@ -12,6 +12,7 @@ export const PROVIDERS = {
     endpoints: {
       chat: '/v1/chat/completions',
       image: '/v1/images/generations',
+      imageEdit: '/v1/images/edits',
       video: '/v1/video/generations',
       videoQuery: '/v1/video/task/{taskId}'
     },
@@ -175,6 +176,7 @@ export const PROVIDERS = {
     endpoints: {
       chat: '/v1/chat/completions',
       image: '/v1/images/generations',
+      imageEdit: '/v1/images/edits',
       video: '/v1/videos',
       videoQuery: '/v1/videos/{taskId}'
     },

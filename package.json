@@ -1,12 +1,13 @@
 {
   "name": "ling-canvas",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "verify:gateway": "node scripts/verify-gateway.mjs",
     "tauri": "tauri",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build"

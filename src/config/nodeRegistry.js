@@ -118,7 +118,13 @@ export const validateCanvasConnection = (connection, nodes, edges) => {
   const accepted = NODE_DEFINITIONS[targetNode.type]?.accepts?.[targetHandle] || []
   if (!accepted.includes(sourceNode.type)) return { valid: false, reason: '节点类型或输入槽不兼容' }
 
+  // Vue Flow also invokes `isValidConnection` while it rebuilds controlled
+  // `v-model:edges`. In that pass the candidate already exists in `edges`, so
+  // it must not be treated as a duplicate of itself. Interactive connections
+  // do not have an id yet and still get the normal duplicate check.
+  const isDifferentEdge = edge => !connection.id || edge.id !== connection.id
   const duplicate = edges.some(edge =>
+    isDifferentEdge(edge) &&
     edge.source === connection.source &&
     edge.target === connection.target &&
     (edge.sourceHandle || 'right') === (connection.sourceHandle || 'right') &&
@@ -127,7 +133,11 @@ export const validateCanvasConnection = (connection, nodes, edges) => {
   if (duplicate) return { valid: false, reason: '连接已经存在' }
 
   const singleInputHandles = NODE_DEFINITIONS[targetNode.type]?.singleInputHandles || []
-  if (singleInputHandles.includes(targetHandle) && edges.some(edge => edge.target === targetNode.id && edge.targetHandle === targetHandle)) {
+  if (singleInputHandles.includes(targetHandle) && edges.some(edge =>
+    isDifferentEdge(edge) &&
+    edge.target === targetNode.id &&
+    edge.targetHandle === targetHandle
+  )) {
     return { valid: false, reason: '该输入槽只能连接一个节点' }
   }
 

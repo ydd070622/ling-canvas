@@ -99,7 +99,13 @@ const cleanNodeForStorage = (node) => {
   if (cleanedData.maskData) {
     delete cleanedData.maskData
   }
-  
+
+  // 兜底：任何残留的「图片数组」字段都可能在保存时被 base64 撑爆配额。
+  // 历史上 SimpleImageNode 写过 data.images，这里统一清掉，避免老数据复燃。
+  if (cleanedData.images) {
+    delete cleanedData.images
+  }
+
   return { ...node, data: cleanedData }
 }
 

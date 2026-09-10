@@ -140,6 +140,21 @@ const selectedModel = computed(() => {
 })
 const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
 const selectedModelLabel = computed(() => selectedModelOption.value?.label || '请先配置文本模型')
+/** 本节点模型所属渠道：文本请求按该渠道解析 Key / 端点。 */
+const providerId = computed(() => (
+  // 权威来源是按模型反查渠道；下拉选项（FlowSelect 形状）仅作兜底
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'CHAT')
+  || selectedModelOption.value?.sourceProvider
+  || ''
+))
+const providerLabel = computed(() => (
+  providerId.value
+    ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value)
+    : ''
+))
+const hasProviderKey = computed(() => (
+  Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value))
+))
 /** 仅使用设置中已启用的文本模型，不回退到内置模型。 */
 const effectiveModel = computed(() => selectedModel.value)
 watch(selectedModel, value => {
@@ -206,8 +221,12 @@ const handleSend = async () => {
     window.$message?.warning('请先前往设置，在模型配置中启用文本模型')
     return
   }
-  if (!modelStore.currentApiKey) {
-    window.$message?.warning('请先配置 API Key')
+  if (!hasProviderKey.value) {
+    window.$message?.warning(
+      providerId.value
+        ? `请先在设置中为「${providerLabel.value}」配置 API Key`
+        : '该模型未绑定供应商，请在设置中重新启用这个模型'
+    )
     return
   }
   if (!prompt && !source && !upstreamText.value && !upstreamImages.value.length) {
@@ -220,7 +239,10 @@ const handleSend = async () => {
     // 上游注入：连入的文本 + 连入的图片（多模态）
     const parts = [prompt, upstreamText.value].filter(Boolean)
     const request = parts.length ? `${parts.join('\n')}\n\n原始内容：\n${source}` : source
-    const result = await send(request, true, { images: upstreamImages.value.map(img => img.url) })
+    const result = await send(request, true, {
+      images: upstreamImages.value.map(img => img.url),
+      providerId: providerId.value
+    })
     if (result) update({ content: result, loading: false, updatedAt: Date.now() })
     window.$message?.success('文本生成完成')
   } catch (err) {

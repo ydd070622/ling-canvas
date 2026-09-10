@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Pinia Store: Model Config | 模型配置 Store
  * 管理模型配置、渠道切换和模型选择
  */
@@ -156,6 +156,7 @@ export const useModelStore = defineStore('model', () => {
       endpoints: {
         chat: '/v1/chat/completions',
         image: '/v1/images/generations',
+        imageEdit: '/v1/images/edits',
         video: '/v1/videos',
         videoQuery: '/v1/videos/{taskId}'
       }
@@ -282,6 +283,48 @@ export const useModelStore = defineStore('model', () => {
     delete baseUrlsByProvider.value[provider]
   }
 
+  // ============ 按渠道 ID 解析（不依赖「当前渠道」全局态） ============
+  //
+  // 画布上不同节点可能选了不同渠道的模型，因此生成请求必须按帧自带
+  // providerId；下面这组 helper 是节点 → 本地网关(services/aiGateway) 的桥梁。
+
+  /**
+   * 按渠道 ID 取配置。
+   * 未知 ID 返回 null —— 不回退到默认渠道，否则会把请求错发到别的厂商
+   * （并带上不属于该厂商的 Key），错误信息也会完全指错方向。
+   */
+  const getProviderConfigById = (providerId) => {
+    if (!providerId) return null
+    if (customProviders.value[providerId]) return customProviders.value[providerId]
+    if (PROVIDERS[providerId]) return PROVIDERS[providerId]
+    return null
+  }
+
+  const getApiKeyByProvider = (providerId) => apiKeysByProvider.value[providerId] || ''
+
+  const getBaseUrlByProvider = (providerId) => (
+    baseUrlsByProvider.value[providerId]
+    || customProviders.value[providerId]?.defaultBaseUrl
+    || PROVIDERS[providerId]?.defaultBaseUrl
+    || ''
+  )
+
+  /**
+   * 一次性拿到发起一次上游请求所需的渠道上下文。
+   * @param {string} [providerId] 缺省回退到当前渠道
+   */
+  const resolveUpstreamContext = (providerId) => {
+    const id = providerId || currentProvider.value
+    const config = getProviderConfigById(id)
+    return {
+      providerId: id,
+      providerConfig: config,
+      apiKey: getApiKeyByProvider(id),
+      baseUrl: getBaseUrlByProvider(id) || config?.defaultBaseUrl || '',
+      providerLabel: providerAliases.value[id] || config?.label || id
+    }
+  }
+
   // ============ Computed: All Models (built-in + custom + by provider) ============
 
   // Provider-specific entries also hold the user's display-name overrides.
@@ -395,23 +438,69 @@ export const useModelStore = defineStore('model', () => {
     return [...enabled.values()]
   }
 
-  const availableChatModels = computed(() => buildEnabledModels(
-    customChatModelsByProvider.value,
-    CHAT_MODELS,
-    customChatModels.value
+  // 已配置 Key 的渠道集合
+  const providersWithKey = computed(() => new Set(
+    Object.entries(apiKeysByProvider.value)
+      .filter(([, key]) => String(key || '').trim())
+      .map(([key]) => key)
   ))
 
-  const availableImageModels = computed(() => buildEnabledModels(
-    customImageModelsByProvider.value,
+  /**
+   * 兜底：设置里一个模型都没启用、但某渠道已配好 Key 时，让该渠道的内置模型
+   * 自动进入可选列表。
+   *
+   * 为什么需要：`available*Models` 原本只收录「用户手动启用过」的模型，于是
+   * 全新安装的画布下拉恒为空，节点里点发送只会看到「请先前往设置配置模型」，
+   * 生图链路根本走不到发请求那一步。
+   *
+   * 一旦用户手动启用过任何模型，设置页结果即为准，本兜底自动失效。
+   */
+  const withAutoFallback = (enabled, builtIns, defaults = {}) => {
+    if (enabled.length) return enabled
+    const keys = providersWithKey.value
+    if (!keys.size) return enabled
+    return builtIns
+      .filter(model => (model.provider || []).some(provider => keys.has(provider)))
+      .map(model => ({
+        ...defaults,
+        ...model,
+        isCustom: false,
+        sourceProvider: (model.provider || []).find(provider => keys.has(provider))
+      }))
+  }
+
+  const availableChatModels = computed(() => withAutoFallback(
+    buildEnabledModels(
+      customChatModelsByProvider.value,
+      CHAT_MODELS,
+      customChatModels.value
+    ),
+    CHAT_MODELS
+  ))
+
+  const availableImageModels = computed(() => withAutoFallback(
+    buildEnabledModels(
+      customImageModelsByProvider.value,
+      IMAGE_MODELS,
+      customImageModels.value,
+      { sizes: [], defaultParams: { quality: 'standard', style: 'vivid' } }
+    ),
     IMAGE_MODELS,
-    customImageModels.value,
     { sizes: [], defaultParams: { quality: 'standard', style: 'vivid' } }
   ))
 
-  const availableVideoModels = computed(() => buildEnabledModels(
-    customVideoModelsByProvider.value,
+  const availableVideoModels = computed(() => withAutoFallback(
+    buildEnabledModels(
+      customVideoModelsByProvider.value,
+      VIDEO_MODELS,
+      customVideoModels.value,
+      {
+        ratios: ['16x9', '9:16', '1:1'],
+        durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
+        defaultParams: { ratio: '16:9', duration: 5 }
+      }
+    ),
     VIDEO_MODELS,
-    customVideoModels.value,
     {
       ratios: ['16x9', '9:16', '1:1'],
       durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
@@ -455,17 +544,40 @@ export const useModelStore = defineStore('model', () => {
     return map
   })
 
-  // 转成 FlowSelect 分组格式：{ value, label, group }
+  // 转成 FlowSelect 分组格式：{ value, label, group, sourceProvider }
+  //
+  // sourceProvider 必须一并带出：节点判定「本次请求属于哪个渠道」靠的就是它，
+  // 只把它用来算 group 会让节点拿不到渠道，从而误报「该模型未绑定供应商」。
   const toGroupedOptions = (items) => items.map(m => ({
     value: m.key,
     label: m.label,
-    group: (m.sourceProvider && (providerLabelMap.value[m.sourceProvider] || m.sourceProvider)) || ''
+    group: (m.sourceProvider && (providerLabelMap.value[m.sourceProvider] || m.sourceProvider)) || '',
+    sourceProvider: m.sourceProvider || ''
   }))
 
   // 按供应商分组的模型选项（节点下拉用）
   const groupedChatModelOptions = computed(() => toGroupedOptions(allChatModelOptions.value))
   const groupedImageModelOptions = computed(() => toGroupedOptions(allImageModelOptions.value))
   const groupedVideoModelOptions = computed(() => toGroupedOptions(allVideoModelOptions.value))
+
+  /**
+   * 按模型 key 反查它所属的渠道。
+   *
+   * 节点解析「本次请求走哪个渠道」的权威来源。刻意不依赖下拉选项对象：
+   * 选项是给 UI 用的形状（value/label/group），曾经因为它没带 sourceProvider
+   * 导致节点误判「模型未绑定供应商」。
+   *
+   * @param {string} modelKey
+   * @param {'IMAGE'|'VIDEO'|'CHAT'} [category]
+   */
+  const resolveModelSourceProvider = (modelKey, category = 'IMAGE') => {
+    const key = String(modelKey || '').trim()
+    if (!key) return ''
+    const pool = category === 'VIDEO'
+      ? availableVideoModels.value
+      : (category === 'CHAT' ? availableChatModels.value : availableImageModels.value)
+    return pool.find(model => model.key === key)?.sourceProvider || ''
+  }
 
   // ============ Computed: Model Options for UI (filtered by provider - deprecated, use all* instead) ============
 
@@ -829,6 +941,15 @@ export const useModelStore = defineStore('model', () => {
     baseUrlsByProvider,
     setApiKeyByProvider,
     setBaseUrlByProvider,
-    clearApiConfigByProvider
+    clearApiConfigByProvider,
+
+    // 按渠道 ID 解析（每请求自带 provider 用）
+    getProviderConfigById,
+    getApiKeyByProvider,
+    getBaseUrlByProvider,
+    resolveUpstreamContext,
+
+    // 按模型反查渠道（节点判定请求归属）
+    resolveModelSourceProvider
   }
 })

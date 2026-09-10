@@ -172,6 +172,21 @@ const selectedModel = computed(() => {
   return options[0]?.value || ''
 })
 const selectedModelOption = computed(() => modelSelectOptions.value.find(option => option.value === selectedModel.value))
+/** 本节点所用模型所属渠道：创建任务与轮询查询都必须命中同一渠道。 */
+const providerId = computed(() => (
+  // 权威来源是按模型反查渠道；下拉选项（FlowSelect 形状）仅作兜底
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'VIDEO')
+  || selectedModelOption.value?.sourceProvider
+  || ''
+))
+const providerLabel = computed(() => (
+  providerId.value
+    ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value)
+    : ''
+))
+const hasProviderKey = computed(() => (
+  Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value))
+))
 const currentModel = computed(() =>
   modelStore.availableVideoModels.find(model => model.key === selectedModel.value)
   || modelStore.getVideoModel(selectedModel.value)
@@ -224,8 +239,11 @@ const startPolling = async (taskId) => {
   if (isPolling.value) return
   isPolling.value = true
   try {
-    const result = await pollVideoTask(taskId, (attempt, percentage) => {
-      updateNode(props.id, { progress: percentage, attempt })
+    const result = await pollVideoTask(taskId, {
+      providerId: providerId.value,
+      onProgress: (attempt, percentage) => {
+        updateNode(props.id, { progress: percentage, attempt })
+      }
     })
     updateNode(props.id, { url: result.url, loading: false, progress: 100, taskId: null })
     window.$message?.success('视频生成成功')
@@ -310,8 +328,12 @@ const handleSend = async () => {
     window.$message?.warning('请先前往设置，在模型配置中启用视频模型')
     return
   }
-  if (!modelStore.currentApiKey) {
-    window.$message?.warning('请先配置 API Key')
+  if (!providerId.value) {
+    window.$message?.warning('该模型未绑定供应商，请在设置中重新启用这个模型')
+    return
+  }
+  if (!hasProviderKey.value) {
+    window.$message?.warning(`请先在设置中为「${providerLabel.value}」配置 API Key`)
     return
   }
   const prompts = [...slotInputs.value.prompts, prompt].filter(Boolean)
@@ -340,13 +362,13 @@ const handleSend = async () => {
       resolution: props.data?.resolution || modelConfig?.defaultResolution,
       first_frame_image: slotInputs.value.first || props.data?.firstFrameImage || undefined,
       last_frame_image: slotInputs.value.last || props.data?.lastFrameImage || undefined
-    })
+    }, { providerId: providerId.value })
     if (!result?.url) throw new Error('接口未返回视频地址')
     update({ url: result.url, loading: false, taskId: null, progress: 100, updatedAt: Date.now() })
     window.$message?.success('视频生成成功')
   } catch (err) {
     update({ loading: false, taskId: null, error: err.message || '视频生成失败' })
-    window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, modelStore.providerLabel))
+    window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, providerLabel.value))
   }
 }
 
