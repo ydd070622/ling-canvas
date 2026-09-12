@@ -110,6 +110,13 @@
           <n-icon :size="24"><TimeOutline /></n-icon>
         </button>
         <button
+          @click="openAssetPicker"
+          class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors"
+          title="素材库"
+        >
+          <n-icon :size="24"><ImagesOutline /></n-icon>
+        </button>
+        <button
           @click="showWorkflowPanel = true"
           class="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors"
           title="工作流"
@@ -174,6 +181,14 @@
         >
           <n-icon :size="18"><TimeOutline /></n-icon>
           <span>从生成历史选择</span>
+        </button>
+        <button
+          type="button"
+          @click="openAssetPicker"
+          class="node-menu-item"
+        >
+          <n-icon :size="18"><ImagesOutline /></n-icon>
+          <span>从素材库选择</span>
         </button>
       </div>
 
@@ -349,6 +364,9 @@
         </div>
       </div>
     </n-modal>
+
+    <!-- 从本地素材库选图 | Pick from the local asset library -->
+    <AssetPickerModal v-model:show="showAssetPicker" @select="handleAssetPick" />
   </div>
 </template>
 
@@ -368,6 +386,7 @@ import {
   SearchOutline,
   AddOutline,
   ImageOutline,
+  ImagesOutline,
   SendOutline,
   RefreshOutline,
   TextOutline,
@@ -387,7 +406,7 @@ import {
   DocumentTextOutline,
   SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation } from '../stores/canvas'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
@@ -443,6 +462,7 @@ import GroupNode from '../components/nodes/GroupNode.vue'
 import SimpleTextNode from '../components/nodes/SimpleTextNode.vue'
 import SimpleImageNode from '../components/nodes/SimpleImageNode.vue'
 import FlowEdge from '../components/edges/FlowEdge.vue'
+import AssetPickerModal from '../components/canvas/AssetPickerModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -1468,17 +1488,64 @@ const isImageFile = (filePath) => {
   return IMAGE_EXTENSIONS.includes(ext)
 }
 
-const addDroppedImageNode = ({ dataUrl, fileName, position }) => {
-  const nodeId = addNode('image', position, {
-    url: dataUrl,
-    base64: dataUrl,
-    label: fileName || '拖入图片',
-    fileName: fileName || '拖入图片'
-  })
+/** 图片节点建好后的共同收尾：置顶 + 通知 Vue Flow 重算内部尺寸 */
+const stampImageNode = (nodeId) => {
   const maxZIndex = Math.max(0, ...nodes.value.map(node => node.zIndex || 0))
   updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
   setTimeout(() => updateNodeInternals(nodeId), 50)
   return nodeId
+}
+
+const addDroppedImageNode = ({ dataUrl, fileName, position }) => stampImageNode(addNode('image', position, {
+  url: dataUrl,
+  base64: dataUrl,
+  label: fileName || '拖入图片',
+  fileName: fileName || '拖入图片'
+}))
+
+// ---------------------------------------------------------------- 素材库引用
+const showAssetPicker = ref(false)
+
+const openAssetPicker = () => {
+  showNodeMenu.value = false
+  showAssetPicker.value = true
+}
+
+/**
+ * 插入一张本地素材。
+ *
+ * **只写 assetRef，刻意不传 base64、不传 data: url** —— 这是「纯引用式」的硬约束：
+ * persistProjectImages 只认 node.data.base64 和 data: 开头的 url，只要这两者不存在，
+ * 素材字节就永远不会被写进 IndexedDB。
+ */
+const addAssetNode = ({ relativePath, name, position }) => {
+  const nodeId = stampImageNode(addNode('image', position, {
+    assetRef: relativePath,
+    label: name || '素材图片',
+    fileName: name || '素材图片'
+  }))
+  // 异步补 url，失败会退化成「素材已丢失」占位（SimpleImageNode 已有该分支）
+  hydrateSingleAssetNode(nodeId).catch(() => {})
+  return nodeId
+}
+
+const handleAssetPick = (items) => {
+  const center = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+  items.forEach((item, index) => {
+    addAssetNode({
+      relativePath: item.relativePath,
+      name: item.name,
+      // 与拖入多图的错位规则保持一致
+      position: {
+        x: center.x + (index % 4) * 40,
+        y: center.y + Math.floor(index / 4) * 40
+      }
+    })
+  })
+  // 与 handleTauriDragDrop 一致：节点建完显式落盘
+  saveProject()
+  showAssetPicker.value = false
+  window.$message?.success(`已插入 ${items.length} 张素材`)
 }
 
 const handleTauriDragDrop = async (event) => {

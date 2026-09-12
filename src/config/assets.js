@@ -1,0 +1,31 @@
+/**
+ * 素材库配置 | Asset library config
+ *
+ * 素材库根目录由 Rust 侧持有（`src-tauri/src/lib.rs` 的 `ASSET_ROOT`），
+ * 它同时是安全边界，所以前端**永远不拼绝对路径**——下面这个 LABEL 只用于界面文案。
+ */
+
+/** 仅用于界面展示；真正的根目录是 Rust 的 ASSET_ROOT */
+export const ASSET_ROOT_LABEL = 'F:\\02-设计素材库'
+
+/** 缩略图最长边（px）。网格瓦片约 150px，360 足够覆盖 2x 屏 */
+export const ASSET_THUMB_MAX_EDGE = 360
+export const ASSET_THUMB_QUALITY = 0.72
+
+/**
+ * 同时解码的图片数。
+ * 一张 4000×6000 的图解码后约 96MB，这个闸门是必需项而非优化项。
+ */
+export const ASSET_THUMB_CONCURRENCY = 3
+
+/** 改缩略图尺寸/质量时 +1，即可让全部缓存失效重建 */
+export const ASSET_THUMB_VERSION = 1
+
+/** 缩略图 blob URL 的 LRU 上限。缩略图可重建，必须回收 */
+export const ASSET_THUMB_URL_LIMIT = 300
+
+/**
+ * 网格分批渲染的批量。
+ * 每个瓦片自带一个 IntersectionObserver，一次为几百张建观察器太浪费。
+ */
+export const ASSET_PAGE_BATCH = 120

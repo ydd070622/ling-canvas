@@ -12,6 +12,7 @@ const generateId = () => `project_${Date.now()}_${Math.random().toString(36).sub
 
 // Default field values for migration | 旧数据迁移的默认值
 const DEFAULT_PROJECT_FIELDS = {
+  // folder 已废弃：文件夹不再绑定画布。保留仅为兼容旧数据，请勿在 UI 中读取。
   folder: null,
   visibility: 'all',
   cardCount: 0,
@@ -121,7 +122,10 @@ const cleanProjectForStorage = (project) => {
       nodes: project.canvasData.nodes?.map(cleanNodeForStorage) || []
     } : project.canvasData,
     // Remove base64 thumbnails | 移除 base64 缩略图
-    thumbnail: project.thumbnail?.startsWith?.('data:') ? '' : project.thumbnail
+    // blob: 只在创建它的 WebView 会话里有效，asset: 依赖 asset 协议；两者写进
+    // localStorage 都只会在下次启动变成碎图。素材库节点的 url 在内存里恒为 blob:，
+    // 不在这里一并剥掉的话，每个含素材的项目都会往 localStorage 写一个死链接。
+    thumbnail: /^(data|blob|asset):/.test(String(project.thumbnail || '')) ? '' : project.thumbnail
   }
 }
 

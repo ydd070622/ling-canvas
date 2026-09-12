@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { NButton, NDropdown, NInput, NModal, useDialog } from 'naive-ui'
 import {
   HomeOutline,
   GridOutline,
@@ -9,24 +10,28 @@ import {
   TrashOutline,
   FolderOutline,
   AddCircleOutline,
+  EllipsisHorizontalOutline,
   SunnyOutline,
   MoonOutline,
   SettingsOutline
 } from '@vicons/ionicons5'
 import { isDark, toggleTheme } from '../../stores/theme'
 import { activeProjects, trashedProjects } from '../../stores/projects'
+import { assetEntries } from '../../stores/assets'
 import { useUIStore } from '../../stores/ui'
 import ApiSettings from '../ApiSettings.vue'
 
 const router = useRouter()
 const ui = useUIStore()
+const dialog = useDialog()
 const showApiSettings = ref(false)
 
 const projectCount = computed(() => activeProjects.value.length)
 const trashCount = computed(() => trashedProjects.value.length)
 const favoriteCount = computed(() => activeProjects.value.filter(project => project.favorite).length)
 // 素材库尚未建立独立的数据源，不能用画布节点数冒充素材数量。
-const assetCount = computed(() => 0)
+// 素材库的列表来自 Rust 扫描本地目录，首次进入该页面时才载入；未载入时计数为 0
+const assetCount = computed(() => assetEntries.value.length)
 
 const navigateToView = (view) => {
   ui.setView(view)
@@ -38,15 +43,77 @@ const navigateToFolder = (folderName) => {
   if (router.currentRoute.value.path !== '/') router.push('/')
 }
 
-const createFolder = () => {
-  const name = window.prompt('请输入文件夹名称')
-  if (!name) return
-  if (ui.addFolder(name)) {
-    navigateToFolder(name.trim())
-    window.$message?.success('文件夹已创建')
-  } else {
-    window.$message?.warning('文件夹名称为空或已存在')
+// 文件夹管理：新建 / 重命名 / 删除 | Folder management
+const folderActions = [
+  { label: '重命名', key: 'rename' },
+  { type: 'divider' },
+  { label: '删除', key: 'delete' }
+]
+
+const showFolderModal = ref(false)
+const folderModalMode = ref('create')
+const folderNameValue = ref('')
+const folderModalTarget = ref('')
+
+const openCreateFolder = () => {
+  folderModalMode.value = 'create'
+  folderModalTarget.value = ''
+  folderNameValue.value = ''
+  showFolderModal.value = true
+}
+
+const openRenameFolder = (name) => {
+  folderModalMode.value = 'rename'
+  folderModalTarget.value = name
+  folderNameValue.value = name
+  showFolderModal.value = true
+}
+
+// 校验失败时保持弹窗打开，用户可以直接改输入
+const confirmFolderModal = () => {
+  const value = folderNameValue.value
+  if (folderModalMode.value === 'create') {
+    const status = ui.addFolder(value)
+    if (status === 'ok') {
+      showFolderModal.value = false
+      navigateToFolder(value.trim())
+      window.$message?.success('文件夹已创建')
+    } else {
+      window.$message?.warning(status === 'empty' ? '文件夹名称不能为空' : '已存在同名文件夹')
+    }
+    return
   }
+
+  const status = ui.renameFolder(folderModalTarget.value, value)
+  if (status === 'ok') {
+    showFolderModal.value = false
+    window.$message?.success('文件夹已重命名')
+  } else if (status === 'unchanged') {
+    showFolderModal.value = false
+  } else if (status === 'empty') {
+    window.$message?.warning('文件夹名称不能为空')
+  } else if (status === 'duplicate') {
+    window.$message?.warning('已存在同名文件夹')
+  } else {
+    // missing：文件夹已被别处删掉
+    showFolderModal.value = false
+    window.$message?.warning('文件夹已不存在')
+  }
+}
+
+const handleFolderAction = (key, name) => {
+  if (key === 'rename') return openRenameFolder(name)
+  if (key !== 'delete') return
+  dialog.error({
+    title: '删除文件夹',
+    content: `确定删除文件夹「${name}」吗？此操作无法恢复。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      ui.removeFolder(name)
+      window.$message?.success('文件夹已删除')
+    }
+  })
 }
 </script>
 
@@ -107,18 +174,23 @@ const createFolder = () => {
       <div class="home-sidebar__divider" />
       <p class="home-sidebar__section-title">本地空间</p>
 
-      <button
-        v-for="folder in ui.folders"
-        :key="folder"
-        class="home-sidebar__item home-sidebar__folder"
-        :class="{ 'home-sidebar__item--active': ui.currentView === 'folder' && ui.currentFolder === folder }"
-        @click="navigateToFolder(folder)"
-      >
-        <span class="home-sidebar__icon"><FolderOutline /></span>
-        <span class="truncate">{{ folder }}</span>
-      </button>
+      <div v-for="folder in ui.folders" :key="folder" class="home-sidebar__folder-row">
+        <button
+          class="home-sidebar__item home-sidebar__folder"
+          :class="{ 'home-sidebar__item--active': ui.currentView === 'folder' && ui.currentFolder === folder }"
+          @click="navigateToFolder(folder)"
+        >
+          <span class="home-sidebar__icon"><FolderOutline /></span>
+          <span class="truncate">{{ folder }}</span>
+        </button>
+        <n-dropdown :options="folderActions" placement="bottom-end" @select="key => handleFolderAction(key, folder)">
+          <button class="home-sidebar__folder-menu" aria-label="文件夹操作" @click.stop><EllipsisHorizontalOutline /></button>
+        </n-dropdown>
+      </div>
 
-      <button class="home-sidebar__item home-sidebar__create" @click="createFolder">
+      <p v-if="!ui.folders.length" class="home-sidebar__folder-empty">还没有文件夹</p>
+
+      <button class="home-sidebar__item home-sidebar__create" @click="openCreateFolder">
         <span class="home-sidebar__icon"><AddCircleOutline /></span>
         <span>创建文件夹</span>
       </button>
@@ -135,6 +207,23 @@ const createFolder = () => {
         <span>设置</span>
       </button>
     </div>
+
+    <n-modal
+      v-model:show="showFolderModal"
+      preset="dialog"
+      :title="folderModalMode === 'create' ? '新建文件夹' : '重命名文件夹'"
+    >
+      <n-input
+        v-model:value="folderNameValue"
+        placeholder="请输入文件夹名称"
+        maxlength="20"
+        @keyup.enter="confirmFolderModal"
+      />
+      <template #action>
+        <n-button @click="showFolderModal = false">取消</n-button>
+        <n-button type="primary" @click="confirmFolderModal">确定</n-button>
+      </template>
+    </n-modal>
 
     <ApiSettings v-model:show="showApiSettings" />
   </aside>
@@ -184,6 +273,24 @@ const createFolder = () => {
 .dark .home-sidebar__divider { background: rgba(255, 255, 255, 0.08); }
 .home-sidebar__folder { min-height: 39px; }
 .home-sidebar__create { color: #64748b; }
+
+/* 文件夹行：外层做定位容器，kebab 绝对定位，避免悬停出现时把文件夹名挤左 | Folder row */
+.home-sidebar__folder-row { position: relative; display: flex; align-items: center; margin-bottom: 3px; }
+.home-sidebar__folder-row .home-sidebar__item { flex: 1; min-width: 0; margin-bottom: 0; padding-right: 30px; }
+.home-sidebar__folder-menu {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px;
+  color: #758297; opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.home-sidebar__folder-menu :deep(svg) { width: 16px; height: 16px; }
+.home-sidebar__folder-row:hover .home-sidebar__folder-menu,
+.home-sidebar__folder-row .home-sidebar__item--active + .home-sidebar__folder-menu,
+.home-sidebar__folder-menu:focus-visible { opacity: 1; }
+.home-sidebar__folder-menu:hover { background: #eef2f7; color: #334155; }
+.dark .home-sidebar__folder-menu { color: #94a3b8; }
+.dark .home-sidebar__folder-menu:hover { background: rgba(255, 255, 255, 0.08); color: #e2e8f0; }
+.home-sidebar__folder-empty { padding: 6px 12px 10px; color: #9aa6b7; font-size: 12px; }
 
 .home-sidebar__footer {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

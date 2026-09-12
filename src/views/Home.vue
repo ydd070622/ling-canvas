@@ -5,6 +5,7 @@ import { NButton, NDropdown, NIcon, NInput, NModal, useDialog } from 'naive-ui'
 import {
   CubeOutline,
   EllipsisHorizontalOutline,
+  FolderOutline,
   GridOutline,
   HeartOutline,
   RefreshOutline,
@@ -25,6 +26,8 @@ import {
 import { useModelStore } from '../stores/pinia'
 import { useUIStore } from '../stores/ui'
 import CanvasList from '../components/layout/CanvasList.vue'
+import AssetLibrary from '../components/assets/AssetLibrary.vue'
+import { ASSET_ROOT_LABEL } from '../config/assets'
 
 const router = useRouter()
 const dialog = useDialog()
@@ -61,7 +64,8 @@ const viewProjects = computed(() => {
       list = [...activeProjects.value].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).slice(0, 10)
       break
     case 'folder':
-      list = activeProjects.value.filter(project => project.folder === uiStore.currentFolder)
+      // 文件夹已不再承载画布，这里保持空列表而不是落到 default（全部画布）
+      list = []
       break
     case 'favorites':
       list = activeProjects.value.filter(project => project.favorite)
@@ -79,13 +83,14 @@ const recentProjects = computed(() => [...activeProjects.value]
   .slice(0, 4))
 const recentColumnCount = computed(() => Math.min(Math.max(recentProjects.value.length + 1, 3), 5))
 
-const libraryContent = computed(() => {
-  if (uiStore.currentView === 'assets') return assetItems
-  return templateItems
-})
+// 模板目前没有独立数据源，保持空态；素材库改由 AssetLibrary 组件自渲染，
+// 它带自己的生命周期（扫描、懒加载缩略图），不再塞进这个通用网格。
+const libraryContent = computed(() => templateItems)
 
 const isLibraryView = computed(() => ['templates', 'assets'].includes(uiStore.currentView))
 const showDashboard = computed(() => uiStore.currentView === 'all' && !searchText.value)
+// 文件夹是纯目录，不提供「新建画布」入口
+const canCreateCanvas = computed(() => !isLibraryView.value && !['favorites', 'folder', 'trash'].includes(uiStore.currentView))
 
 const showRenameModal = ref(false)
 const renameValue = ref('')
@@ -105,8 +110,7 @@ const ensureApiAndRun = (callback) => {
 
 const createNewCanvas = () => {
   ensureApiAndRun(() => {
-    const folder = uiStore.currentView === 'folder' ? uiStore.currentFolder : null
-    const id = createProject('未命名项目', folder)
+    const id = createProject('未命名项目')
     router.push(`/canvas/${id}`)
   })
 }
@@ -306,7 +310,7 @@ onMounted(initProjectsStore)
           </div>
           <div class="home-explore-card__items">
             <figure v-for="item in assetItems" :key="item.title"><img :src="item.image" :alt="item.title" /><figcaption>{{ item.title }}</figcaption></figure>
-            <div v-if="!assetItems.length" class="home-explore-card__empty">暂无素材</div>
+            <div v-if="!assetItems.length" class="home-explore-card__empty">浏览本地素材库</div>
           </div>
         </button>
       </section>
@@ -314,22 +318,29 @@ onMounted(initProjectsStore)
       <footer class="home-signature"><span>☆</span><p>让灵感，成就更好的空间<small>Ling Canvas</small></p><em>Good Spaces<br />Better Lives</em></footer>
     </div>
 
-    <div v-else class="home-library-page">
+    <div
+      v-else
+      class="home-library-page"
+      :class="{ 'home-library-page--wide': uiStore.currentView === 'assets' }"
+    >
       <header class="home-library-header">
         <div>
           <span class="home-hero__eyebrow">LING CANVAS</span>
           <h1>{{ searchText ? `搜索“${uiStore.searchQuery}”` : uiStore.viewTitle }}</h1>
           <p v-if="uiStore.currentView === 'templates'">从专业模板开始，快速搭建你的创意空间。</p>
           <p v-else-if="uiStore.currentView === 'favorites'">集中浏览和整理你收藏的空间灵感。</p>
-          <p v-else-if="uiStore.currentView === 'assets'">管理图片、材质、家具和装饰素材。</p>
+          <p v-else-if="uiStore.currentView === 'assets'">浏览 {{ ASSET_ROOT_LABEL }} · 只读，不会改动你的文件</p>
           <p v-else-if="uiStore.currentView === 'trash'">删除的画布可以在这里恢复。</p>
+          <p v-else-if="uiStore.currentView === 'folder'">文件夹目前是空的，可以随时重命名或删除。</p>
           <p v-else>管理此空间下的画布项目。</p>
         </div>
         <button v-if="uiStore.currentView === 'trash' && trashedProjects.length" class="home-danger-btn" @click="confirmEmptyTrash">清空回收站</button>
-        <button v-else-if="!isLibraryView && uiStore.currentView !== 'favorites'" class="home-primary-btn" @click="createNewCanvas"><span>＋</span> 新建画布</button>
+        <button v-else-if="canCreateCanvas" class="home-primary-btn" @click="createNewCanvas"><span>＋</span> 新建画布</button>
       </header>
 
-      <div v-if="isLibraryView && libraryContent.length" class="home-library-grid">
+      <AssetLibrary v-if="uiStore.currentView === 'assets'" />
+
+      <div v-else-if="isLibraryView && libraryContent.length" class="home-library-grid">
         <button v-for="item in libraryContent" :key="item.title" class="home-library-card" @click="uiStore.currentView === 'templates' ? createNewCanvas() : null">
           <img :src="item.image" :alt="item.title" />
           <div><strong>{{ item.title }}</strong><span>查看内容 ›</span></div>
@@ -355,6 +366,12 @@ onMounted(initProjectsStore)
           </div>
         </article>
         <div v-if="!viewProjects.length" class="home-empty-state"><TrashOutline /><strong>回收站是空的</strong><span>删除的画布会出现在这里</span></div>
+      </div>
+
+      <div v-else-if="uiStore.currentView === 'folder'" class="home-empty-state">
+        <FolderOutline />
+        <strong>文件夹是空的</strong>
+        <span>这里暂时还没有内容</span>
       </div>
 
       <CanvasList
@@ -458,6 +475,9 @@ onMounted(initProjectsStore)
 .home-signature { display: flex; flex: 0 0 auto; align-items: center; margin-top: 10px; color: #8491a5; }.home-signature > span { width: 32px; height: 32px; display: grid; place-items: center; margin-right: 9px; border-radius: 50%; color: #4b8ef3; background: #eaf2ff; }.home-signature p { font-size: 11px; }.home-signature p small { display: block; color: #acb5c2; }.home-signature em { margin-left: auto; color: #a2adbd; font: 12px/1.2 'Segoe Print', cursive; transform: rotate(-8deg); }
 
 .home-library-page { max-width: 1240px; margin: 0 auto; padding: 34px 30px 60px; }
+/* 素材库要铺满可用宽度：1240 是给固定 4 列的模板卡片定的，用在几百张图的
+   网格上会让全屏下面空掉一大片。仍然留一个上限，避免超宽屏上无意义地拉伸。 */
+.home-library-page--wide { max-width: 1760px; }
 .home-library-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 26px; }.home-library-header h1 { margin-top: 7px; color: #172033; font-size: 29px; font-weight: 780; }.home-library-header p { margin-top: 5px; color: #8c98aa; font-size: 13px; }
 .home-library-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 18px; }.home-library-card { overflow: hidden; border: 1px solid #e8edf4; border-radius: 13px; text-align: left; background: #fff; box-shadow: 0 5px 15px rgba(30,52,82,.06); transition: all .2s ease; }.home-library-card:hover { transform: translateY(-3px); box-shadow: 0 12px 27px rgba(30,52,82,.13); }.home-library-card img { width: 100%; height: 175px; object-fit: cover; }.home-library-card div { display: flex; justify-content: space-between; padding: 13px 14px; }.home-library-card strong { color: #344055; font-size: 14px; }.home-library-card span { color: #6798df; font-size: 11px; }
 .home-trash-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 18px; }.home-project-card--trash > img { height: 155px; filter: saturate(.65); }.home-empty-state { grid-column: 1/-1; min-height: 330px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #a4afbd; }.home-empty-state svg { width: 50px; margin-bottom: 12px; }.home-empty-state strong { color: #7c8797; }.home-empty-state span { margin-top: 4px; font-size: 12px; }

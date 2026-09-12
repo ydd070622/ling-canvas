@@ -5,6 +5,9 @@ import {
 } from './models'
 
 export const CONTENT_NODE_TYPES = Object.freeze(['text', 'image', 'video'])
+// 节点类型里能承载二进制媒体（存进 IndexedDB、渲染成 <img>/<video :src>）的那些。
+// text 节点也在 CONTENT_NODE_TYPES 里，但它没有 url 字段，不要混用。
+export const MEDIA_NODE_TYPES = Object.freeze(['image', 'video'])
 export const CANVAS_NODE_TYPES = Object.freeze([...CONTENT_NODE_TYPES, 'group'])
 
 const videoModel = VIDEO_MODELS.find(model => model.key === DEFAULT_VIDEO_MODEL) || VIDEO_MODELS[0]
@@ -73,6 +76,7 @@ const EDGE_SEMANTICS = Object.freeze({
 })
 
 export const isContentNodeType = type => CONTENT_NODE_TYPES.includes(type)
+export const isMediaNodeType = type => MEDIA_NODE_TYPES.includes(type)
 
 export const createDefaultNodeData = (type) => {
   const definition = NODE_DEFINITIONS[type]

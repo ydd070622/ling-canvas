@@ -1,8 +1,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::sync::Mutex;
-use std::time::Duration;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 use tauri::State;
 use tokio::sync::oneshot;
 
@@ -13,6 +17,24 @@ const MAX_MULTIPART_FILE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_HTTP_TIMEOUT_MS: u64 = 300_000;
 const MAX_HTTP_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_USER_AGENT: &str = "LingCanvas/1.0 (+tauri)";
+
+/// 素材库根目录。路径固定（本期不做目录选择器），因此由 Rust 侧持有——
+/// 它同时是安全边界，绝不能由前端传入。
+const ASSET_ROOT: &str = r"F:\02-设计素材库";
+/// 递归深度上限：实测素材库最深 4 层，留余量防止异常目录树把扫描拖死
+const ASSET_MAX_DEPTH: usize = 6;
+/// 条目数上限：实测 556 张图；超限时截断并在返回值里标记
+const ASSET_MAX_ENTRIES: usize = 20_000;
+/// 单个素材文件上限，与 read_local_binary 的 64MB 保持一致
+const MAX_ASSET_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// 列表白名单。刻意不含 svg：Chromium 的 createImageBitmap 对 svg blob 常抛错，
+/// 放进网格只会得到一列破图。read_asset_file 仍走 guess_binary_mime，
+/// 所以老画布引用的 svg 依然读得出来。
+const ASSET_IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"];
+/// 素材库根下的元数据目录，必须整棵跳过。
+/// Pixcall 的 .pixcall/ 与 Billfish 的 .bf/ 里存着几百张 .preview 缩略图，
+/// .pixcall/trash/ 里还有用户删过的原图——不跳过的话网格会被重复图和垃圾填满。
+const ASSET_SKIP_DIRS: [&str; 4] = [".bf", ".pixcall", ".pixcall.cache", "$RECYCLE.BIN"];
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -530,6 +552,376 @@ async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayl
     })
 }
 
+// ---------------------------------------------------------------------------
+// 本地素材库 | Local asset library
+//
+// 画布以「引用式」消费用户的本地素材库：节点只存相对素材库根的相对路径，
+// 字节按需读取、永不落进 localStorage / IndexedDB。因此根目录固定且由
+// Rust 侧持有 —— 前端传来的只有相对路径，一律经过 resolve 边界校验。
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetEntry {
+    /// 相对素材库根的路径，正斜杠分隔："01-意式极简/11-沙发/xxx.webp"。
+    /// 这就是持久化到画布节点 data.assetRef 的值。
+    relative_path: String,
+    /// 文件名主名（不含扩展名），用作节点 label
+    name: String,
+    /// 小写扩展名。前端不要自己 split('.')，交给 Rust，避免 "a.b.c.jpg" 误判
+    extension: String,
+    /// 顶层分类目录名；根目录散图为空串
+    category: String,
+    /// 直接父目录名（二级分类）；根目录散图为空串
+    folder: String,
+    byte_length: u64,
+    /// 修改时间（Unix 毫秒）—— 缩略图缓存失效的唯一依据
+    modified_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetLibrary {
+    root: String,
+    entries: Vec<AssetEntry>,
+    /// 被规则跳过的条目数（隐藏目录、非图片、超深目录）
+    skipped: usize,
+    truncated: bool,
+    scanned_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetFileStatus {
+    relative_path: String,
+    exists: bool,
+    byte_length: u64,
+    modified_ms: u64,
+}
+
+fn asset_root() -> PathBuf {
+    PathBuf::from(ASSET_ROOT)
+}
+
+/// 目录是否该整棵跳过：所有以 `.` 开头的目录（覆盖 .pixcall / .pixcall.cache /
+/// .bf / .git），外加显式名单（覆盖 $RECYCLE.BIN 这类不带点的）。
+fn is_asset_skip_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || ASSET_SKIP_DIRS
+            .iter()
+            .any(|skip| name.eq_ignore_ascii_case(skip))
+}
+
+/// 校验并拆分相对路径。返回的每一段都已确认不含越权语法。
+///
+/// 这是素材库命令唯一的安全边界：现有 fetch_binary 是「给啥读啥」，而这里
+/// 收的是前端字符串，必须自己挡住绝对路径、盘符、UNC、`..`，
+/// 以及含 `:` 的段（NTFS 数据流语法 `file.txt:stream`）。
+fn asset_segments(relative: &str) -> Result<Vec<String>, String> {
+    let text = relative.trim().replace('\\', "/");
+    if text.is_empty() {
+        return Err("素材路径为空".into());
+    }
+    if looks_like_local_path(&text) || text.starts_with('/') {
+        return Err("素材路径必须是相对素材库根的相对路径".into());
+    }
+
+    let mut segments = Vec::new();
+    for segment in text.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            return Err("素材路径不允许包含 ..".into());
+        }
+        if segment.contains(':') {
+            return Err("素材路径包含非法字符".into());
+        }
+        segments.push(segment.to_string());
+    }
+    if segments.is_empty() {
+        return Err("素材路径为空".into());
+    }
+    Ok(segments)
+}
+
+/// 素材库根目录（已 canonicalize）。Windows 上会带 `\\?\` 前缀，
+/// 所以包含性判定必须用它、而不是 ASSET_ROOT 的裸字符串。
+fn canonical_asset_root() -> Result<PathBuf, String> {
+    asset_root()
+        .canonicalize()
+        .map_err(|err| format!("素材库目录不可用 ({ASSET_ROOT}): {err}"))
+}
+
+/// 相对路径 → 受根目录约束的绝对路径。文件必须已存在（内部要 canonicalize）。
+fn resolve_asset_path(relative: &str) -> Result<PathBuf, String> {
+    let root = canonical_asset_root()?;
+    let mut candidate = root.clone();
+    for segment in asset_segments(relative)? {
+        candidate.push(segment);
+    }
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|err| format!("素材不可用 ({relative}): {err}"))?;
+    // 复核：符号链接 / junction 可能把路径指到根目录之外
+    if !resolved.starts_with(&root) {
+        return Err("素材路径越界".into());
+    }
+    Ok(resolved)
+}
+
+fn modified_ms(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 单条素材的存在性与元数据。
+///
+/// 文件不存在时返回 `exists: false` 而不是 Err ——「文件被删了」是素材库的
+/// 正常状态，画布要据此渲染「素材已丢失」占位，不该被当成调用失败。
+fn asset_status(relative: &str) -> AssetFileStatus {
+    let missing = AssetFileStatus {
+        relative_path: relative.to_string(),
+        exists: false,
+        byte_length: 0,
+        modified_ms: 0,
+    };
+    let Ok(root) = canonical_asset_root() else {
+        return missing;
+    };
+    let Ok(segments) = asset_segments(relative) else {
+        return missing;
+    };
+
+    let mut candidate = root.clone();
+    for segment in segments {
+        candidate.push(segment);
+    }
+    let Ok(resolved) = candidate.canonicalize() else {
+        return missing;
+    };
+    if !resolved.starts_with(&root) {
+        return missing;
+    }
+    let Ok(metadata) = fs::metadata(&resolved) else {
+        return missing;
+    };
+    if !metadata.is_file() {
+        return missing;
+    }
+
+    AssetFileStatus {
+        relative_path: relative.to_string(),
+        exists: true,
+        byte_length: metadata.len(),
+        modified_ms: modified_ms(&metadata),
+    }
+}
+
+/// 自然序比较：让 "11-沙发" 排在 "2-xxx" 之后（纯字典序会颠倒）。
+/// 前端只对已渲染的子集排序，列表本身有序才能保证分批追加时顺序稳定。
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut left = a.chars().peekable();
+    let mut right = b.chars().peekable();
+    loop {
+        match (left.peek().copied(), right.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(lc), Some(rc)) => {
+                if lc.is_ascii_digit() && rc.is_ascii_digit() {
+                    let mut lnum = String::new();
+                    while let Some(c) = left.peek().copied() {
+                        if !c.is_ascii_digit() {
+                            break;
+                        }
+                        lnum.push(c);
+                        left.next();
+                    }
+                    let mut rnum = String::new();
+                    while let Some(c) = right.peek().copied() {
+                        if !c.is_ascii_digit() {
+                            break;
+                        }
+                        rnum.push(c);
+                        right.next();
+                    }
+                    let lval: u128 = lnum.trim_start_matches('0').parse().unwrap_or(0);
+                    let rval: u128 = rnum.trim_start_matches('0').parse().unwrap_or(0);
+                    match lval.cmp(&rval) {
+                        std::cmp::Ordering::Equal => continue,
+                        other => return other,
+                    }
+                }
+                left.next();
+                right.next();
+                match lc.cmp(&rc) {
+                    std::cmp::Ordering::Equal => continue,
+                    other => return other,
+                }
+            }
+        }
+    }
+}
+
+/// 递归扫描素材库。抽成独立函数是为了能用临时目录写单测，不必碰真实的 F:。
+fn scan_asset_root(root: &Path) -> Result<AssetLibrary, String> {
+    let started = Instant::now();
+    let canonical = root
+        .canonicalize()
+        .map_err(|err| format!("素材库目录不可用 ({}): {err}", root.display()))?;
+
+    let mut entries: Vec<AssetEntry> = Vec::new();
+    let mut skipped = 0usize;
+    let mut truncated = false;
+
+    // 显式栈代替递归：深度可控，也不会因异常目录树爆栈
+    let mut stack: Vec<(PathBuf, usize)> = vec![(canonical.clone(), 1)];
+    'outer: while let Some((dir, depth)) = stack.pop() {
+        // 单个子目录读不了（权限 / 坏道）不该让整次扫描失败
+        let Ok(reader) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for item in reader.flatten() {
+            if entries.len() >= ASSET_MAX_ENTRIES {
+                truncated = true;
+                break 'outer;
+            }
+            let path = item.path();
+            let file_name = item.file_name().to_string_lossy().to_string();
+            // file_type() 取自 read_dir 已缓存的目录项，Windows 上不再额外发系统调用
+            let Ok(file_type) = item.file_type() else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                if depth >= ASSET_MAX_DEPTH || is_asset_skip_dir(&file_name) {
+                    skipped += 1;
+                    continue;
+                }
+                stack.push((path, depth + 1));
+                continue;
+            }
+            // junction / 符号链接一律不进：既避免目录环，也避免越出根目录
+            if !file_type.is_file() {
+                skipped += 1;
+                continue;
+            }
+            // 隐藏文件与隐藏目录一视同仁地跳过，避免 .DS_Store 之类混进网格
+            if file_name.starts_with('.') {
+                skipped += 1;
+                continue;
+            }
+
+            let Some(extension) = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+            else {
+                skipped += 1;
+                continue;
+            };
+            if !ASSET_IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+                skipped += 1;
+                continue;
+            }
+
+            let Ok(metadata) = item.metadata() else {
+                continue;
+            };
+            let relative = path
+                .strip_prefix(&canonical)
+                .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| file_name.clone());
+
+            let parts: Vec<&str> = relative.split('/').collect();
+            entries.push(AssetEntry {
+                name: path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(&file_name)
+                    .to_string(),
+                // 单个段 = 根目录散图，没有分类也没有父目录
+                category: if parts.len() > 1 {
+                    parts[0].to_string()
+                } else {
+                    String::new()
+                },
+                folder: if parts.len() > 1 {
+                    parts[parts.len() - 2].to_string()
+                } else {
+                    String::new()
+                },
+                relative_path: relative,
+                extension,
+                byte_length: metadata.len(),
+                modified_ms: modified_ms(&metadata),
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| natural_cmp(&a.relative_path, &b.relative_path));
+
+    Ok(AssetLibrary {
+        root: canonical.to_string_lossy().to_string(),
+        entries,
+        skipped,
+        truncated,
+        scanned_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+/// 扫描素材库并返回全部图片的元数据（不含字节）。
+///
+/// async 是硬要求：同步命令跑在主线程，556 次 stat 会让 WebView 直接卡住；
+/// async 命令由 Tauri 丢进阻塞线程池，不阻塞 UI。
+#[tauri::command]
+async fn list_asset_library() -> Result<AssetLibrary, String> {
+    tauri::async_runtime::spawn_blocking(|| scan_asset_root(&asset_root()))
+        .await
+        .map_err(|err| format!("素材库扫描失败: {err}"))?
+}
+
+/// 读取单个素材文件。字节只在这次调用里过一遍，不落任何持久层。
+#[tauri::command]
+async fn read_asset_file(relative_path: String) -> Result<BinaryPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_asset_path(&relative_path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|err| format!("素材不可用 ({relative_path}): {err}"))?;
+        if metadata.len() > MAX_ASSET_FILE_BYTES {
+            return Err("素材超过 64MB 限制".into());
+        }
+        let bytes =
+            fs::read(&path).map_err(|err| format!("读取素材失败 ({relative_path}): {err}"))?;
+        Ok(BinaryPayload {
+            content_type: guess_binary_mime(&path),
+            byte_length: bytes.len(),
+            data_base64: STANDARD.encode(&bytes),
+        })
+    })
+    .await
+    .map_err(|err| format!("读取素材失败: {err}"))?
+}
+
+/// 批量检查素材是否还在。画布加载时一次判定几十个引用，
+/// 避免 N 次 IPC 往返。盘符没挂载时整体失败，由前端区分「未连接」与「已丢失」。
+#[tauri::command]
+async fn stat_asset_files(relative_paths: Vec<String>) -> Result<Vec<AssetFileStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        relative_paths
+            .iter()
+            .map(|path| asset_status(path))
+            .collect()
+    })
+    .await
+    .map_err(|err| format!("素材状态检查失败: {err}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +1008,99 @@ mod tests {
         ok.insert("Authorization".to_string(), "Bearer k".to_string());
         assert_eq!(build_headers(&ok).unwrap().len(), 1);
     }
+
+    /// 素材路径的越权语法必须全部挡住——这是素材库命令唯一的安全边界。
+    /// 这些用例只走语法校验，不需要真实的 F: 盘。
+    #[test]
+    fn rejects_escaping_asset_paths() {
+        for bad in [
+            "../secrets.png",
+            "01-意式极简/../../secrets.png",
+            "..\\secrets.png",
+            "/etc/passwd",
+            "C:/Windows/system.ini",
+            "\\\\server\\share\\a.png",
+            // NTFS 数据流语法：file.txt:stream
+            "01-意式极简/a:b.png",
+            "",
+            "   ",
+        ] {
+            assert!(asset_segments(bad).is_err(), "应拒绝越权路径: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_plain_asset_paths() {
+        assert_eq!(
+            asset_segments("01-意式极简/11-沙发/a.webp").unwrap(),
+            vec!["01-意式极简", "11-沙发", "a.webp"]
+        );
+        // 前导 "./" 与重复斜杠应被规范化掉，而不是当成越权
+        assert_eq!(
+            asset_segments("./01-意式极简//a b.png").unwrap(),
+            vec!["01-意式极简", "a b.png"]
+        );
+        // 反斜杠也当分隔符接受（Windows 路径习惯）
+        assert_eq!(
+            asset_segments("01-意式极简\\a.png").unwrap(),
+            vec!["01-意式极简", "a.png"]
+        );
+    }
+
+    /// 自然序：不这么做的话 "11-沙发" 会排到 "2-xxx" 前面
+    #[test]
+    fn natural_order_puts_11_after_2() {
+        assert_eq!(natural_cmp("2-xxx", "11-沙发"), std::cmp::Ordering::Less);
+        assert_eq!(natural_cmp("11-沙发", "2-xxx"), std::cmp::Ordering::Greater);
+        assert_eq!(natural_cmp("01-a", "01-b"), std::cmp::Ordering::Less);
+        assert_eq!(natural_cmp("01-a", "01-a"), std::cmp::Ordering::Equal);
+    }
+
+    /// 跳过规则：隐藏目录里的预览图绝不能进列表。
+    /// 用临时目录造一棵小树，不碰真实素材库。
+    #[test]
+    fn scan_skips_hidden_dirs_and_non_images() {
+        let root = std::env::temp_dir().join(format!("ling-asset-scan-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let visible = root.join("01-意式极简").join("11-沙发");
+        let pixcall_trash = root.join(".pixcall").join("trash");
+        let billfish_preview = root.join(".bf").join(".preview");
+        for dir in [&visible, &pixcall_trash, &billfish_preview] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(visible.join("a.webp"), b"x").unwrap();
+        fs::write(root.join("b.jpg"), b"x").unwrap();
+        fs::write(pixcall_trash.join("deleted.png"), b"x").unwrap();
+        fs::write(billfish_preview.join("preview.png"), b"x").unwrap();
+        fs::write(visible.join("notes.txt"), b"x").unwrap();
+
+        let library = scan_asset_root(&root).unwrap();
+        let paths: Vec<&str> = library
+            .entries
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect();
+
+        assert_eq!(
+            paths,
+            vec!["01-意式极简/11-沙发/a.webp", "b.jpg"],
+            "隐藏目录里的预览图与非图片都不该出现"
+        );
+
+        let nested = &library.entries[0];
+        assert_eq!(nested.category, "01-意式极简");
+        assert_eq!(nested.folder, "11-沙发");
+        assert_eq!(nested.extension, "webp");
+        assert_eq!(nested.name, "a");
+
+        let root_file = &library.entries[1];
+        assert_eq!(root_file.category, "", "根目录散图不应有分类");
+        assert_eq!(root_file.folder, "", "根目录散图不应有父目录");
+        assert!(!library.truncated);
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -628,7 +1113,10 @@ pub fn run() {
             fetch_models,
             http_request,
             cancel_http_request,
-            fetch_binary
+            fetch_binary,
+            list_asset_library,
+            read_asset_file,
+            stat_asset_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

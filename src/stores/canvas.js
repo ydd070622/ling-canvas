@@ -5,8 +5,9 @@
 import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
 import { saveImage, loadImage, listImageKeys } from './imageStore'
-import { createDefaultNodeData } from '../config/nodeRegistry'
+import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
 import { migrateCanvasDocument } from '../utils/migrateCanvasDocument'
+import { resolveAssetUrl, runLimited, statAssetFiles } from '../services/assetLibrary'
 
 // Node ID counter | 节点ID计数器
 let nodeId = 0
@@ -443,6 +444,10 @@ export const loadProject = (projectId) => {
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
     imageRestorePromise = restoreProjectImages(projectId, migratedCanvasData._imageNodeAliases)
+      // 串行、且必须挂在同一个 promise 上：autoSaveEnabled 的解除挂在它后面
+      // （见下方 imageRestorePromise.finally）。素材 hydrate 是 N 次 IPC，
+      // 比 restore 慢得多，并发会让自动保存在图片还没读完时就打开。
+      .then(() => hydrateAssetRefs(projectId))
     
     nodeId = nodes.value.length
   } else {
@@ -493,7 +498,7 @@ export const saveProject = () => {
 const savedImageKeys = new Map()
 
 /**
- * Persist node data-URL images to IndexedDB | 把节点里的 base64 图片写入 IndexedDB
+ * Persist node data-URL media to IndexedDB | 把节点里的 base64 图片/视频写入 IndexedDB
  * (localStorage copies are stripped by cleanNodeForStorage)
  */
 const persistProjectImages = (projectId) => {
@@ -511,7 +516,7 @@ const persistProjectImages = (projectId) => {
 }
 
 /**
- * Restore node images from IndexedDB after reload | 重新加载项目时从 IndexedDB 恢复节点图片
+ * Restore node media from IndexedDB after reload | 重新加载项目时从 IndexedDB 恢复节点图片/视频
  */
 const previousSequentialNodeId = (nodeId) => {
   const match = String(nodeId).match(/^(.*?)(\d+)$/)
@@ -538,10 +543,15 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
       // map. Legacy config/output node pairs used consecutive IDs, with the
       // output image immediately following the config node. Recover that
       // deterministic relationship without guessing across unrelated nodes.
+      // 这条兜底只针对图片：旧的连续 ID 配对是「配置节点 → 生成图片」，把视频
+      // 也套进来等于凭空猜测，所以即使下面的媒体判断已放开了 video，这里仍然保持 image。
       if (!node) {
         const previousId = previousSequentialNodeId(storedNodeId)
         const candidate = previousId ? nodesById.get(previousId) : null
-        const candidateHasRecoverableUrl = !candidate?.data?.url || candidate.data.url.startsWith?.('blob:')
+        // 素材节点 hydrate 之后 url 恰好也是 blob:，会被这条兜底误判成「可恢复」，
+        // 从而被一张无关的旧 blob 覆盖。带 assetRef 的节点一律让开。
+        const candidateHasRecoverableUrl = !candidate?.data?.assetRef
+          && (!candidate?.data?.url || candidate.data.url.startsWith?.('blob:'))
         if (candidate?.type === 'image' && candidateHasRecoverableUrl && !claimedNodeIds.has(previousId)) {
           node = candidate
         }
@@ -549,7 +559,7 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
 
       // Never delete an unmatched key here. A later schema migration or a
       // manual recovery pass may still be able to reconnect the binary.
-      if (!node || node.type !== 'image') continue
+      if (!node || !isMediaNodeType(node.type)) continue
 
       const blob = await loadImage(key)
       const hasTemporaryBlobUrl = node.data?.url?.startsWith?.('blob:')
@@ -567,6 +577,113 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
     }
   } catch (error) {
     console.warn('Failed to restore persisted project images:', error)
+  }
+}
+
+const ASSET_MISSING_MESSAGE = '素材已丢失'
+const ASSET_OFFLINE_MESSAGE = '素材库未连接'
+
+/**
+ * 按 id 取**当前**的节点对象 | Look the node up by id, right now
+ *
+ * 每次 await 之后都必须重新查一次，绝不能持有 await 之前的引用：画布把 nodes
+ * 用 `v-model:nodes` 绑给了 Vue Flow，它会在节点挂载/更新时替换数组里的节点对象
+ * （saveProject 上方那段注释讲的就是这件事）。拿旧引用去改数据，改的是一个已经
+ * 脱离数组的孤儿对象——内存里看着改了，UI 毫无反应。
+ */
+const findNodeById = (nodeId) => nodes.value.find(node => String(node.id) === String(nodeId))
+
+/** 把素材的渲染状态写回**当前**节点；不走 updateNode，避免污染撤销栈与触发保存 */
+const applyAssetState = (nodeId, { url, error }) => {
+  const node = findNodeById(nodeId)
+  if (!node?.data) return
+  node.data.url = url
+  if (error) node.data.error = error
+  else delete node.data.error
+}
+
+/**
+ * 给引用了本地素材库的图片节点补上可渲染的 url | Hydrate asset-library nodes
+ *
+ * 引用式的收口点：节点持久化的只有 `data.assetRef`（相对素材库根的相对路径），
+ * 字节在加载时按需读取、用完即弃，绝不进 localStorage 或 IndexedDB。
+ *
+ * **直接改 `node.data` 而不走 `updateNode`**：updateNode 会调 scheduleHistorySave()
+ * 和 debouncedSave()，那样打开一个含 20 张素材的画布会往撤销栈塞 20 条记录、
+ * 并触发 20 次 localStorage 写入。项目规则见
+ * `.qoder/feedback-no-auto-save-on-node-change.md`。
+ */
+export const hydrateAssetRefs = async (projectId) => {
+  // 只记 id 与引用：对象引用会在 await 期间被 Vue Flow 换掉，不能留着用
+  const targets = nodes.value
+    .filter(node => node.type === 'image' && node.data?.assetRef)
+    .map(node => ({ id: String(node.id), ref: node.data.assetRef }))
+  if (!targets.length) return
+
+  // 给「用户手动上传覆盖过」的节点让路：IndexedDB 里有字节的归 restoreProjectImages 管，
+  // 否则会用素材库的原图盖掉用户自己传的图。
+  let storedNodeIds = new Set()
+  try {
+    const keys = await listImageKeys(`${projectId}:`)
+    const prefixLength = String(projectId).length + 1
+    storedNodeIds = new Set(keys.map(key => String(key).slice(prefixLength)))
+  } catch {
+    storedNodeIds = new Set()
+  }
+
+  // 按 id 复核一遍：节点可能已被删，url 也可能已被别处填上
+  const pending = targets.filter(item => !storedNodeIds.has(item.id) && !findNodeById(item.id)?.data?.url)
+  if (!pending.length) return
+
+  const refs = [...new Set(pending.map(item => item.ref))]
+  let statuses = null
+  try {
+    statuses = await statAssetFiles(refs)
+  } catch {
+    // 整批失败 = 素材库不可用（盘符没挂载）。这与「单个文件被删」必须区分：
+    // 前者插回硬盘就能恢复，后者要用户自己去找。
+    pending.forEach(item => applyAssetState(item.id, { url: '', error: ASSET_OFFLINE_MESSAGE }))
+    return
+  }
+
+  const existsByRef = new Map(
+    (statuses || []).map(status => [status.relativePath, status.exists])
+  )
+
+  // 并发压到 3：一张 4000×6000 的素材解码后接近 100MB
+  await runLimited(pending, 3, async item => {
+    if (existsByRef.get(item.ref) === false) {
+      applyAssetState(item.id, { url: '', error: ASSET_MISSING_MESSAGE })
+      return
+    }
+    try {
+      const url = await resolveAssetUrl(item.ref)
+      applyAssetState(item.id, { url })
+    } catch {
+      applyAssetState(item.id, { url: '', error: ASSET_MISSING_MESSAGE })
+    }
+  })
+}
+
+/**
+ * 刚插入单张素材时立刻补 url | Hydrate a freshly inserted asset node
+ *
+ * 同样是直接改 node.data：addNode 已经记过一条历史了，再走 updateNode 会多记一条。
+ */
+export const hydrateSingleAssetNode = async (nodeId) => {
+  const initial = findNodeById(nodeId)
+  if (!initial?.data?.assetRef) return
+  const ref = initial.data.assetRef
+  try {
+    const [status] = await statAssetFiles([ref])
+    if (status && !status.exists) {
+      applyAssetState(nodeId, { url: '', error: ASSET_MISSING_MESSAGE })
+      return
+    }
+    const url = await resolveAssetUrl(ref)
+    applyAssetState(nodeId, { url })
+  } catch {
+    applyAssetState(nodeId, { url: '', error: ASSET_MISSING_MESSAGE })
   }
 }
 
