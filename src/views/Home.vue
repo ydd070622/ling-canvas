@@ -27,7 +27,7 @@ import { useModelStore } from '../stores/pinia'
 import { useUIStore } from '../stores/ui'
 import CanvasList from '../components/layout/CanvasList.vue'
 import AssetLibrary from '../components/assets/AssetLibrary.vue'
-import { ASSET_ROOT_LABEL } from '../config/assets'
+import { assetRoot } from '../stores/assets'
 
 const router = useRouter()
 const dialog = useDialog()
@@ -329,7 +329,7 @@ onMounted(initProjectsStore)
           <h1>{{ searchText ? `搜索“${uiStore.searchQuery}”` : uiStore.viewTitle }}</h1>
           <p v-if="uiStore.currentView === 'templates'">从专业模板开始，快速搭建你的创意空间。</p>
           <p v-else-if="uiStore.currentView === 'favorites'">集中浏览和整理你收藏的空间灵感。</p>
-          <p v-else-if="uiStore.currentView === 'assets'">浏览 {{ ASSET_ROOT_LABEL }} · 只读，不会改动你的文件</p>
+          <p v-else-if="uiStore.currentView === 'assets'">浏览 {{ assetRoot || '本地素材库' }} · 只读，不会改动你的文件</p>
           <p v-else-if="uiStore.currentView === 'trash'">删除的画布可以在这里恢复。</p>
           <p v-else-if="uiStore.currentView === 'folder'">文件夹目前是空的，可以随时重命名或删除。</p>
           <p v-else>管理此空间下的画布项目。</p>

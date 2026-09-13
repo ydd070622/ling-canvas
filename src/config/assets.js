@@ -1,12 +1,10 @@
 /**
  * 素材库配置 | Asset library config
  *
- * 素材库根目录由 Rust 侧持有（`src-tauri/src/lib.rs` 的 `ASSET_ROOT`），
- * 它同时是安全边界，所以前端**永远不拼绝对路径**——下面这个 LABEL 只用于界面文案。
+ * 素材库根目录由 Rust 侧持有（`src-tauri/src/lib.rs` 的 `AssetRootState`，
+ * 由用户在原生目录选择器里指定），它同时是安全边界，所以前端**永远不拼绝对路径**。
+ * 界面要展示当前目录时，读 `stores/assets` 的 `assetRoot`。
  */
-
-/** 仅用于界面展示；真正的根目录是 Rust 的 ASSET_ROOT */
-export const ASSET_ROOT_LABEL = 'F:\\02-设计素材库'
 
 /** 缩略图最长边（px）。网格瓦片约 150px，360 足够覆盖 2x 屏 */
 export const ASSET_THUMB_MAX_EDGE = 360

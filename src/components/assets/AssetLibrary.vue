@@ -9,17 +9,19 @@
  * 所以页面留在 Home.vue 里就能白捡「搜素材」能力。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NModal } from 'naive-ui'
+import { NModal, useDialog } from 'naive-ui'
 import AssetThumb from './AssetThumb.vue'
-import { ASSET_ROOT_LABEL, ASSET_PAGE_BATCH } from '../../config/assets'
+import { ASSET_PAGE_BATCH } from '../../config/assets'
 import { resolveAssetUrl } from '../../services/assetLibrary'
 import {
   assetError,
+  assetEpoch,
   assetRoot,
   assetScannedMs,
   assetSkipped,
   assetStatus,
   categories,
+  changeAssetRoot,
   filteredAssetEntries,
   folders,
   rootAssetCount,
@@ -32,6 +34,7 @@ import {
 import { useUIStore } from '../../stores/ui'
 
 const uiStore = useUIStore()
+const dialog = useDialog()
 
 const visibleCount = ref(ASSET_PAGE_BATCH)
 const sentinel = ref(null)
@@ -126,6 +129,34 @@ const closePreview = () => {
   previewSize.value = null
 }
 
+const runChangeRoot = async () => {
+  closePreview()  // 预览里的 objectURL 属于旧根
+  try {
+    await changeAssetRoot()
+  } catch (error) {
+    window.$message?.error(error?.message || '更换素材库目录失败')
+  }
+}
+
+/**
+ * 换根入口。当前库是健康状态时要先确认——画布节点存的是相对路径，
+ * 换根后旧引用可能指向别的文件或直接丢失。目录本来就缺失/报错时不弹确认，
+ * 直接进选择器（那正是用户点这个按钮的原因）。
+ */
+const onChangeRoot = () => {
+  if (assetStatus.value !== 'ready') {
+    runChangeRoot()
+    return
+  }
+  dialog.warning({
+    title: '更换素材库目录',
+    content: '更换后，画布中已引用的素材会按新目录重新解析，旧目录里的素材可能显示为丢失。缩略图缓存将被清空并重建。',
+    positiveText: '继续选择',
+    negativeText: '取消',
+    onPositiveClick: runChangeRoot
+  })
+}
+
 onMounted(() => {
   loadAssetLibrary()
   window.addEventListener('resize', onWindowResize)
@@ -177,14 +208,23 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <button
-        type="button"
-        class="asset-rescan"
-        :disabled="assetStatus === 'loading'"
-        @click="loadAssetLibrary(true)"
-      >
-        {{ assetStatus === 'loading' ? '扫描中…' : '重新扫描' }}
-      </button>
+      <div class="asset-toolbar__actions">
+        <button
+          type="button"
+          class="asset-rescan"
+          :disabled="assetStatus === 'loading'"
+          @click="loadAssetLibrary(true)"
+        >
+          {{ assetStatus === 'loading' ? '扫描中…' : '重新扫描' }}
+        </button>
+        <button
+          type="button"
+          class="asset-rescan"
+          @click="onChangeRoot"
+        >
+          更改目录
+        </button>
+      </div>
     </div>
 
     <div v-if="folders.length" class="asset-chips asset-chips--sub">
@@ -210,24 +250,28 @@ onBeforeUnmount(() => {
 
     <div v-if="assetStatus === 'loading'" class="asset-state">
       <strong>正在扫描素材库…</strong>
-      <span>{{ ASSET_ROOT_LABEL }}</span>
+      <span>{{ assetRoot || '未设置素材库目录' }}</span>
     </div>
 
     <div v-else-if="assetStatus === 'error'" class="asset-state asset-state--error">
       <strong>素材库不可用</strong>
       <span>{{ assetError }}</span>
-      <button type="button" class="asset-rescan" @click="loadAssetLibrary(true)">重试</button>
+      <span v-if="assetRoot" class="asset-state__path">{{ assetRoot }}</span>
+      <div class="asset-state__actions">
+        <button type="button" class="asset-rescan asset-rescan--primary" @click="onChangeRoot">选择目录</button>
+        <button type="button" class="asset-rescan" @click="loadAssetLibrary(true)">重试</button>
+      </div>
     </div>
 
     <div v-else-if="!matched.length" class="asset-state">
       <strong>{{ query ? '没有匹配的素材' : '这个分类下还没有图片' }}</strong>
-      <span>{{ query ? `搜索“${uiStore.searchQuery}”` : ASSET_ROOT_LABEL }}</span>
+      <span>{{ query ? `搜索“${uiStore.searchQuery}”` : (assetRoot || '未设置素材库目录') }}</span>
     </div>
 
     <div v-else class="asset-grid">
       <AssetThumb
         v-for="entry in paged"
-        :key="entry.relativePath"
+        :key="`${assetEpoch}:${entry.relativePath}`"
         :entry="entry"
         @open="openPreview"
       />
@@ -237,6 +281,7 @@ onBeforeUnmount(() => {
 
     <footer v-if="assetStatus === 'ready'" class="asset-footnote">
       <span>{{ currentCategoryLabel }} · 共 {{ matched.length }} 张</span>
+      <span v-if="assetRoot" class="asset-footnote__root" :title="assetRoot">{{ assetRoot }}</span>
       <span v-if="assetRoot">已忽略 {{ assetSkipped }} 个非图片/隐藏项 · 扫描 {{ assetScannedMs }}ms</span>
     </footer>
 
@@ -271,6 +316,7 @@ onBeforeUnmount(() => {
 .asset-page { display: flex; flex-direction: column; gap: 14px; }
 
 .asset-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.asset-toolbar__actions { display: flex; flex: none; gap: 8px; }
 
 .asset-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .asset-chips--sub { padding-top: 2px; }
@@ -302,6 +348,13 @@ onBeforeUnmount(() => {
 }
 .asset-rescan:hover:not(:disabled) { background: var(--bg-tertiary, #f1f5f9); color: var(--text-primary, #1e293b); }
 .asset-rescan:disabled { opacity: 0.6; cursor: default; }
+/* 错误态的主行动：选目录比重试更可能是用户真正要做的事 */
+.asset-rescan--primary {
+  border-color: var(--accent-color, #22c55e);
+  background: var(--accent-color, #22c55e);
+  color: #fff;
+}
+.asset-rescan--primary:hover:not(:disabled) { background: var(--accent-color, #22c55e); color: #fff; filter: brightness(1.06); }
 
 .asset-grid {
   display: grid;
@@ -317,12 +370,19 @@ onBeforeUnmount(() => {
 .asset-state strong { color: #7c8797; font-weight: 600; }
 .asset-state span { font-size: 12px; text-align: center; word-break: break-all; }
 .asset-state--error strong { color: #ef4444; }
+.asset-state__path { font-family: ui-monospace, monospace; color: #b6c0cd; }
+.asset-state__actions { display: flex; gap: 8px; margin-top: 6px; }
 
 .asset-sentinel { height: 1px; }
 
 .asset-footnote {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding-top: 4px; color: #9aa6b7; font-size: 12px;
+}
+/* 路径占中间，过长时截断而不是把两侧挤走 */
+.asset-footnote__root {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: center; color: #b6c0cd;
 }
 
 /* 不再留 min-height：外框尺寸由图片比例决定，小图就该是小框 */

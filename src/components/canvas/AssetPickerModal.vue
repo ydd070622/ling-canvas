@@ -11,9 +11,11 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NModal } from 'naive-ui'
 import AssetThumb from '../assets/AssetThumb.vue'
-import { ASSET_PAGE_BATCH, ASSET_ROOT_LABEL } from '../../config/assets'
+import { ASSET_PAGE_BATCH } from '../../config/assets'
 import {
   assetError,
+  assetEpoch,
+  assetRoot,
   assetStatus,
   categories,
   filteredAssetEntries,
@@ -121,13 +123,13 @@ const confirm = () => {
       <div v-if="assetStatus === 'loading'" class="asset-picker__state">正在扫描素材库…</div>
       <div v-else-if="assetStatus === 'error'" class="asset-picker__state asset-picker__state--error">
         <span>{{ assetError }}</span>
-        <span class="asset-picker__hint">{{ ASSET_ROOT_LABEL }}</span>
+        <span class="asset-picker__hint">{{ assetRoot || '未设置素材库目录' }}</span>
       </div>
       <div v-else-if="!matched.length" class="asset-picker__state">没有匹配的素材</div>
       <div v-else class="asset-picker__grid">
         <AssetThumb
           v-for="entry in paged"
-          :key="entry.relativePath"
+          :key="`${assetEpoch}:${entry.relativePath}`"
           :entry="entry"
           :selected="selectedPaths.includes(entry.relativePath)"
           @open="toggle"
@@ -185,9 +187,10 @@ const confirm = () => {
 .asset-picker__chip--active { border-color: transparent; background: #e7f0ff; color: #3b82f6; font-weight: 600; }
 .asset-picker__chip em { font-style: normal; opacity: 0.6; font-size: 11px; }
 
-/* max-height 而不是 height：图少时（某个分类只有几张）弹窗要跟着缩，
-   写死高度会在下面留一大片空白；图多时到此为止并内部滚动 */
-.asset-picker__body { max-height: min(56vh, 620px); overflow-y: auto; padding-right: 4px; }
+/* 固定高度：切换分类时弹窗不能跟着内容缩——
+   图少（例如「根目录散图」只有两张）会让整个弹窗塌成一条，视觉上很跳。
+   高度恒定，图多时内部滚动。 */
+.asset-picker__body { height: min(56vh, 620px); overflow-y: auto; padding-right: 4px; }
 
 .asset-picker__grid {
   display: grid;
@@ -195,8 +198,9 @@ const confirm = () => {
   gap: 12px;
 }
 
+/* 撑满 body 的固定高度，否则加载/空态文字会贴在顶部 */
 .asset-picker__state {
-  min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; color: #a4afbd; font-size: 13px;
 }
 .asset-picker__state--error { color: #ef4444; }

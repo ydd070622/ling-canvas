@@ -7,7 +7,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tauri::State;
+use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 const MAX_DROPPED_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
@@ -18,9 +19,12 @@ const DEFAULT_HTTP_TIMEOUT_MS: u64 = 300_000;
 const MAX_HTTP_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_USER_AGENT: &str = "LingCanvas/1.0 (+tauri)";
 
-/// 素材库根目录。路径固定（本期不做目录选择器），因此由 Rust 侧持有——
-/// 它同时是安全边界，绝不能由前端传入。
-const ASSET_ROOT: &str = r"F:\02-设计素材库";
+/// 素材库根目录的出厂默认值。真正的根目录在运行期由 [`AssetRootState`] 持有，
+/// 由用户在原生目录选择器里指定——选择动作也发生在 Rust 侧，前端永远拿不到、
+/// 也永远不传绝对路径。它仍是素材库命令唯一的安全边界。
+const DEFAULT_ASSET_ROOT: &str = r"F:\02-设计素材库";
+/// 根目录的持久化文件，落在 app_config_dir() 下
+const ASSET_CONFIG_FILE: &str = "asset-library.json";
 /// 递归深度上限：实测素材库最深 4 层，留余量防止异常目录树把扫描拖死
 const ASSET_MAX_DEPTH: usize = 6;
 /// 条目数上限：实测 556 张图；超限时截断并在返回值里标记
@@ -556,9 +560,82 @@ async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayl
 // 本地素材库 | Local asset library
 //
 // 画布以「引用式」消费用户的本地素材库：节点只存相对素材库根的相对路径，
-// 字节按需读取、永不落进 localStorage / IndexedDB。因此根目录固定且由
-// Rust 侧持有 —— 前端传来的只有相对路径，一律经过 resolve 边界校验。
+// 字节按需读取、永不落进 localStorage / IndexedDB。根目录由用户在原生目录
+// 选择器里指定、由 Rust 侧持有 —— 前端传来的只有相对路径，一律经过 resolve
+// 边界校验。
 // ---------------------------------------------------------------------------
+
+/// 运行期素材库根目录。存**用户选定的原始路径**（不做 canonicalize），
+/// 这样界面显示的是 `F:\02-设计素材库` 而不是 Windows 的 `\\?\F:\...`。
+/// 需要做包含性判定时，由 [`canonical_asset_root`] 现场 canonicalize。
+struct AssetRootState(Mutex<PathBuf>);
+
+// 不能 derive(Default)：PathBuf::default() 是空路径，会让默认根目录变成空串
+impl Default for AssetRootState {
+    fn default() -> Self {
+        Self(Mutex::new(PathBuf::from(DEFAULT_ASSET_ROOT)))
+    }
+}
+
+impl AssetRootState {
+    /// 取一份 PathBuf 快照。必须在 await 之前调用，锁不跨 await。
+    fn snapshot(&self) -> Result<PathBuf, String> {
+        self.0
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| "素材库根目录状态不可用".to_string())
+    }
+
+    fn set(&self, root: PathBuf) -> Result<(), String> {
+        let mut guard = self
+            .0
+            .lock()
+            .map_err(|_| "素材库根目录状态不可用".to_string())?;
+        *guard = root;
+        Ok(())
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AssetRootConfig {
+    root: String,
+}
+
+fn asset_config_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join(ASSET_CONFIG_FILE))
+        .map_err(|err| format!("无法定位配置目录: {err}"))
+}
+
+/// 读不到 / 解析失败一律回退 None —— 配置文件损坏绝不能让应用起不来。
+fn load_persisted_asset_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {
+    let text = fs::read_to_string(asset_config_path(app).ok()?).ok()?;
+    let config: AssetRootConfig = serde_json::from_str(&text).ok()?;
+    let root = config.root.trim();
+    if root.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(root))
+    }
+}
+
+fn persist_asset_root<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    root: &Path,
+) -> Result<(), String> {
+    let path = asset_config_path(app)?;
+    if let Some(dir) = path.parent() {
+        // app_config_dir() 只给路径、不建目录
+        fs::create_dir_all(dir).map_err(|err| format!("创建配置目录失败: {err}"))?;
+    }
+    let config = AssetRootConfig {
+        root: root.to_string_lossy().to_string(),
+    };
+    let bytes =
+        serde_json::to_vec_pretty(&config).map_err(|err| format!("序列化配置失败: {err}"))?;
+    fs::write(&path, bytes).map_err(|err| format!("写入配置失败: {err}"))
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -597,10 +674,6 @@ struct AssetFileStatus {
     exists: bool,
     byte_length: u64,
     modified_ms: u64,
-}
-
-fn asset_root() -> PathBuf {
-    PathBuf::from(ASSET_ROOT)
 }
 
 /// 目录是否该整棵跳过：所有以 `.` 开头的目录（覆盖 .pixcall / .pixcall.cache /
@@ -646,16 +719,15 @@ fn asset_segments(relative: &str) -> Result<Vec<String>, String> {
 }
 
 /// 素材库根目录（已 canonicalize）。Windows 上会带 `\\?\` 前缀，
-/// 所以包含性判定必须用它、而不是 ASSET_ROOT 的裸字符串。
-fn canonical_asset_root() -> Result<PathBuf, String> {
-    asset_root()
-        .canonicalize()
-        .map_err(|err| format!("素材库目录不可用 ({ASSET_ROOT}): {err}"))
+/// 所以包含性判定必须用它、而不是配置里的裸字符串。
+fn canonical_asset_root(root: &Path) -> Result<PathBuf, String> {
+    root.canonicalize()
+        .map_err(|err| format!("素材库目录不可用 ({}): {err}", root.display()))
 }
 
 /// 相对路径 → 受根目录约束的绝对路径。文件必须已存在（内部要 canonicalize）。
-fn resolve_asset_path(relative: &str) -> Result<PathBuf, String> {
-    let root = canonical_asset_root()?;
+fn resolve_asset_path(relative: &str, root: &Path) -> Result<PathBuf, String> {
+    let root = canonical_asset_root(root)?;
     let mut candidate = root.clone();
     for segment in asset_segments(relative)? {
         candidate.push(segment);
@@ -683,14 +755,14 @@ fn modified_ms(metadata: &fs::Metadata) -> u64 {
 ///
 /// 文件不存在时返回 `exists: false` 而不是 Err ——「文件被删了」是素材库的
 /// 正常状态，画布要据此渲染「素材已丢失」占位，不该被当成调用失败。
-fn asset_status(relative: &str) -> AssetFileStatus {
+fn asset_status(relative: &str, root: &Path) -> AssetFileStatus {
     let missing = AssetFileStatus {
         relative_path: relative.to_string(),
         exists: false,
         byte_length: 0,
         modified_ms: 0,
     };
-    let Ok(root) = canonical_asset_root() else {
+    let Ok(root) = canonical_asset_root(root) else {
         return missing;
     };
     let Ok(segments) = asset_segments(relative) else {
@@ -867,7 +939,10 @@ fn scan_asset_root(root: &Path) -> Result<AssetLibrary, String> {
     entries.sort_by(|a, b| natural_cmp(&a.relative_path, &b.relative_path));
 
     Ok(AssetLibrary {
-        root: canonical.to_string_lossy().to_string(),
+        // 汇报配置的原始路径而非 canonical：前端只用它展示，
+        // canonical 的 `\\?\` 前缀是可见的 UX 退化。relative_path 仍由
+        // strip_prefix(&canonical) 产出，不受影响。
+        root: root.to_string_lossy().to_string(),
         entries,
         skipped,
         truncated,
@@ -880,17 +955,22 @@ fn scan_asset_root(root: &Path) -> Result<AssetLibrary, String> {
 /// async 是硬要求：同步命令跑在主线程，556 次 stat 会让 WebView 直接卡住；
 /// async 命令由 Tauri 丢进阻塞线程池，不阻塞 UI。
 #[tauri::command]
-async fn list_asset_library() -> Result<AssetLibrary, String> {
-    tauri::async_runtime::spawn_blocking(|| scan_asset_root(&asset_root()))
+async fn list_asset_library(state: State<'_, AssetRootState>) -> Result<AssetLibrary, String> {
+    let root = state.snapshot()?;
+    tauri::async_runtime::spawn_blocking(move || scan_asset_root(&root))
         .await
         .map_err(|err| format!("素材库扫描失败: {err}"))?
 }
 
 /// 读取单个素材文件。字节只在这次调用里过一遍，不落任何持久层。
 #[tauri::command]
-async fn read_asset_file(relative_path: String) -> Result<BinaryPayload, String> {
+async fn read_asset_file(
+    relative_path: String,
+    state: State<'_, AssetRootState>,
+) -> Result<BinaryPayload, String> {
+    let root = state.snapshot()?;
     tauri::async_runtime::spawn_blocking(move || {
-        let path = resolve_asset_path(&relative_path)?;
+        let path = resolve_asset_path(&relative_path, &root)?;
         let metadata = fs::metadata(&path)
             .map_err(|err| format!("素材不可用 ({relative_path}): {err}"))?;
         if metadata.len() > MAX_ASSET_FILE_BYTES {
@@ -911,15 +991,80 @@ async fn read_asset_file(relative_path: String) -> Result<BinaryPayload, String>
 /// 批量检查素材是否还在。画布加载时一次判定几十个引用，
 /// 避免 N 次 IPC 往返。盘符没挂载时整体失败，由前端区分「未连接」与「已丢失」。
 #[tauri::command]
-async fn stat_asset_files(relative_paths: Vec<String>) -> Result<Vec<AssetFileStatus>, String> {
+async fn stat_asset_files(
+    relative_paths: Vec<String>,
+    state: State<'_, AssetRootState>,
+) -> Result<Vec<AssetFileStatus>, String> {
+    let root = state.snapshot()?;
     tauri::async_runtime::spawn_blocking(move || {
         relative_paths
             .iter()
-            .map(|path| asset_status(path))
+            .map(|path| asset_status(path, &root))
             .collect()
     })
     .await
     .map_err(|err| format!("素材状态检查失败: {err}"))
+}
+
+/// 返回**配置的原始路径**（未 canonicalize）。
+///
+/// 存在的唯一理由：目录缺失时 `list_asset_library` 会 Err，前端拿不到
+/// 「是哪个路径失败了」，错误态需要它把失败路径显示出来。
+#[tauri::command]
+fn get_asset_root(state: State<'_, AssetRootState>) -> Result<String, String> {
+    state
+        .snapshot()
+        .map(|root| root.to_string_lossy().to_string())
+}
+
+/// 打开原生文件夹选择器，用户选定后持久化并切换根目录。
+///
+/// 路径自始至终没有经过前端：前端只拿到「最终生效的路径字符串」用于展示。
+/// 取消时返回 `Ok(None)`，前端据此不做任何副作用。
+#[tauri::command]
+async fn pick_asset_root(
+    app: tauri::AppHandle,
+    state: State<'_, AssetRootState>,
+) -> Result<Option<String>, String> {
+    let start_dir = state.snapshot()?;
+    let dialog_app = app.clone();
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        // blocking_* 只能在非主线程调：它内部 run_on_main_thread 建对话框，
+        // 再在当前线程 rx.recv() 阻塞。放主线程会死锁。
+        let builder = dialog_app
+            .dialog()
+            .file()
+            .set_title("选择素材库根目录");
+        let builder = if start_dir.is_dir() {
+            builder.set_directory(&start_dir)
+        } else {
+            builder
+        };
+        builder.blocking_pick_folder()
+    })
+    .await
+    .map_err(|err| format!("目录选择失败: {err}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let raw = file_path
+        .into_path()
+        .map_err(|err| format!("无法解析所选目录: {err}"))?;
+    if !raw.is_dir() {
+        return Err("所选路径不是文件夹".into());
+    }
+    // 立刻验证可 canonicalize：不存在 / 无权限时给出明确错误，
+    // 而不是拖到扫描阶段才暴露
+    raw.canonicalize()
+        .map_err(|err| format!("所选目录不可用 ({}): {err}", raw.display()))?;
+
+    // 顺序要紧：先落盘、成功后再改内存 state，
+    // 否则写盘失败会导致「内存新、磁盘旧」，重启后行为跳变
+    persist_asset_root(&app, &raw)?;
+    state.set(raw.clone())?;
+    Ok(Some(raw.to_string_lossy().to_string()))
 }
 
 #[cfg(test)]
@@ -1107,7 +1252,17 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .manage(HttpRequestState::default())
+        .manage(AssetRootState::default())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Some(root) = load_persisted_asset_root(app.handle()) {
+                if let Err(err) = app.state::<AssetRootState>().set(root) {
+                    eprintln!("读取素材库根目录失败: {err}");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_dropped_image,
             fetch_models,
@@ -1116,7 +1271,9 @@ pub fn run() {
             fetch_binary,
             list_asset_library,
             read_asset_file,
-            stat_asset_files
+            stat_asset_files,
+            get_asset_root,
+            pick_asset_root
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

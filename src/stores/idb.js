@@ -34,3 +34,15 @@ export const idbPut = async (dbName, storeName, key, value) => {
     tx.onerror = () => reject(tx.error)
   })
 }
+
+export const idbClear = async (dbName, storeName) => {
+  const db = await openIdb(dbName, storeName)
+  return new Promise((resolve, reject) => {
+    // 必须用 objectStore.clear()，不能用 indexedDB.deleteDatabase：
+    // openIdb 的连接从不 close，deleteDatabase 会被一直阻塞。
+    const tx = db.transaction(storeName, 'readwrite')
+    tx.objectStore(storeName).clear()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}

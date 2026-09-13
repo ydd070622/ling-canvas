@@ -15,10 +15,17 @@ import {
   ASSET_THUMB_URL_LIMIT,
   ASSET_THUMB_VERSION
 } from '../config/assets'
-import { idbGet, idbPut } from '../stores/idb'
+import { idbClear, idbGet, idbPut } from '../stores/idb'
 
 const THUMB_DB = 'ling-canvas-asset-thumbs'
 const THUMB_STORE = 'thumbs'
+
+/**
+ * 换根计数器。任何在途的缩略图任务都在入口捕获它，await 之后比对——
+ * 不一致就丢弃结果、且不落库。没有这道闸门，换根前发出的请求 resolve 时
+ * 会把旧根同名相对路径的 blob 写回刚清空的缓存。
+ */
+let thumbEpoch = 0
 
 export const isTauriRuntime = () => (
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -50,6 +57,12 @@ export const statAssetFiles = relativePaths => call('stat_asset_files', { relati
 
 /** 读取单个素材的字节 */
 export const readAssetFile = relativePath => call('read_asset_file', { relativePath })
+
+/** 配置的原始根目录（未 canonicalize）。扫描失败时错误态要靠它显示失败路径 */
+export const getAssetRoot = () => call('get_asset_root', {})
+
+/** 打开原生目录选择器。用户取消时返回 null，调用方不应做任何副作用 */
+export const pickAssetRoot = () => call('pick_asset_root', {})
 
 export const base64ToBlob = (dataBase64, contentType) => {
   const binary = atob(String(dataBase64 || ''))
@@ -124,17 +137,21 @@ const isSameSource = (cached, entry) => (
  * 替换后会一直显示旧图。已知解不开的文件也会被缓存（failed 标记），避免反复重试。
  */
 export const loadAssetThumb = async (entry) => {
+  const epoch = thumbEpoch
   let cached = null
   try {
     cached = await idbGet(THUMB_DB, THUMB_STORE, entry.relativePath)
   } catch {
     cached = null
   }
+  if (epoch !== thumbEpoch) return null
   if (isSameSource(cached, entry)) {
     return cached.failed ? null : (cached.blob || null)
   }
 
   const result = await makeThumbBlob(entry.relativePath)
+  // 换根了：结果属于旧库，丢弃且不落库
+  if (epoch !== thumbEpoch) return null
   try {
     await idbPut(THUMB_DB, THUMB_STORE, entry.relativePath, {
       blob: result.blob || null,
@@ -159,6 +176,7 @@ export const loadAssetThumb = async (entry) => {
 const thumbUrls = new Map()
 
 export const acquireThumbUrl = async (entry) => {
+  const epoch = thumbEpoch
   const key = entry.relativePath
   const hit = thumbUrls.get(key)
   if (hit) {
@@ -169,7 +187,8 @@ export const acquireThumbUrl = async (entry) => {
   }
 
   const blob = await loadAssetThumb(entry)
-  if (!blob) return ''
+  // 换根了：不要把旧 URL 塞进新库的 LRU
+  if (!blob || epoch !== thumbEpoch) return ''
 
   const url = URL.createObjectURL(blob)
   thumbUrls.set(key, url)
@@ -179,6 +198,22 @@ export const acquireThumbUrl = async (entry) => {
     thumbUrls.delete(oldest)
   }
   return url
+}
+
+/**
+ * 换根时调用：作废全部在途任务、撤掉所有 objectURL、清空 IDB 缩略图库。
+ *
+ * 顺序要紧：先递增 epoch，让在途任务的结果全部作废，再清 LRU 与 IDB。
+ */
+export const resetAssetThumbCache = async () => {
+  thumbEpoch += 1
+  for (const url of thumbUrls.values()) URL.revokeObjectURL(url)
+  thumbUrls.clear()
+  try {
+    await idbClear(THUMB_DB, THUMB_STORE)
+  } catch {
+    // 清缓存失败不该阻断换根；epoch 已经递增，旧图不会再被采用
+  }
 }
 
 export { ASSET_THUMB_CONCURRENCY }
