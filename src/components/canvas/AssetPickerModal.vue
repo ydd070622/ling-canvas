@@ -8,10 +8,12 @@
  * Tauri 的原生 onDragDropEvent 只认操作系统级的文件拖拽，页面内拖拽进不去。
  * 所以正确形态是「画布内弹窗选图」。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NModal } from 'naive-ui'
 import AssetThumb from '../assets/AssetThumb.vue'
 import { ASSET_PAGE_BATCH } from '../../config/assets'
+import { acquirePreviewUrl } from '../../services/assetLibrary'
+import { usePreviewImageSizing } from '../../composables/usePreviewImageSizing'
 import {
   assetError,
   assetEpoch,
@@ -53,6 +55,8 @@ watch(() => props.show, value => {
   if (!value) {
     selectedPaths.value = []
     query.value = ''
+    // 关掉选择器就不要再留一张浮在外面的大图
+    closePreview()
     return
   }
   // 每次打开都重扫：用户很可能刚在资源管理器里拖了几张图进来。
@@ -65,6 +69,44 @@ const toggle = (entry) => {
   if (index === -1) selectedPaths.value.push(entry.relativePath)
   else selectedPaths.value.splice(index, 1)
 }
+
+// ---------------------------------------------------------------- 放大查看
+// 与选中完全解耦：点眼睛只看不选，点瓦片只选不看。
+const previewEntry = ref(null)
+const previewUrl = ref('')
+const previewError = ref('')
+const { previewModalStyle, previewImageRef, onPreviewImageLoad, resetPreviewSize } =
+  usePreviewImageSizing()
+
+const openPreview = async (entry) => {
+  previewEntry.value = entry
+  previewUrl.value = ''
+  previewError.value = ''
+  resetPreviewSize()
+  try {
+    const url = await acquirePreviewUrl(entry.relativePath)
+    // 用户可能在读取期间又点了别的图，或者已经把预览关掉了
+    if (previewEntry.value?.relativePath !== entry.relativePath) return
+    previewUrl.value = url
+    if (!url) previewError.value = '素材读取失败'
+  } catch (error) {
+    if (previewEntry.value?.relativePath !== entry.relativePath) return
+    previewError.value = error?.message || '素材读取失败'
+  }
+}
+
+/**
+ * 只清状态，**不要 revokeObjectURL** —— URL 归 assetLibrary 的预览 LRU 所有，
+ * 在这里撤掉会把缓存里的 URL 变成死链，同一张图第二次点开就是碎图。
+ */
+const closePreview = () => {
+  previewEntry.value = null
+  previewUrl.value = ''
+  previewError.value = ''
+  resetPreviewSize()
+}
+
+onBeforeUnmount(closePreview)
 
 const confirm = () => {
   const picked = matched.value.filter(entry => selectedPaths.value.includes(entry.relativePath))
@@ -132,7 +174,9 @@ const confirm = () => {
           :key="`${assetEpoch}:${entry.relativePath}`"
           :entry="entry"
           :selected="selectedPaths.includes(entry.relativePath)"
+          show-preview-button
           @open="toggle"
+          @preview="openPreview"
         />
       </div>
       <button
@@ -155,6 +199,33 @@ const confirm = () => {
           </n-button>
         </div>
       </div>
+    </template>
+  </n-modal>
+
+  <!-- 放大查看 | Enlarged preview
+       与素材库页共用 usePreviewImageSizing，两处的大图尺寸一致 -->
+  <n-modal
+    :show="!!previewEntry"
+    preset="card"
+    class="asset-preview"
+    :style="previewModalStyle"
+    :title="previewEntry?.name || ''"
+    :bordered="false"
+    @update:show="value => { if (!value) closePreview() }"
+  >
+    <div class="asset-preview__body">
+      <img
+        v-if="previewUrl"
+        ref="previewImageRef"
+        :src="previewUrl"
+        :alt="previewEntry?.name || ''"
+        @load="onPreviewImageLoad"
+      />
+      <span v-else-if="previewError" class="asset-preview__error">{{ previewError }}</span>
+      <span v-else class="asset-preview__loading">读取中…</span>
+    </div>
+    <template #footer>
+      <span class="asset-preview__path">{{ previewEntry?.relativePath }}</span>
     </template>
   </n-modal>
 </template>
@@ -216,4 +287,11 @@ const confirm = () => {
 
 .asset-picker__footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .asset-picker__actions { display: flex; gap: 8px; }
+
+/* 与素材库页的同名样式一致：外框尺寸由图片比例决定，不留 min-height */
+.asset-preview__body { display: flex; align-items: center; justify-content: center; }
+.asset-preview__body img { display: block; width: 100%; height: auto; border-radius: 8px; }
+.asset-preview__error { color: #ef4444; font-size: 13px; }
+.asset-preview__loading { color: #94a3b8; font-size: 13px; }
+.asset-preview__path { color: #9aa6b7; font-size: 12px; word-break: break-all; }
 </style>

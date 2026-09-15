@@ -9,6 +9,7 @@
  * asset 协议（convertFileSrc），只需要改 resolveAssetUrl 一处。
  */
 import {
+  ASSET_PREVIEW_URL_LIMIT,
   ASSET_THUMB_CONCURRENCY,
   ASSET_THUMB_MAX_EDGE,
   ASSET_THUMB_QUALITY,
@@ -201,6 +202,46 @@ export const acquireThumbUrl = async (entry) => {
 }
 
 /**
+ * 预览大图 blob URL 的 LRU。
+ *
+ * 与上面的缩略图池**分开**：尺寸语义差一个数量级，共用一个池会让几张原图
+ * 挤掉几百张缩略图。上限也小得多——预览是显式动作（点一下眼睛看一张），
+ * 要覆盖的只是「反复看同一张」。
+ *
+ * 与 resolveAssetUrl 的契约差别：**URL 的所有权在这个 LRU，不在调用方**。
+ * 调用方不要 revokeObjectURL——那会把缓存里的 URL 撤成死链，
+ * 下次点同一张只会得到一张碎图。
+ */
+const previewUrls = new Map()
+
+export const acquirePreviewUrl = async (relativePath) => {
+  const epoch = thumbEpoch
+  const key = relativePath
+  const hit = previewUrls.get(key)
+  if (hit) {
+    // 重新插入以刷新 LRU 顺序
+    previewUrls.delete(key)
+    previewUrls.set(key, hit)
+    return hit
+  }
+
+  const url = await resolveAssetUrl(key)
+  // 换根了：这张属于旧库，撤掉且不缓存
+  if (epoch !== thumbEpoch) {
+    URL.revokeObjectURL(url)
+    return ''
+  }
+
+  previewUrls.set(key, url)
+  while (previewUrls.size > ASSET_PREVIEW_URL_LIMIT) {
+    const oldest = previewUrls.keys().next().value
+    URL.revokeObjectURL(previewUrls.get(oldest))
+    previewUrls.delete(oldest)
+  }
+  return url
+}
+
+/**
  * 换根时调用：作废全部在途任务、撤掉所有 objectURL、清空 IDB 缩略图库。
  *
  * 顺序要紧：先递增 epoch，让在途任务的结果全部作废，再清 LRU 与 IDB。
@@ -209,6 +250,8 @@ export const resetAssetThumbCache = async () => {
   thumbEpoch += 1
   for (const url of thumbUrls.values()) URL.revokeObjectURL(url)
   thumbUrls.clear()
+  for (const url of previewUrls.values()) URL.revokeObjectURL(url)
+  previewUrls.clear()
   try {
     await idbClear(THUMB_DB, THUMB_STORE)
   } catch {

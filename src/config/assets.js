@@ -23,6 +23,15 @@ export const ASSET_THUMB_VERSION = 1
 export const ASSET_THUMB_URL_LIMIT = 300
 
 /**
+ * 预览大图 blob URL 的 LRU 上限。
+ *
+ * 与缩略图分开计数：这里是**原图**尺寸，混进同一个池会让几张原图
+ * 就把几百张缩略图挤出去，网格会开始重下重画。
+ * 取小值即可——预览是显式动作，只需覆盖「反复看同一张」和「来回对比两三张」。
+ */
+export const ASSET_PREVIEW_URL_LIMIT = 8
+
+/**
  * 网格分批渲染的批量。
  * 每个瓦片自带一个 IntersectionObserver，一次为几百张建观察器太浪费。
  */

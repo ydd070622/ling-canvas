@@ -8,13 +8,24 @@
  * 也靠 assetLibrary 里的并发闸门。
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { NIcon } from 'naive-ui'
+import { EyeOutline } from '@vicons/ionicons5'
 import { acquireThumbUrl } from '../../services/assetLibrary'
 
 const props = defineProps({
   entry: { type: Object, required: true },
-  selected: { type: Boolean, default: false }
+  selected: { type: Boolean, default: false },
+  /**
+   * 是否显示「放大查看」按钮。
+   *
+   * 画布内的选图弹窗要开：那里单击是**选中**，看和选必须分成两个动作。
+   * 素材库页不要：那边单击本来就是打开大图，再挂一个按钮只是把同一件事
+   * 说两遍，而且那个按钮还会因为没人接 `preview` 事件变成一个哑按钮。
+   */
+  showPreviewButton: { type: Boolean, default: false }
 })
-const emit = defineEmits(['open'])
+// open = 单击选中（插进画布走这条），preview = 点眼睛放大查看，两者互不干扰
+const emit = defineEmits(['open', 'preview'])
 
 const root = ref(null)
 const thumbUrl = ref('')
@@ -58,18 +69,36 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button
+  <!-- 根节点是 div 而不是 button：眼睛按钮要放在里面，而 button 套 button
+       是非法 HTML，浏览器会把 DOM 重排掉。role + tabindex 补回按钮语义。 -->
+  <div
     ref="root"
-    type="button"
     class="asset-thumb"
     :class="{ 'asset-thumb--selected': selected }"
     :title="entry.relativePath"
+    role="button"
+    tabindex="0"
     @click="emit('open', entry)"
+    @keydown.enter.prevent="emit('open', entry)"
+    @keydown.space.prevent="emit('open', entry)"
   >
     <img v-if="thumbUrl" class="asset-thumb__img" :src="thumbUrl" :alt="entry.name" />
     <span v-else-if="state === 'failed'" class="asset-thumb__failed">无法预览</span>
     <span v-else class="asset-thumb__skeleton" />
-  </button>
+
+    <!-- 放大查看。必须 stop，否则会连带切换选中态——这个按钮的全部意义
+         就是「看」和「选」分开。 -->
+    <button
+      v-if="showPreviewButton"
+      type="button"
+      class="asset-thumb__zoom"
+      title="放大查看"
+      aria-label="放大查看"
+      @click.stop="emit('preview', entry)"
+    >
+      <n-icon :size="16"><EyeOutline /></n-icon>
+    </button>
+  </div>
 </template>
 
 <style scoped>
@@ -92,6 +121,28 @@ onBeforeUnmount(() => {
 }
 
 .asset-thumb__img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 放大查看。默认不仅透明，而且 pointer-events: none——
+   只藏 opacity 的话右上角会留一块看不见的点击区，
+   用户想选中却点到那儿，会意外开出大图而不是切换选中。 */
+.asset-thumb__zoom {
+  position: absolute; top: 4px; right: 4px; z-index: 2;
+  display: grid; place-items: center;
+  /* 图标视觉 16px，但命中区撑到 30px：素材库里全是密集小图，点不准就白做了 */
+  width: 30px; height: 30px; padding: 0;
+  border: none; border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff; cursor: pointer;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.asset-thumb:hover .asset-thumb__zoom,
+.asset-thumb:focus-within .asset-thumb__zoom,
+.asset-thumb__zoom:focus-visible {
+  opacity: 1; pointer-events: auto;
+}
+.asset-thumb__zoom:hover { background: rgba(15, 23, 42, 0.8); }
+.asset-thumb__zoom:focus-visible { outline: 2px solid var(--accent-color, #22c55e); outline-offset: 1px; }
 
 /* 骨架屏：避免网格在缩略图陆续生成时不停跳动 */
 .asset-thumb__skeleton {
@@ -118,5 +169,6 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .asset-thumb__skeleton { animation: none; }
   .asset-thumb:hover { transform: none; }
+  .asset-thumb__zoom { transition: none; }
 }
 </style>

@@ -12,7 +12,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NModal, useDialog } from 'naive-ui'
 import AssetThumb from './AssetThumb.vue'
 import { ASSET_PAGE_BATCH } from '../../config/assets'
-import { resolveAssetUrl } from '../../services/assetLibrary'
+import { acquirePreviewUrl } from '../../services/assetLibrary'
+import { usePreviewImageSizing } from '../../composables/usePreviewImageSizing'
 import {
   assetError,
   assetEpoch,
@@ -41,48 +42,11 @@ const sentinel = ref(null)
 const previewEntry = ref(null)
 const previewUrl = ref('')
 const previewError = ref('')
-/** 预览图按原图比例算出的显示尺寸；null = 还没加载出来 */
-const previewSize = ref(null)
-const previewImageRef = ref(null)
 let sentinelObserver = null
 
-/** 卡片左右内边距合计（App.vue 的 Card override 是 24px 一侧） */
-const PREVIEW_PADDING_X = 48
-/** 卡片上下除图片以外的开销：标题栏 + 底部路径 + 上下内边距 */
-const PREVIEW_CHROME_Y = 132
-/** 再大的原图也不放到这个宽度以上，否则一张图占满整个屏幕 */
-const PREVIEW_MAX_IMAGE_WIDTH = 1600
-
-/**
- * 外框宽度 = 图片显示宽度 + 左右内边距。
- * 之前直接用图片宽度当卡片宽度，图片只占内容区，于是两侧各空出 24px，
- * 看起来像"外框比图片大一圈"。
- */
-const previewModalStyle = computed(() => (
-  previewSize.value
-    ? { width: `${previewSize.value.width + PREVIEW_PADDING_X}px`, maxWidth: '94vw' }
-    : { width: '380px' }
-))
-
-const measurePreviewImage = (image) => {
-  if (!image?.naturalWidth) return
-  // 卡片自身也要留在视口内：可用高度要扣掉标题和底部路径
-  const maxImageWidth = Math.min(
-    window.innerWidth * 0.94 - PREVIEW_PADDING_X,
-    PREVIEW_MAX_IMAGE_WIDTH
-  )
-  const maxImageHeight = window.innerHeight * 0.9 - PREVIEW_CHROME_Y
-  const scale = Math.min(1, maxImageWidth / image.naturalWidth, maxImageHeight / image.naturalHeight)
-  previewSize.value = {
-    width: Math.max(120, Math.round(image.naturalWidth * scale)),
-    height: Math.max(80, Math.round(image.naturalHeight * scale))
-  }
-}
-
-const onPreviewImageLoad = (event) => measurePreviewImage(event.target)
-
-// 全屏 / 改窗口尺寸后按新视口重算，否则外框会一直停在打开那一刻的尺寸
-const onWindowResize = () => measurePreviewImage(previewImageRef.value)
+/** 尺寸算法与画布内的选图弹窗共用，保证同一个文件在两处显示成一样大 */
+const { previewModalStyle, previewImageRef, onPreviewImageLoad, resetPreviewSize } =
+  usePreviewImageSizing()
 
 const query = computed(() => uiStore.searchQuery.trim().toLowerCase())
 
@@ -107,26 +71,28 @@ const openPreview = async (entry) => {
   previewEntry.value = entry
   previewUrl.value = ''
   previewError.value = ''
-  previewSize.value = null
+  resetPreviewSize()
   try {
-    const url = await resolveAssetUrl(entry.relativePath)
+    const url = await acquirePreviewUrl(entry.relativePath)
     // 用户可能在等待期间又点了别的图
-    if (previewEntry.value?.relativePath !== entry.relativePath) {
-      URL.revokeObjectURL(url)
-      return
-    }
+    if (previewEntry.value?.relativePath !== entry.relativePath) return
     previewUrl.value = url
+    if (!url) previewError.value = '素材读取失败'
   } catch (error) {
+    if (previewEntry.value?.relativePath !== entry.relativePath) return
     previewError.value = error?.message || '素材读取失败'
   }
 }
 
+/**
+ * 只清状态，**不要 revokeObjectURL** —— URL 归 assetLibrary 的预览 LRU 所有，
+ * 在这里撤掉会把缓存里的 URL 变成死链，同一张图第二次点开就是碎图。
+ */
 const closePreview = () => {
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  previewEntry.value = null
   previewUrl.value = ''
   previewError.value = ''
-  previewEntry.value = null
-  previewSize.value = null
+  resetPreviewSize()
 }
 
 const runChangeRoot = async () => {
@@ -159,7 +125,6 @@ const onChangeRoot = () => {
 
 onMounted(() => {
   loadAssetLibrary()
-  window.addEventListener('resize', onWindowResize)
   sentinelObserver = new IntersectionObserver(entries => {
     if (entries.some(item => item.isIntersecting)) {
       visibleCount.value += ASSET_PAGE_BATCH
@@ -169,9 +134,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', onWindowResize)
   sentinelObserver?.disconnect()
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
 })
 </script>
 
