@@ -406,11 +406,11 @@ import {
   DocumentTextOutline,
   SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode } from '../stores/canvas'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, propagateStale, setNodeMedia, cutEdge } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
-import { getConnectionSemantics, isContentNodeType, validateCanvasConnection } from '../config/nodeRegistry'
+import { isContentNodeType, validateCanvasConnection, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES } from '../config/nodeRegistry'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
 let handleBeforeUnload = null
@@ -888,8 +888,8 @@ const handleAddWorkflow = ({ workflow, options }) => {
   const edgeSpecs = newEdges.map(edge => ({
     source: idMap[edge.source] || edge.source,
     target: idMap[edge.target] || edge.target,
-    sourceHandle: edge.sourceHandle || 'right',
-    targetHandle: edge.targetHandle || 'left',
+    sourceHandle: OUTPUT_HANDLE,
+    targetHandle: INPUT_HANDLE,
     type: edge.type,
     data: edge.data
   }))
@@ -914,7 +914,8 @@ const handleAddWorkflow = ({ workflow, options }) => {
 // ===== Flow 连线系统：语义标签 + 类型校验 + 快速新建 =====
 // Flow connection system: semantic labels + type validation + quick add
 
-const FLOW_NODE_TYPES = ['text', 'image', 'video']
+// 内容节点类型：只有这些会走「展开 / 连通性重算」
+
 
 // 连接合法性校验 | Connection validity check
 const isValidConnection = (connection) => {
@@ -925,23 +926,28 @@ const isValidConnection = (connection) => {
 const showQuickAdd = ref(false)
 const quickAddState = ref({ flowX: 0, flowY: 0, screenX: 0, screenY: 0, source: null, sourceHandle: null })
 
-const QUICK_ADD_TARGETS = {
-  text: [
-    { type: 'image', name: '图片', desc: '提示词 → 生图' },
-    { type: 'video', name: '视频', desc: '描述 → 生视频' },
-    { type: 'text', name: '文本', desc: '引用 → 改写' }
-  ],
-  image: [
-    { type: 'text', name: '文本', desc: '图片 → 视觉理解' },
-    { type: 'image', name: '图片', desc: '参考图 → 重绘' },
-    { type: 'video', name: '视频', desc: '作为首帧' }
-  ],
-  video: []
+const QUICK_ADD_DESC = {
+  text: '作为提示词 / 上下文',
+  image: '作为参考图或首帧',
+  video: '作为参考视频'
 }
 
+/**
+ * 拖线到空白后能新建哪些节点，取决于「目标类型是否存在能接收该来源的模式」。
+ * 选中后新节点会直接落在那个模式上，避免建出来才发现连不上。
+ */
 const quickAddOptions = computed(() => {
   const sourceNode = nodes.value.find(n => n.id === quickAddState.value.source)
-  return sourceNode ? (QUICK_ADD_TARGETS[sourceNode.type] || []) : []
+  if (!sourceNode) return []
+  return ['text', 'image', 'video']
+    .map(type => ({ type, mode: findModeAccepting(type, sourceNode.type) }))
+    .filter(item => item.mode)
+    .map(item => ({
+      type: item.type,
+      mode: item.mode,
+      name: nodeTypeLabels[item.type] || item.type,
+      desc: QUICK_ADD_DESC[item.type]
+    }))
 })
 
 const onConnectEnd = (params) => {
@@ -1000,38 +1006,29 @@ const handleQuickAdd = (opt) => {
     return
   }
 
-  // 目标槽位：图片→视频默认首帧，其余→视频默认描述槽，其他节点用左输入
-  const targetHandle = opt.type === 'video'
-    ? (sourceNode.type === 'image' ? 'first-frame' : 'prompt')
-    : 'left'
-
-  const nodeId = addNode(opt.type, { x: quickAddState.value.flowX - 100, y: quickAddState.value.flowY - 150 }, { expanded: true })
+  // 新节点直接落在「能接收该来源」的模式上
+  const nodeId = addNode(opt.type, { x: quickAddState.value.flowX - 196, y: quickAddState.value.flowY - 120 },
+    { expanded: true, mode: opt.mode })
   nodes.value = nodes.value.map(node => ({
     ...node,
     selected: node.id === nodeId,
     data: { ...node.data, expanded: node.id === nodeId }
   }))
 
-  const validation = validateCanvasConnection({
-    source: sourceNode.id,
-    target: nodeId,
-    sourceHandle: quickAddState.value.sourceHandle || 'right',
-    targetHandle
-  }, nodes.value, edges.value)
+  const validation = validateCanvasConnection({ source: sourceNode.id, target: nodeId }, nodes.value, edges.value)
   if (!validation.valid) {
     removeNode(nodeId)
     showQuickAdd.value = false
     window.$message?.warning(validation.reason)
     return
   }
-  const semantics = validation.semantics || getConnectionSemantics(sourceNode.type, opt.type, targetHandle)
   addEdge({
     source: sourceNode.id,
     target: nodeId,
-    sourceHandle: quickAddState.value.sourceHandle || 'right',
-    targetHandle,
+    sourceHandle: OUTPUT_HANDLE,
+    targetHandle: INPUT_HANDLE,
     type: 'flowEdge',
-    data: { label: semantics?.label || '', color: semantics?.color || '#e8912e', order: 1 }
+    data: { order: 1 }
   })
 
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
@@ -1042,28 +1039,25 @@ const handleQuickAdd = (opt) => {
 }
 
 // Handle connection | 处理连接
+// 单一输入口：边不再分槽，顺序（data.order）就是正文里的引用编号顺序。
 const onConnect = (params) => {
-  const sourceNode = nodes.value.find(n => n.id === params.source)
-  const targetNode = nodes.value.find(n => n.id === params.target)
   const validation = validateCanvasConnection(params, nodes.value, edges.value)
   if (!validation.valid) {
     window.$message?.warning(validation.reason)
     return
   }
 
-  const semantics = validation.semantics || getConnectionSemantics(sourceNode.type, targetNode.type, params.targetHandle)
-  const sameTargetHandleCount = edges.value.filter(edge =>
-    edge.target === params.target && (edge.targetHandle || 'left') === (params.targetHandle || 'left')
-  ).length
+  const nextOrder = Math.max(0, ...inEdges(params.target).map(edge => Number(edge.data?.order) || 0)) + 1
   addEdge({
-    ...params,
+    source: params.source,
+    target: params.target,
+    sourceHandle: OUTPUT_HANDLE,
+    targetHandle: INPUT_HANDLE,
     type: 'flowEdge',
-    data: {
-      label: semantics?.label || '',
-      color: semantics?.color || '#e8912e',
-      order: sameTargetHandleCount + 1
-    }
+    data: { order: nextOrder }
   })
+  // 目标节点的入边变了 → 它和它的下游都该重跑
+  propagateStale(params.target)
 }
 const onNodeClick = (event) => {
   const clickedId = event.node.id
@@ -1079,7 +1073,7 @@ const onNodeClick = (event) => {
   // 展开/收缩后刷新节点几何，保证端口与边位置正确 | Refresh bounds after expand/collapse
   nextTick(() => {
     nodes.value.forEach(node => {
-      if (FLOW_NODE_TYPES.includes(node.type)) updateNodeInternals(node.id)
+      if (isContentNodeType(node.type)) updateNodeInternals(node.id)
     })
   })
 }
@@ -1096,33 +1090,36 @@ const handleNodeDragStop = () => {
 }
 
 // Handle edges change | 处理边变化
+// 边被删掉之后已经查不到它的目标了，所以平时就要记下 EdgeID → 目标节点。
+const edgeTargets = new Map()
+watch(edges, (list) => { list.forEach(edge => edgeTargets.set(edge.id, edge.target)) }, { immediate: true })
+
 const onEdgesChange = (changes) => {
-  // Check if any edge is being removed | 检查是否有边被删除
-  const hasRemoval = changes.some(change => change.type === 'remove')
-  
-  if (hasRemoval) {
-    // Trigger history save after edge removal | 边删除后触发历史保存
-    nextTick(() => {
-      normalizeEdgeOrders()
-      manualSaveHistory()
+  const removals = changes.filter(change => change.type === 'remove')
+  if (!removals.length) return
+
+  // 被删的边可能带着引用绑定：目标节点要重排编号、正文里的 token 也要同步改写
+  const affected = [...new Set(removals.map(change => edgeTargets.get(change.id)).filter(Boolean))]
+  nextTick(() => {
+    normalizeEdgeOrders()
+    affected.forEach((targetId) => {
+      if (!nodes.value.some(node => node.id === targetId)) return
+      renumberNodeRefs(targetId)
+      propagateStale(targetId)
     })
-  }
+    manualSaveHistory()
+  })
 }
 
 // Handle pane click | 处理画布点击
+// 只取消选中，**不再折叠所有节点** —— 收起之后端口虽然还能连，
+// 但每次点空白都把所有卡片收掉会让人没法工作。收起只由卡片按钮或顶栏命令触发。
 const onPaneClick = () => {
   showNodeMenu.value = false
   showQuickAdd.value = false
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    selected: false,
-    data: { ...node.data, expanded: false }
-  }))
-  nextTick(() => {
-    nodes.value.forEach(node => {
-      if (FLOW_NODE_TYPES.includes(node.type)) updateNodeInternals(node.id)
-    })
-  })
+  if (nodes.value.some(node => node.selected)) {
+    nodes.value = nodes.value.map(node => ({ ...node, selected: false }))
+  }
 }
 
 const onCanvasDoubleClick = (event) => {
@@ -1332,10 +1329,10 @@ const sendMessage = async () => {
         addEdge({
           source: textNodeId,
           target: imageNodeId,
-          sourceHandle: 'right',
-          targetHandle: 'left',
+          sourceHandle: OUTPUT_HANDLE,
+          targetHandle: INPUT_HANDLE,
           type: 'flowEdge',
-          data: { label: '提示词', color: '#e8912e', order: 1 }
+          data: { order: 1 }
         })
       }
 
@@ -1349,10 +1346,10 @@ const sendMessage = async () => {
         addEdge({
           source: referenceNodeId,
           target: imageNodeId,
-          sourceHandle: 'right',
-          targetHandle: 'left',
+          sourceHandle: OUTPUT_HANDLE,
+          targetHandle: INPUT_HANDLE,
           type: 'flowEdge',
-          data: { label: '参考图', color: '#4c8bf5', order: index + 1 }
+          data: { order: index + 1 }
         })
       })
       homepageReferenceImages.value = []
@@ -1409,6 +1406,7 @@ onMounted(async () => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
+  window.addEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
   document.addEventListener('dblclick', onCanvasDoubleClick, true)
 
   // Save before window/tab close | 窗口/标签页关闭前保存
@@ -1482,11 +1480,14 @@ let canvasDragDropUnlisten = null
 // Tauri native drag-drop handler | Tauri 原生拖拽处理
 // 使用 Tauri 原生 API 处理 OS 文件拖拽，比 HTML5 drag-drop 在 WebView2 中更可靠
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif']
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v']
 
 const isImageFile = (filePath) => {
   const ext = filePath.split('.').pop()?.toLowerCase() || ''
   return IMAGE_EXTENSIONS.includes(ext)
 }
+const isVideoPath = (filePath) => VIDEO_EXTENSIONS.includes(filePath.split('.').pop()?.toLowerCase() || '')
+const isMediaPath = (filePath) => isImageFile(filePath) || isVideoPath(filePath)
 
 /** 图片节点建好后的共同收尾：置顶 + 通知 Vue Flow 重算内部尺寸 */
 const stampImageNode = (nodeId) => {
@@ -1508,6 +1509,7 @@ const showAssetPicker = ref(false)
 
 const openAssetPicker = () => {
   showNodeMenu.value = false
+  assetTargetNodeId.value = ''
   showAssetPicker.value = true
 }
 
@@ -1529,7 +1531,31 @@ const addAssetNode = ({ relativePath, name, position }) => {
   return nodeId
 }
 
+/** 把素材就地引到已有节点上（同样是纯引用式：只写 assetRef） */
+const fillNodeWithAsset = (nodeId, item) => {
+  const node = nodes.value.find(n => n.id === nodeId)
+  if (!node || node.type !== 'image') return false
+  updateNode(nodeId, {
+    assetRef: item.relativePath,
+    label: item.name || '素材图片',
+    fileName: item.name || '素材图片',
+    url: ''
+  })
+  hydrateSingleAssetNode(nodeId).catch(() => {})
+  return true
+}
+
 const handleAssetPick = (items) => {
+  // 从节点里的「素材库」按钮打开时，目标就是那个节点，不再新建
+  const targetId = assetTargetNodeId.value
+  assetTargetNodeId.value = ''
+  if (targetId && fillNodeWithAsset(targetId, items[0])) {
+    saveProject()
+    showAssetPicker.value = false
+    window.$message?.success(`已把素材插入「${nodes.value.find(n => n.id === targetId)?.data?.label || '图片'}」`)
+    return
+  }
+
   const center = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
   items.forEach((item, index) => {
     addAssetNode({
@@ -1563,29 +1589,34 @@ const handleTauriDragDrop = async (event) => {
       isDragOverCanvas.value = false
       const filePaths = payload.paths || []
       console.log('[DragDrop] Tauri drop, paths:', filePaths)
-      const imagePaths = filePaths.filter(isImageFile)
+      const imagePaths = filePaths.filter(isMediaPath)
       if (!imagePaths.length) {
-        console.log('[DragDrop] No image files found in dropped paths')
+        console.log('[DragDrop] No media files found in dropped paths')
         return
       }
 
+      // Tauri returns physical pixels; Vue Flow expects CSS pixels | Tauri 返回物理像素，画布使用 CSS 像素
+      const dpr = window.devicePixelRatio || 1
+      const clientX = payload.position.x / dpr
+      const clientY = payload.position.y / dpr
+      const droppedOnNode = nodeIdAtPoint(clientX, clientY)
+
       for (const [index, filePath] of imagePaths.entries()) {
         try {
-          // Tauri returns physical pixels; Vue Flow expects CSS pixels | Tauri 返回物理像素，画布使用 CSS 像素
-          const canvasPosition = screenToFlowCoordinate({
-            x: payload.position.x / window.devicePixelRatio + index * 40,
-            y: payload.position.y / window.devicePixelRatio + index * 40
-          })
           // Copy into project storage so the node does not depend on the source path | 复制进项目存储，不依赖原文件路径
           const image = await invoke('read_dropped_image', { path: filePath })
-          addDroppedImageNode({
+          const isVideo = /\.(mp4|webm|mov|m4v)$/i.test(filePath)
+          const pseudoFile = { type: isVideo ? 'video/mp4' : 'image/png', name: `${image.fileName}` }
+          // 落在节点上就地填充；落在空白处新建
+          if (index === 0 && droppedOnNode && fillNodeWithFile(droppedOnNode, pseudoFile, image.dataUrl)) continue
+          addMediaNode({
+            file: pseudoFile,
             dataUrl: image.dataUrl,
-            fileName: image.fileName,
-            position: canvasPosition
+            position: screenToFlowCoordinate({ x: clientX + index * 40, y: clientY + index * 40 })
           })
         } catch (err) {
-          console.error('[DragDrop] Failed to import image:', filePath, err)
-          window.$message?.error(`图片导入失败：${String(err)}`)
+          console.error('[DragDrop] Failed to import file:', filePath, err)
+          window.$message?.error(`文件导入失败：${String(err)}`)
         }
       }
       // Save project after drop | 拖拽完成后保存项目
@@ -1629,51 +1660,79 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file)
 })
 
+/* ===== 素材入口：拖文件进画布 / 落到节点上 / 素材库 ===== */
+
+/** 落点下面是哪个节点（没有则返回空） */
+const nodeIdAtPoint = (clientX, clientY) =>
+  document.elementFromPoint(clientX, clientY)?.closest?.('.vue-flow__node')?.dataset?.id || null
+
+const isMediaFile = (file) => file.type.startsWith('image/') || file.type.startsWith('video/') ||
+  IMAGE_EXTENSIONS.includes(file.name.split('.').pop()?.toLowerCase() || '')
+
+/** 把文件就地填进某个节点；返回 true 表示已处理（含明确拒绝） */
+const fillNodeWithFile = (nodeId, file, dataUrl) => {
+  const node = nodes.value.find(item => item.id === nodeId)
+  if (!node || !isContentNodeType(node.type)) return false
+  const want = file.type.startsWith('video/') ? 'video' : 'image'
+  if (node.type === 'text') {
+    window.$message?.warning('文本节点放不了图片或视频，拖到空白处可以新建节点')
+    return true
+  }
+  if (node.type !== want) {
+    window.$message?.warning(
+      `「${node.data?.label || nodeTypeLabels[node.type]}」是${nodeTypeLabels[node.type]}节点，放不了${want === 'video' ? '视频' : '图片'}`
+    )
+    return true
+  }
+  setNodeMedia(nodeId, { url: dataUrl, base64: dataUrl, fileName: file.name.replace(/\.[^.]+$/, '') })
+  return true
+}
+
+/** 拖到空白处：按文件类型新建节点 */
+const addMediaNode = ({ file, dataUrl, position }) => {
+  const isVideo = file.type.startsWith('video/')
+  const name = file.name.replace(/\.[^.]+$/, '') || (isVideo ? '拖入视频' : '拖入图片')
+  const nodeId = stampImageNode(addNode(isVideo ? 'video' : 'image', position, { label: name }))
+  setNodeMedia(nodeId, { url: dataUrl, base64: dataUrl, fileName: name })
+  return nodeId
+}
+
 const onDrop = async (event) => {
   isDragOverCanvas.value = false
-  console.log('[DragDrop] HTML5 drop event, types:', event.dataTransfer?.types)
-  const files = event.dataTransfer?.files
-  if (!files || files.length === 0) {
-    console.log('[DragDrop] HTML5 drop: no files')
-    return
-  }
-  console.log('[DragDrop] HTML5 drop, files:', files.length)
+  const files = Array.from(event.dataTransfer?.files || []).filter(isMediaFile)
+  if (!files.length) return
 
-  const imageFiles = Array.from(files).filter(f => {
-    const ext = f.name.split('.').pop()?.toLowerCase() || ''
-    return f.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)
-  })
-  if (!imageFiles.length) {
-    console.log('[DragDrop] HTML5 drop: no image files')
-    return
-  }
-
-  for (const [index, file] of imageFiles.entries()) {
+  const droppedOnNode = nodeIdAtPoint(event.clientX, event.clientY)
+  for (const [index, file] of files.entries()) {
     try {
       const dataUrl = await fileToDataUrl(file)
-      const canvasPosition = screenToFlowCoordinate({
+      // 落在节点上就地填充；落在空白处建新节点（多文件时第一个落节点、其余各自建节点）
+      if (index === 0 && droppedOnNode && fillNodeWithFile(droppedOnNode, file, dataUrl)) continue
+      addMediaNode({ file, dataUrl, position: screenToFlowCoordinate({
         x: event.clientX + index * 40,
         y: event.clientY + index * 40
-      })
-      const fileName = file.name.replace(/\.[^.]+$/, '')
-      addDroppedImageNode({
-        dataUrl,
-        fileName,
-        position: canvasPosition
-      })
+      }) })
     } catch (err) {
-      console.error('[DragDrop] HTML5 image import failed:', file.name, err)
-      window.$message?.error(`图片导入失败：${file.name}`)
+      console.error('[DragDrop] 导入失败:', file.name, err)
+      window.$message?.error(`导入失败：${file.name}`)
     }
   }
   // FileReader is asynchronous, so save only after every node exists | 全部节点创建后再保存
   saveProject()
 }
 
+/* 节点内「素材库」按钮 → 定向插入到那个节点 */
+const assetTargetNodeId = ref('')
+const onOpenAssetPicker = (event) => {
+  assetTargetNodeId.value = event.detail?.nodeId || ''
+  showAssetPicker.value = true
+}
+
 // Cleanup on unmount | 卸载时清理
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
+  window.removeEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
 
   // Clean up beforeunload listener | 清理窗口关闭前保存监听器

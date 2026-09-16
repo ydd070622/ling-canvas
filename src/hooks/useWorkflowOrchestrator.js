@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 import { streamChatCompletions } from '@/api'
 import { addEdge, addNode, nodes, startBatchOperation, endBatchOperation, updateNode } from '@/stores/canvas'
-import { getConnectionSemantics } from '@/config/nodeRegistry'
+import { getModeDef, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE } from '@/config/nodeRegistry'
 
 const WORKFLOW_TYPES = Object.freeze({
   TEXT_TO_IMAGE: 'text_to_image',
@@ -23,16 +23,25 @@ const INTENT_ANALYSIS_PROMPT = `你是 AI 创作画布的工作流规划器。�
 返回可能字段：image_prompt、video_prompt、character、shots、multi_angle、picture_book、description。
 shots 为 [{title,prompt}]。当信息不足时选择 text_to_image，并保留用户原意。`
 
-const createFlowEdge = (source, target, sourceType, targetType, targetHandle = 'left', order = 1) => {
-  const semantics = getConnectionSemantics(sourceType, targetType, targetHandle)
-  if (!semantics) throw new Error(`不支持的工作流连接：${sourceType} → ${targetType}.${targetHandle}`)
+/**
+ * 编排器是程序化建图，没有「用户拖线时选槽位」这一步，
+ * 所以让它把目标节点的生成模式自动切到能接收该来源的那个（i2i / i2v / …）。
+ */
+const createFlowEdge = (source, target, sourceType, targetType, order = 1) => {
+  const targetNode = nodes.value.find(node => node.id === target)
+  if (!targetNode) throw new Error('工作流连线失败：目标节点不存在')
+  if (!(getModeDef(targetNode)?.accepts?.[sourceType] > 0)) {
+    const mode = findModeAccepting(targetType, sourceType)
+    if (!mode) throw new Error(`不支持的工作流连接：${sourceType} → ${targetType}`)
+    updateNode(target, { mode })
+  }
   return addEdge({
     source,
     target,
-    sourceHandle: 'right',
-    targetHandle,
+    sourceHandle: OUTPUT_HANDLE,
+    targetHandle: INPUT_HANDLE,
     type: 'flowEdge',
-    data: { ...semantics, order }
+    data: { order }
   })
 }
 
@@ -121,8 +130,8 @@ export const useWorkflowOrchestrator = () => {
     const videoTextId = addNode('text', { x: position.x + 460, y: position.y + 340 }, { label: '视频描述', content: videoPrompt })
     const videoNodeId = addNode('video', { x: position.x + 980, y: position.y }, { label: '视频' })
     createFlowEdge(imageTextId, imageNodeId, 'text', 'image')
-    createFlowEdge(imageNodeId, videoNodeId, 'image', 'video', 'first-frame')
-    createFlowEdge(videoTextId, videoNodeId, 'text', 'video', 'prompt')
+    createFlowEdge(videoTextId, videoNodeId, 'text', 'video', 1)
+    createFlowEdge(imageNodeId, videoNodeId, 'image', 'video', 2)
     endBatchOperation()
 
     await waitForNodeReady(imageNodeId)
@@ -147,7 +156,7 @@ export const useWorkflowOrchestrator = () => {
       const textId = addNode('text', { x: position.x, y }, { label: `分镜${index + 1}：${shot.title || ''}`, content: shot.prompt || '' })
       const imageId = addNode('image', { x: position.x + 460, y }, { label: `分镜${index + 1}`, autoExecute: true })
       createFlowEdge(textId, imageId, 'text', 'image')
-      createFlowEdge(characterImageId, imageId, 'image', 'image', 'left', 2)
+      createFlowEdge(characterImageId, imageId, 'image', 'image', 2)
       endBatchOperation()
       createdShots.push({ textId, imageId })
     })
@@ -162,7 +171,7 @@ export const useWorkflowOrchestrator = () => {
       const textId = addNode('text', { x: position.x + 500, y }, { label: `${config.label}提示词`, content: config.prompt(description) })
       const imageId = addNode('image', { x: position.x + 960, y }, { label: config.label })
       createFlowEdge(textId, imageId, 'text', 'image')
-      createFlowEdge(sourceImageId, imageId, 'image', 'image', 'left', 2)
+      createFlowEdge(sourceImageId, imageId, 'image', 'image', 2)
       return { key, textId, imageId }
     })
     endBatchOperation()

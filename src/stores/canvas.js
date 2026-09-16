@@ -6,7 +6,14 @@ import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
 import { saveImage, loadImage, listImageKeys } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
-import { migrateCanvasDocument } from '../utils/migrateCanvasDocument'
+import { migrateCanvasDocument, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
+import {
+  computeSlots,
+  resolveRefs,
+  renumberRefs,
+  removeOrphanRefs as buildOrphanCleanup,
+  defaultStale
+} from '../utils/promptRefs'
 import { resolveAssetUrl, runLimited, statAssetFiles } from '../services/assetLibrary'
 
 // Node ID counter | 节点ID计数器
@@ -278,6 +285,181 @@ export const updateNodeMeta = (id, patch) => {
   debouncedSave()
 }
 
+/* ==========================================================================
+   引用与失效 | References & staleness
+   ========================================================================== */
+
+const findNode = (id) => nodes.value.find(node => String(node.id) === String(id))
+const findEdge = (id) => edges.value.find(edge => edge.id === id)
+
+/** 该节点的入边，按顺序升序 */
+export const inEdges = (id) =>
+  edges.value
+    .filter(edge => String(edge.target) === String(id))
+    .sort((a, b) => (Number(a.data?.order) || 0) - (Number(b.data?.order) || 0))
+
+/** 节点是否已有产出（文本看 content，媒体看 url） */
+const hasResult = (node) =>
+  node?.type === 'text' ? !!String(node.data?.content || '').trim() : !!node.data?.url
+
+/**
+ * 把某节点的产出变更沿下游递归标记为「失效」。
+ * 直接下游用 direct，更远用 indirect；遇到正在生成的下游就停止下传（它跑完会自己再触发）。
+ * 直接修改 node.data，刻意不走 updateNode：标记失效不该进撤销栈、也不该触发保存风暴。
+ */
+export const propagateStale = (fromId) => {
+  const queue = edges.value.filter(e => e.source === fromId).map(e => ({ id: e.target, depth: 1 }))
+  const seen = new Set()
+  let changed = 0
+  while (queue.length) {
+    const { id, depth } = queue.shift()
+    if (seen.has(id)) continue
+    seen.add(id)
+    const node = findNode(id)
+    if (!node) continue
+    if (node.data?.loading) continue
+    const current = node.data?.stale
+    const reason = depth === 1 ? 'direct' : 'indirect'
+    // 直接上游的变更要能覆盖掉之前「间接」的判定
+    if (!current?.is || (depth === 1 && current.reason === 'indirect')) {
+      node.data.stale = { is: true, reason, since: Date.now() }
+      changed++
+    }
+    edges.value.filter(e => e.source === id).forEach(e => queue.push({ id: e.target, depth: depth + 1 }))
+  }
+  if (changed) debouncedSave()
+  return changed
+}
+
+export const clearStale = (id) => {
+  const node = findNode(id)
+  if (node?.data?.stale?.is) node.data.stale = defaultStale()
+}
+
+export const isStale = (id) => !!findNode(id)?.data?.stale?.is
+
+/**
+ * 一次「离散」修改：进撤销栈 + 让下游失效。
+ * 连续输入（打字）请直接用 updateNode —— 它内部是 350ms 合并的。
+ */
+export const editNode = (id, patch) => {
+  const node = findNode(id)
+  const had = hasResult(node)
+  updateNode(id, patch)
+  if (had) propagateStale(id)
+}
+
+/** 重算某节点正文里的引用编号（重排顺序、断线、切模式之后调用） */
+export const renumberNodeRefs = (id) => {
+  const node = findNode(id)
+  if (!node) return false
+  const result = renumberRefs(node, nodes.value, edges.value)
+  if (result.collided) {
+    node.data.warn = {
+      message: '引用编号有冲突：一处引用已失效、另一处要占用它的编号。已跳过自动重写，请手动检查正文。',
+      actions: []
+    }
+    return false
+  }
+  node.data.warn = null
+  if (result.changed) {
+    node.data.prompt = result.prompt
+    node.data.refBindings = result.refBindings
+  }
+  return result.changed
+}
+
+/** 断开一条连线：重排编号 + 让下游失效 + 记一步撤销 */
+export const cutEdge = (edgeId) => {
+  const edge = findEdge(edgeId)
+  if (!edge) return null
+  const targetId = edge.target
+  edges.value = edges.value.filter(e => e.id !== edgeId)
+  normalizeEdgeOrders()
+  renumberNodeRefs(targetId)
+  const node = findNode(targetId)
+  if (node && hasResult(node)) node.data.stale = { is: true, reason: 'direct', since: Date.now() }
+  propagateStale(targetId)
+  saveToHistory(true)
+  debouncedSave()
+  return targetId
+}
+
+/** 重排某节点的入边顺序（拖拽引用顺序浮层时用），一次算一步撤销 */
+export const reorderNodeEdges = (nodeId, orderedEdgeIds) => {
+  const orderById = new Map(orderedEdgeIds.map((id, index) => [id, index + 1]))
+  edges.value = edges.value.map(edge => orderById.has(edge.id)
+    ? { ...edge, data: { ...(edge.data || {}), order: orderById.get(edge.id) } }
+    : edge)
+  renumberNodeRefs(nodeId)
+  saveToHistory(true)
+  debouncedSave()
+}
+
+/** 清掉正文里的失效引用，返回清掉的条数 */
+export const dropOrphanRefs = (id) => {
+  const node = findNode(id)
+  if (!node) return 0
+  const removed = resolveRefs(node, nodes.value, edges.value).filter(r => r.status === 'orphan').length
+  const cleanup = buildOrphanCleanup(node, nodes.value, edges.value)
+  if (!cleanup) return 0
+  updateNode(id, { prompt: cleanup.prompt, refBindings: cleanup.refBindings, error: '' })
+  const next = findNode(id)
+  if (next) next.data.stale = defaultStale()
+  return removed
+}
+
+/** 写入本地素材（上传 / 拖入） */
+export const setNodeMedia = (id, { url, base64, fileName }) => {
+  const patch = { url, loading: false, error: '', updatedAt: Date.now() }
+  if (base64 !== undefined) patch.base64 = base64
+  if (fileName !== undefined) patch.fileName = fileName
+  editNode(id, patch)
+}
+
+/* 连续输入时的失效传播要合并：打字不该每敲一个字就往下游传一遍 */
+let staleTimer = null
+const scheduleStaleFrom = (id) => {
+  if (staleTimer) clearTimeout(staleTimer)
+  staleTimer = setTimeout(() => {
+    staleTimer = null
+    propagateStale(id)
+  }, 800)
+}
+
+/**
+ * 连续输入的字段编辑（正文 / 文本内容）。
+ * 撤销由 scheduleHistorySave 在 350ms 内合并成一步；失效传播再晚一点、也只跑一次。
+ */
+export const editField = (id, field, value) => {
+  const node = findNode(id)
+  if (!node) return
+  const markStale = hasResult(node)
+  const now = Date.now()
+  nodes.value = nodes.value.map(n => (String(n.id) === String(id) ? {
+    ...n,
+    data: {
+      ...n.data,
+      [field]: value,
+      updatedAt: now,
+      ...(markStale ? { stale: { is: true, reason: 'direct', since: now } } : {})
+    }
+  } : n))
+  scheduleHistorySave()
+  debouncedSave()
+  if (markStale) scheduleStaleFrom(id)
+}
+
+/** 取某节点当前的槽位与引用状态（组件用） */
+export const nodeSlots = (id) => {
+  const node = findNode(id)
+  return node ? computeSlots(node, nodes.value, edges.value) : { slots: [], idle: [], modeDef: null }
+}
+export const nodeRefs = (id) => {
+  const node = findNode(id)
+  return node ? resolveRefs(node, nodes.value, edges.value) : []
+}
+
 // Remove node | 删除节点
 export const removeNode = (id) => {
   const removedNode = nodes.value.find(node => node.id === id)
@@ -300,36 +482,79 @@ export const removeNode = (id) => {
       ? { ...node, data: { ...node.data, memberIds: (node.data?.memberIds || []).filter(memberId => memberId !== id) } }
       : node)
   }
+  // 下游节点：断了入边之后引用会变 orphan，编号也要补位
+  const victims = [...new Set(edges.value.filter(edge => edge.source === id).map(edge => edge.target))]
+
   nodes.value = nodes.value.filter(node => node.id !== id)
   edges.value = edges.value.filter(edge => edge.source !== id && edge.target !== id)
+  normalizeEdgeOrders()
+  victims.forEach((victimId) => {
+    const node = findNode(victimId)
+    if (!node) return
+    renumberNodeRefs(victimId)
+    if (hasResult(node)) node.data.stale = { is: true, reason: 'direct', since: Date.now() }
+    propagateStale(victimId)
+  })
+
   saveToHistory() // Save after removing node | 删除节点后保存
   if (currentProjectId.value) deleteImage(`${currentProjectId.value}:${id}`).catch(() => {})
   debouncedSave()
 }
 
-// Duplicate node | 复制节点
+/**
+ * Duplicate node | 复制节点
+ *
+ * 连同**入边与出边**一起复制：
+ * - 入边让副本的提示词引用立刻可用（否则副本里全是失效引用）
+ * - 出边追加到下游入边序列末尾，不会打乱下游已有的引用编号
+ * 副本的 `refBindings` 必须重绑到副本自己的入边上，否则会指向原节点的边、
+ * 解析出来全是 orphan。
+ */
 export const duplicateNode = (id) => {
   const sourceNode = nodes.value.find(node => node.id === id)
   if (!sourceNode) return null
-  
+
   const newId = getNodeId()
-  
-  // Calculate max z-index | 计算最大层级
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
-  
+
+  const inbound = inEdges(id)
+  const outbound = edges.value.filter(edge => edge.source === id)
+  const edgeIdMap = new Map()
+  const newEdges = []
+
+  inbound.forEach((edge) => {
+    const nextId = getEdgeId()
+    edgeIdMap.set(edge.id, nextId)
+    newEdges.push({ ...edge, id: nextId, target: newId })
+  })
+  outbound.forEach((edge) => {
+    const maxOrder = Math.max(0, ...inEdges(edge.target).map(e => Number(e.data?.order) || 0))
+    newEdges.push({ ...edge, id: getEdgeId(), source: newId, data: { ...(edge.data || {}), order: maxOrder + 1 } })
+  })
+
+  const rebind = {}
+  Object.entries(sourceNode.data?.refBindings || {}).forEach(([key, edgeId]) => {
+    rebind[key] = edgeIdMap.get(edgeId) || edgeId
+  })
+
   const newNode = {
     id: newId,
     type: sourceNode.type,
-    position: {
-      x: sourceNode.position.x + 50,
-      y: sourceNode.position.y + 50
+    position: { x: sourceNode.position.x + 50, y: sourceNode.position.y + 50 },
+    data: {
+      ...sourceNode.data,
+      refBindings: rebind,
+      // 生成中的任务不跟着复制，副本从干净状态开始
+      loading: false,
+      stale: defaultStale()
     },
-    data: { ...sourceNode.data },
     zIndex: maxZIndex + 1
   }
+
+  startBatchOperation()
   nodes.value = [...nodes.value, newNode]
-  saveToHistory() // Save after duplicating node | 复制节点后保存
-  debouncedSave()
+  edges.value = [...edges.value, ...newEdges]
+  endBatchOperation()
   return newId
 }
 
@@ -396,12 +621,16 @@ export const removeEdge = (id) => {
   debouncedSave()
 }
 
+/**
+ * 每个目标的入边重新编号 1..n。
+ * 单一输入口之后不再需要按 targetHandle 分组：一个节点只有一个输入口，
+ * 入边顺序就是它在正文里的引用编号顺序。
+ */
 export const normalizeEdgeOrders = () => {
   const groups = new Map()
   edges.value.forEach(edge => {
-    const key = `${edge.target}:${edge.targetHandle || 'left'}`
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(edge)
+    if (!groups.has(edge.target)) groups.set(edge.target, [])
+    groups.get(edge.target).push(edge)
   })
   const orderById = new Map()
   groups.forEach(group => {
@@ -483,7 +712,7 @@ export const saveProject = () => {
   // Sharing those objects with persistence can turn one internal layout update
   // into a cascade of project/localStorage updates.
   const snapshot = JSON.parse(JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: CANVAS_SCHEMA_VERSION,
     nodes: nodes.value,
     edges: edges.value,
     viewport: canvasViewport.value
