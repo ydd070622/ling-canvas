@@ -299,6 +299,12 @@ const openPreview = () => { if (props.data.url) previewOpen.value = true }
 const openAssetPicker = () => { window.dispatchEvent(new CustomEvent('ling-canvas:open-asset-picker', { detail: { nodeId: props.id } })) }
 
 /* ------------------------------------------------------------------ 生成 */
+/**
+ * 每次发送自增。只有最后一次发送的收尾才有权改节点状态，
+ * 否则被顶掉的旧请求回来时会把新请求的 loading 抹掉（或反过来留下僵尸态）。
+ */
+let sendSeq = 0
+
 const handleNoticeAction = (act) => {
   if (act === 'update-run') handleSend()
   else if (act === 'dismiss-stale') clearStale(props.id)
@@ -321,6 +327,8 @@ const insertAllRefs = () => {
 }
 
 const cancelGeneration = () => {
+  // 递增序号：取消之后飞回来的旧请求无权再改这个节点的状态
+  sendSeq += 1
   stopGeneration()
   updateNode(props.id, { loading: false, error: '' })
   window.$message?.info('已取消图片生成')
@@ -354,6 +362,7 @@ const handleSend = async (force = false) => {
     return
   }
 
+  const seq = ++sendSeq
   try {
     const model = effectiveModel.value
     // 拦截对话模型误用（服务端只支持 imagen/banana/seedream 等）
@@ -387,7 +396,13 @@ const handleSend = async (force = false) => {
     // 产出变了 → 下游失效
     propagateStale(props.id)
   } catch (err) {
-    if (err?.name === 'AbortError') return
+    // 已经被更新的一次生成（或取消）接手，这次的结果无权改状态
+    if (seq !== sendSeq) return
+    if (err?.name === 'AbortError') {
+      // 取消不报错，但 loading 必须落回去：早退会把节点永远留在「生成中」
+      updateNode(props.id, { loading: false })
+      return
+    }
     updateNode(props.id, { loading: false, error: err.message || '图片生成失败' })
     window.$message?.error(enrichModelError(err, props.data?.model || effectiveModel.value, providerLabel.value))
   }

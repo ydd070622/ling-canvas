@@ -22,6 +22,7 @@
         :snap-to-grid="true"
         :snap-grid="[20, 20]"
         :is-valid-connection="isValidConnection"
+        :connect-on-click="false"
         @connect="onConnect"
         @connect-start="onConnectStart"
         @connect-end="onConnectEnd"
@@ -200,7 +201,7 @@
         @mousedown.stop
         @click.stop
       >
-        <div class="flow-quick-add-title">新建节点并自动连线</div>
+        <div class="flow-quick-add-title">{{ quickAddTitle }}</div>
         <button
           v-for="opt in quickAddOptions"
           :key="opt.type"
@@ -406,11 +407,11 @@ import {
   DocumentTextOutline,
   SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, propagateStale, setNodeMedia, cutEdge } from '../stores/canvas'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, propagateStale, setNodeMedia, cutEdge, editNode } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
-import { isContentNodeType, validateCanvasConnection, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES } from '../config/nodeRegistry'
+import { isContentNodeType, validateCanvasConnection, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES, PORT_CLICK_EVENT } from '../config/nodeRegistry'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
 let handleBeforeUnload = null
@@ -631,11 +632,8 @@ const addNewNode = async (type) => {
   
   // Add node at viewport center | 在视口中心添加节点
   const nodeId = addNode(type, { x: viewportCenterX - 100, y: viewportCenterY - 100 }, { expanded: true })
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    selected: node.id === nodeId,
-    data: { ...node.data, expanded: node.id === nodeId }
-  }))
+  // 同上：新建节点只负责把自己展开、选中，不动别人的展开态
+  nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === nodeId }))
   
   // Set highest z-index | 设置最高层级
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
@@ -922,9 +920,17 @@ const isValidConnection = (connection) => {
   return validateCanvasConnection(connection, nodes.value, edges.value).valid
 }
 
-// 拖线到空白：快速新建菜单 | Quick add menu state
+// 拖线到空白 / 点端口：快速新建菜单 | Quick add menu state
 const showQuickAdd = ref(false)
-const quickAddState = ref({ flowX: 0, flowY: 0, screenX: 0, screenY: 0, source: null, sourceHandle: null })
+const quickAddState = ref({
+  direction: 'downstream',
+  flowX: 0,
+  flowY: 0,
+  screenX: 0,
+  screenY: 0,
+  source: null,
+  sourceHandle: null
+})
 
 const QUICK_ADD_DESC = {
   text: '作为提示词 / 上下文',
@@ -932,23 +938,57 @@ const QUICK_ADD_DESC = {
   video: '作为参考视频'
 }
 
+/** 往上游建时，新节点是给锚点供料的，说法要反过来 */
+const UPSTREAM_ADD_DESC = {
+  text: '供给它当提示词 / 上下文',
+  image: '供给它当底图 / 参考',
+  video: '供给它当参考视频'
+}
+
+/** 新节点落在锚点哪一侧；点击端口时没有落点，就按锚点尺寸摆 */
+const QUICK_ADD_GAP = 100
+const QUICK_ADD_FALLBACK_WIDTH = 520
+
 /**
- * 拖线到空白后能新建哪些节点，取决于「目标类型是否存在能接收该来源的模式」。
- * 选中后新节点会直接落在那个模式上，避免建出来才发现连不上。
+ * 可新建的节点类型。
+ * 下游：只列「存在能接收锚点产出的模式」的类型，选中后新节点直接落在那个模式上，
+ *       避免建出来才发现连不上。
+ * 上游：不筛选，全部内容节点都列（用户要的是自由度，连不上时再提示）。
  */
-const quickAddOptions = computed(() => {
-  const sourceNode = nodes.value.find(n => n.id === quickAddState.value.source)
-  if (!sourceNode) return []
-  return ['text', 'image', 'video']
-    .map(type => ({ type, mode: findModeAccepting(type, sourceNode.type) }))
-    .filter(item => item.mode)
+const buildQuickAddOptions = (anchor, direction) => {
+  const upstream = direction === 'upstream'
+  return CONTENT_NODE_TYPES
+    .map(type => ({ type, mode: upstream ? null : findModeAccepting(type, anchor.type) }))
+    .filter(item => upstream || item.mode)
     .map(item => ({
       type: item.type,
       mode: item.mode,
       name: nodeTypeLabels[item.type] || item.type,
-      desc: QUICK_ADD_DESC[item.type]
+      desc: (upstream ? UPSTREAM_ADD_DESC : QUICK_ADD_DESC)[item.type]
     }))
+}
+
+const quickAddOptions = computed(() => {
+  const anchor = nodes.value.find(n => n.id === quickAddState.value.source)
+  return anchor ? buildQuickAddOptions(anchor, quickAddState.value.direction) : []
 })
+
+const quickAddTitle = computed(() => (
+  quickAddState.value.direction === 'upstream' ? '在上游新建节点并自动连线' : '在下游新建节点并自动连线'
+))
+
+/** 端口 id → 方向：左口(in) 往上游，右口(out) 往下游 */
+const resolveDirection = handleId => (handleId === INPUT_HANDLE ? 'upstream' : 'downstream')
+
+/** 点击端口时新节点的落点：按锚点尺寸往对应方向让开一个身位 */
+const anchorSidePosition = (anchor, direction) => {
+  const width = anchor.measured?.width ?? anchor.width ?? QUICK_ADD_FALLBACK_WIDTH
+  const height = anchor.measured?.height ?? anchor.height ?? 240
+  const y = anchor.position.y + height / 2 - 120
+  return direction === 'upstream'
+    ? { x: anchor.position.x - width - QUICK_ADD_GAP, y }
+    : { x: anchor.position.x + width + QUICK_ADD_GAP, y }
+}
 
 const onConnectEnd = (params) => {
   // Vue Flow 1.48 的 connectEnd 直接传原生事件；兼容部分版本 { event, connection } 结构
@@ -970,18 +1010,52 @@ const onConnectEnd = (params) => {
   if (!sourceNode || !isContentNodeType(sourceNode.type)) {
     return
   }
-  if (!(QUICK_ADD_TARGETS[sourceNode.type] || []).length) return
+  // 从哪个口拖出来决定新节点建在哪一侧
+  const direction = resolveDirection(sourceHandleId)
+  if (!buildQuickAddOptions(sourceNode, direction).length) return
 
   if (!mouseEvent) return
   const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
   const flowPos = screenToFlowCoordinate({ x: mouseEvent.clientX, y: mouseEvent.clientY })
   quickAddState.value = {
-    flowX: flowPos.x,
-    flowY: flowPos.y,
+    direction,
+    // 落点换算成新节点左上角（松手处大致落在卡片中心）
+    flowX: flowPos.x - 196,
+    flowY: flowPos.y - 120,
     screenX: canvasBounds ? mouseEvent.clientX - canvasBounds.left : mouseEvent.clientX,
     screenY: canvasBounds ? mouseEvent.clientY - canvasBounds.top : mouseEvent.clientY,
     source: sourceNodeId,
     sourceHandle: sourceHandleId
+  }
+  showQuickAdd.value = true
+}
+
+/**
+ * 点端口 → 在鼠标处弹新建菜单 | Open quick add from a port click
+ * 左口往上游建（新节点落在锚点左边），右口往下游建（落在右边）。
+ *
+ * 模板上把 Vue Flow 自带的 connect-on-click 关掉了：那是「点端口进入待连状态、
+ * 再点目标完成连线」，与本菜单抢同一个手势 —— 菜单还没选完，Vue Flow 那边
+ * 已经挂着半个待连边。拖拽连线不受影响。
+ */
+const onPortClick = (event) => {
+  const { nodeId, handleId, handleType, clientX, clientY } = event.detail || {}
+  const anchor = nodes.value.find(n => n.id === nodeId)
+  if (!anchor || !isContentNodeType(anchor.type)) return
+
+  const direction = resolveDirection(handleId || (handleType === 'target' ? INPUT_HANDLE : OUTPUT_HANDLE))
+  if (!buildQuickAddOptions(anchor, direction).length) return
+
+  const flowPos = anchorSidePosition(anchor, direction)
+  const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
+  quickAddState.value = {
+    direction,
+    flowX: flowPos.x,
+    flowY: flowPos.y,
+    screenX: canvasBounds ? clientX - canvasBounds.left : clientX,
+    screenY: canvasBounds ? clientY - canvasBounds.top : clientY,
+    source: anchor.id,
+    sourceHandle: handleId || (direction === 'upstream' ? INPUT_HANDLE : OUTPUT_HANDLE)
   }
   showQuickAdd.value = true
 }
@@ -998,43 +1072,80 @@ const onConnectStart = (params) => {
   showQuickAdd.value = false
 }
 
-// 快速新建节点并自动连线 | Quick create target node and auto-wire
+// 快速新建节点并自动连线 | Quick create node and auto-wire
 const handleQuickAdd = (opt) => {
-  const sourceNode = nodes.value.find(n => n.id === quickAddState.value.source)
-  if (!sourceNode) {
+  const state = quickAddState.value
+  const anchor = nodes.value.find(n => n.id === state.source)
+  if (!anchor) {
     showQuickAdd.value = false
     return
   }
+  const upstream = state.direction === 'upstream'
 
-  // 新节点直接落在「能接收该来源」的模式上
-  const nodeId = addNode(opt.type, { x: quickAddState.value.flowX - 196, y: quickAddState.value.flowY - 120 },
-    { expanded: true, mode: opt.mode })
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    selected: node.id === nodeId,
-    data: { ...node.data, expanded: node.id === nodeId }
-  }))
+  // 下游：新节点落在「能接收锚点产出」的模式上。
+  // 上游：新节点自己不吃上游，但锚点的模式得能收下它 —— 先按锚点当前模式试，
+  //       不行就找一个能收的模式换过去（换模式要重排引用编号，和手动切换一致）。
+  let anchorMode = null
+  if (upstream) {
+    const accepts = (NODE_MODES[anchor.type]?.[anchor.data?.mode]?.accepts?.[opt.type] || 0) > 0
+    if (!accepts) {
+      anchorMode = findModeAccepting(anchor.type, opt.type)
+      if (!anchorMode) {
+        showQuickAdd.value = false
+        window.$message?.warning(`「${anchor.data?.label || anchor.type}」没有能接收${opt.name}的模式`)
+        return
+      }
+    }
+  }
 
-  const validation = validateCanvasConnection({ source: sourceNode.id, target: nodeId }, nodes.value, edges.value)
+  // flowX/flowY 存的已经是新节点的左上角（拖到空白时在 onConnectEnd 里换算过）
+  const nodeId = addNode(opt.type, { x: state.flowX, y: state.flowY },
+    { expanded: true, ...(opt.mode ? { mode: opt.mode } : {}) })
+  // 只选中新节点。展开态不要在这里碰：新建节点跟原有节点的展开/收起无关，
+  // 这里一旦写 expanded 就会把锚点（还有画布上所有别的节点）一起收起来。
+  nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === nodeId }))
+
+  const source = upstream ? nodeId : anchor.id
+  const target = upstream ? anchor.id : nodeId
+
+  // 校验读的是节点当前模式，所以「切模式」必须发生在校验之前，否则上游那条永远判不合法
+  const originalMode = anchor.data?.mode
+  let switched = false
+  if (anchorMode) {
+    editNode(anchor.id, { mode: anchorMode })
+    renumberNodeRefs(anchor.id)
+    switched = true
+  }
+  const validation = validateCanvasConnection({ source, target }, nodes.value, edges.value)
   if (!validation.valid) {
     removeNode(nodeId)
+    // 没接上就别把锚点的模式留在改过的状态
+    if (switched) {
+      editNode(anchor.id, { mode: originalMode })
+      renumberNodeRefs(anchor.id)
+    }
     showQuickAdd.value = false
     window.$message?.warning(validation.reason)
     return
   }
+
+  // 引用顺序接着已有的排下去，别把新边插到别人前面
+  const nextOrder = Math.max(0, ...inEdges(target).map(edge => Number(edge.data?.order) || 0)) + 1
   addEdge({
-    source: sourceNode.id,
-    target: nodeId,
+    source,
+    target,
     sourceHandle: OUTPUT_HANDLE,
     targetHandle: INPUT_HANDLE,
     type: 'flowEdge',
-    data: { order: 1 }
+    data: { order: nextOrder }
   })
 
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
   updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
   setTimeout(() => updateNodeInternals(nodeId), 50)
   showQuickAdd.value = false
+  // 上游接进来了 → 锚点及其下游该重跑
+  if (upstream) propagateStale(anchor.id)
   window.$message?.success(`已创建${opt.name}节点并自动连线`)
 }
 
@@ -1156,6 +1267,13 @@ const onCanvasDoubleClick = (event) => {
 // Canvas undo / redo shortcuts | 画布撤销、重做快捷键
 const handleCanvasShortcut = (event) => {
   const target = event.target
+
+  // Esc 关掉新建菜单：放在输入框判断之前，因为光标多半还在提示词框里
+  if (event.key === 'Escape' && showQuickAdd.value) {
+    showQuickAdd.value = false
+    return
+  }
+
   if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return
 
   const key = event.key.toLowerCase()
@@ -1407,6 +1525,7 @@ onMounted(async () => {
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
   window.addEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
+  window.addEventListener(PORT_CLICK_EVENT, onPortClick)
   document.addEventListener('dblclick', onCanvasDoubleClick, true)
 
   // Save before window/tab close | 窗口/标签页关闭前保存
@@ -1733,6 +1852,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
   window.removeEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
+  window.removeEventListener(PORT_CLICK_EVENT, onPortClick)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
 
   // Clean up beforeunload listener | 清理窗口关闭前保存监听器

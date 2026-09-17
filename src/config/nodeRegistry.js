@@ -25,6 +25,12 @@ export const CANVAS_NODE_TYPES = Object.freeze([...CONTENT_NODE_TYPES, 'group'])
 export const INPUT_HANDLE = 'in'
 export const OUTPUT_HANDLE = 'out'
 
+/**
+ * 点一下端口派发的自定义事件名 | Port click event
+ * NodePort 派发、Canvas 监听：左口点出「往上游建节点」，右口点出「往下游建节点」。
+ */
+export const PORT_CLICK_EVENT = 'ling-canvas:port-click'
+
 /** 引用种类：正文里的 `{{Image 1}}` 对应 kind=image、index=1 */
 export const KIND_TITLE = Object.freeze({ text: 'Text', image: 'Image', video: 'Video' })
 export const KIND_CODE = Object.freeze({ text: 'T', image: 'I', video: 'V' })

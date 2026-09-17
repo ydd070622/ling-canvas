@@ -4,9 +4,9 @@
  */
 import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
-import { saveImage, loadImage, listImageKeys } from './imageStore'
+import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
-import { migrateCanvasDocument, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
+import { migrateCanvasDocument, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
 import {
   computeSlots,
   resolveRefs,
@@ -667,7 +667,9 @@ export const loadProject = (projectId) => {
   if (canvasData) {
     const migratedCanvasData = migrateCanvasDocument(canvasData)
     // Restore nodes | 恢复节点
-    nodes.value = migratedCanvasData.nodes || []
+    // 瞬态状态必须清掉：上一轮生成没跑完就关掉应用时，loading/autoExecute
+    // 会跟着落盘，直接恢复会得到「永远生成中」的空转节点。
+    nodes.value = resetTransientNodeState(migratedCanvasData.nodes || [])
     edges.value = migratedCanvasData.edges || []
     canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 

@@ -230,3 +230,21 @@ export const migrateCanvasDocument = (document = {}) => {
     _imageNodeAliases: Object.fromEntries(aliases)
   }
 }
+
+/**
+ * 清掉不该跨会话存活的节点状态 | Reset transient node state
+ *
+ * 每次读项目都跑一遍，和版本迁移无关，所以独立于 migrateCanvasDocument：
+ * 后者对已是当前版本的项目会直接原样返回。
+ *
+ * - `loading`：生成期间关掉应用会把它存下来，下次打开就成了没有任何请求在跑的
+ *   「永远生成中」；而且 `isGenerating` 会挡住再次发送。
+ * - `autoExecute`：编排器建节点时的一次性触发开关，节点会立刻消费掉；万一没消费
+ *   就被落盘，下次打开会凭空跑一次生成（要花钱）。
+ */
+export const resetTransientNodeState = (nodes = []) => nodes.map((node) => {
+  const hasLoading = node?.data?.loading === true
+  const hasAutoExecute = Boolean(node?.data?.autoExecute)
+  if (!hasLoading && !hasAutoExecute) return node
+  return { ...node, data: { ...node.data, loading: false, autoExecute: false } }
+})

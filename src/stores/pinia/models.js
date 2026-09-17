@@ -62,6 +62,17 @@ const setStored = (key, value) => {
 }
 
 /**
+ * Remove stored value from localStorage
+ */
+const removeStored = (key) => {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * Get stored JSON value from localStorage
  */
 const getStoredJson = (key, defaultValue = []) => {

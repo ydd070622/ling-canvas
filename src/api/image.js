@@ -13,6 +13,7 @@ import { requestUpstream } from '@/services/aiGateway'
 import {
   resolveProviderEndpointRule,
   prefersChatProtocolForImage,
+  prefersRatioInPrompt,
   isUnsupportedImageModelError
 } from '@/config/providerCapabilities'
 import {
@@ -22,7 +23,7 @@ import {
   toTransportableReferenceImage
 } from '@/utils/upstreamRequest'
 import { collectImageResults } from '@/utils/resultParser'
-import { normalizeRatioKey } from '@/utils/ratio'
+import { normalizeRatioKey, approximateRatio, ratioValue, COMMON_RATIOS } from '@/utils/ratio'
 
 /** 文生图/图生图首包可能等待数分钟（尤其 4K 模型） */
 const IMAGE_TIMEOUT_MS = 300_000
@@ -38,10 +39,28 @@ const toTransportableImages = async images => {
   return list.filter(Boolean)
 }
 
+/**
+ * 比例 → 一句画面指令。
+ * 只在渠道不认 image_config（prefersRatioInPrompt）时使用，见该函数的说明。
+ * 像素尺寸先归一到常用比例：'1088x1920' 约分后是 17:30，模型听不懂，
+ * 要拍回 9:16 这种它认识的写法。
+ */
+const buildRatioDirective = (size) => {
+  const key = normalizeRatioKey(size, { fallback: '' })
+  if (!/^\d+:\d+$/.test(key)) return ''
+  const ratio = COMMON_RATIOS.includes(key) ? key : approximateRatio(ratioValue(key))
+  const value = ratioValue(ratio)
+  const orientation = value === 1 ? '方形' : (value < 1 ? '竖版' : '横版')
+  return `画面比例 ${ratio}（${orientation}）`
+}
+
 /** 参考图 → chat 协议的多模态消息 */
-const buildChatImageRequest = ({ model, prompt, images, size, resolution }) => {
+const buildChatImageRequest = ({ model, prompt, images, size, resolution, ratioInPrompt }) => {
   const content = []
-  if (prompt) content.push({ type: 'text', text: prompt })
+  // 比例指令追加在正文末尾，不覆盖用户写的内容
+  const directive = ratioInPrompt ? buildRatioDirective(size) : ''
+  const text = [String(prompt || '').trim(), directive].filter(Boolean).join('\n')
+  if (text) content.push({ type: 'text', text })
   images.forEach(url => content.push({ type: 'image_url', image_url: { url } }))
   const request = {
     model,
@@ -120,7 +139,9 @@ export const generateImage = async (payload = {}, options = {}) => {
           prompt,
           images: await toTransportableImages(referenceImages),
           size: payload.size,
-          resolution: payload.resolution
+          resolution: payload.resolution,
+          // 渠道不认 image_config 时，比例只能靠提示词带过去
+          ratioInPrompt: prefersRatioInPrompt(upstream.providerConfig, upstream.baseUrl)
         }),
         signal,
         timeoutMs

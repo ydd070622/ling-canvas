@@ -753,6 +753,58 @@ await test('Gemini 图像模型：文生图自动改走 chat/completions', async
   assert.equal(countPath('/v1/chat/completions') - chatBefore, 1)
 })
 
+// ---------------------------------------------------------------------------
+// 11b. 比例的表达方式（渠道级）
+//
+// 实测 linkapi.pro 对 Gemini 系图像模型完全无视 image_config.aspect_ratio
+// （1:1 / 9:16 / 16:9 带不带 image_size 都返回同一张 1408x768），把比例写进
+// 提示词后才照做。这里锁死：按**实际生效的 Base URL** 判定渠道 + 追加的指令写法。
+// ---------------------------------------------------------------------------
+const { prefersRatioInPrompt } = await import('../src/config/providerCapabilities.js')
+
+await test('比例走提示词：按实际生效的 Base URL 判定渠道', () => {
+  // 内置渠道的 Base URL 可以被改指向中转站，此时只有 baseUrl 反映真正打的是哪家
+  assert.equal(prefersRatioInPrompt({}, 'https://linkapi.pro'), true)
+  assert.equal(prefersRatioInPrompt({}, 'https://linkapi.pro/v1'), true)
+  assert.equal(prefersRatioInPrompt({}, 'https://api.chatfire.cn'), false)
+  assert.equal(prefersRatioInPrompt({ defaultBaseUrl: 'https://linkapi.pro' }), true, '没给 baseUrl 时退回渠道默认值')
+  assert.equal(prefersRatioInPrompt({}, ''), false)
+  assert.equal(prefersRatioInPrompt(null), false)
+  // 渠道显式声明优先
+  assert.equal(prefersRatioInPrompt({ ratioInPrompt: true }, 'https://api.chatfire.cn'), true)
+  assert.equal(prefersRatioInPrompt({ ratioInPrompt: false }, 'https://linkapi.pro'), false)
+})
+
+await test('比例走提示词：chat 协议把比例追加到正文末尾', async () => {
+  const ratioKey = modelStore.addCustomProvider('RatioRelay')
+  modelStore.updateCustomProvider(ratioKey, { defaultBaseUrl: base, ratioInPrompt: true })
+  modelStore.setApiKeyByProvider(ratioKey, 'k')
+  const ratioUpstream = modelStore.resolveUpstreamContext(ratioKey)
+  const textOfLastChat = () => JSON.parse(lastRequest('/v1/chat/completions').body.toString('utf8'))
+    .messages[0].content.find(part => part.type === 'text').text
+
+  await generateImage({ model: 'gemini-3.1-flash-image', prompt: '一只猫', size: '9:16' }, { upstream: ratioUpstream })
+  assert.equal(textOfLastChat(), '一只猫\n画面比例 9:16（竖版）')
+
+  // 像素尺寸要先拍回常用比例：1088x1920 约分是 17:30，模型听不懂
+  await generateImage({ model: 'gemini-3.1-flash-image', prompt: '一只猫', size: '1088x1920' }, { upstream: ratioUpstream })
+  assert.equal(textOfLastChat(), '一只猫\n画面比例 9:16（竖版）')
+
+  await generateImage({ model: 'gemini-3.1-flash-image', prompt: '一只猫', size: '1024x1024' }, { upstream: ratioUpstream })
+  assert.equal(textOfLastChat(), '一只猫\n画面比例 1:1（方形）')
+
+  // 自适应（没选比例）时不硬塞一句比例
+  await generateImage({ model: 'gemini-3.1-flash-image', prompt: '一只猫' }, { upstream: ratioUpstream })
+  assert.equal(textOfLastChat(), '一只猫')
+})
+
+await test('比例走提示词：未开启的渠道提示词原样不动', async () => {
+  await generateImage({ model: 'gemini-3.1-flash-image', prompt: '一只猫', size: '9:16' }, { upstream })
+  const text = JSON.parse(lastRequest('/v1/chat/completions').body.toString('utf8'))
+    .messages[0].content.find(part => part.type === 'text').text
+  assert.equal(text, '一只猫')
+})
+
 await test('自愈：图片端点回「不支持该模型」时自动改走 chat 重试', async () => {
   const relayKey2 = modelStore.addCustomProvider('ImagenOnlyRelay')
   modelStore.updateCustomProvider(relayKey2, {

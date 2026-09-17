@@ -149,6 +149,45 @@ export const prefersChatProtocolForImage = modelKey => {
   return CHAT_IMAGE_MODEL_PATTERNS.some(pattern => pattern.test(key))
 }
 
+// ============================================================================
+// 出图比例的表达方式（渠道级）
+//
+// 现实情况：部分聚合站对 Gemini 系图像模型**完全无视** `image_config`。实测
+// linkapi.pro（2026-09-17）：aspect_ratio 写 1:1 / 9:16 / 16:9，带不带
+// image_size，返回的永远是同一张 1408x768。同一批提示词里写明比例则三组对照
+// 全部照做：1:1 → 1024x1024、9:16 → 768x1376、16:9 → 1376x768。
+//
+// 所以这条是渠道级规则：命中渠道时，走 chat 协议出图会把比例作为一句画面指令
+// 追加到提示词末尾。只作用于 chat 协议 —— 走图片端点的模型（imagen 等）本来
+// 就认 size，不该被改写提示词。
+// ============================================================================
+
+/**
+ * 已知「只认提示词、不认 image_config」的渠道，按 Base URL 主机名匹配。
+ *
+ * 刻意匹配 **实际生效的 Base URL** 而不是渠道 id：内置渠道的 Base URL 是可以
+ * 被用户改指向的（本项目里就是内置 openai 渠道被指到了 linkapi.pro），
+ * 此时 id 仍叫 openai、providerConfig.defaultBaseUrl 还是火宝，
+ * 只有 upstream.baseUrl 才反映真正打的是哪家。
+ */
+const RATIO_IN_PROMPT_HOSTS = ['linkapi.pro']
+
+/**
+ * 该渠道是否需要把比例写进提示词。
+ * 渠道配置里显式写 `ratioInPrompt: true / false` 可覆盖，无需改这里。
+ *
+ * @param {Object} providerConfig
+ * @param {string} [baseUrl] 本次请求实际使用的 Base URL（upstream.baseUrl）
+ * @returns {boolean}
+ */
+export const prefersRatioInPrompt = (providerConfig, baseUrl = '') => {
+  if (providerConfig?.ratioInPrompt === true) return true
+  if (providerConfig?.ratioInPrompt === false) return false
+  const target = String(baseUrl || providerConfig?.defaultBaseUrl || '').toLowerCase()
+  if (!target) return false
+  return RATIO_IN_PROMPT_HOSTS.some(host => target.includes(host))
+}
+
 /**
  * 上游是否在说「这个端点不支持该模型」。
  *

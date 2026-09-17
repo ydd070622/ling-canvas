@@ -554,7 +554,9 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 /* 输入口的入边数量徽标（点它调引用顺序） */
 .flow-port-count {
   position: absolute;
-  top: -16px;
+  /* 必须整个让开端口的命中区（端口是以锚点为心的 12px 圆）：之前 -16px 时
+     徽标下半压住端口上半，左口既点不动也拖不动，连线入口等于被自己的角标堵死 */
+  top: -26px;
   left: 50%;
   display: grid;
   width: 16px;
