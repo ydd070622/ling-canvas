@@ -9,13 +9,13 @@ Ling Canvas 是一个基于 Vue Flow 的可视化 AI 创作画布，支持文生
 ## 📸 截图
 
 ### 首页
-![首页](./doc/home.png)
+![首页](./docs/home.png)
 
 ### 画布
-![画布](./doc/canvas.png)
+![画布](./docs/canvas.png)
 
 ### API 配置
-![API 配置](./doc/api-config.png)
+![API 配置](./docs/api-config.png)
 
 ## ✨ 特性
 
