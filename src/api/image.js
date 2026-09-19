@@ -5,6 +5,10 @@
  *   json      → /images/generations   文生图（无参考图）
  *   multipart → /images/edits         图生图/改图，参考图作为文件上传
  *   chat      → /chat/completions     部分厂商只能走对话协议出图（多模态消息）
+ *   gemini    → /v1beta/models/{model}:generateContent
+ *                                     Gemini 原生协议。gemini 系图片模型优先走这条：
+ *                                     chat 那条路会把尺寸参数全吞（选 4K 拿 1K），
+ *                                     原生这条路认 imageConfig.imageSize。
  *
  * 所有请求经 services/aiGateway 转发（桌面端走 Rust 通道以绕开 CORS）。
  */
@@ -13,11 +17,17 @@ import { requestUpstream } from '@/services/aiGateway'
 import {
   resolveProviderEndpointRule,
   prefersChatProtocolForImage,
+  prefersGeminiNativeImage,
   prefersRatioInPrompt,
-  isUnsupportedImageModelError
+  allowsExtraImageParams,
+  isUnsupportedImageModelError,
+  isGeminiNativeUnavailableError
 } from '@/config/providerCapabilities'
 import {
+  buildGeminiImageRequest,
+  buildGeminiNativePath,
   buildImageEditMultipart,
+  buildImageSizeFields,
   normalizeImageGenerationRequestBody,
   normalizeReferenceImageList,
   toTransportableReferenceImage
@@ -54,22 +64,33 @@ const buildRatioDirective = (size) => {
   return `画面比例 ${ratio}（${orientation}）`
 }
 
-/** 参考图 → chat 协议的多模态消息 */
-const buildChatImageRequest = ({ model, prompt, images, size, resolution, ratioInPrompt }) => {
+/**
+ * 参考图 → chat 协议的多模态消息。
+ * 导出是为了让 scripts/probe-relay.mjs 打出的请求体与本函数逐字一致 ——
+ * 探测脚本自己手搓一份 body 的话，它证明的只是「我以为客户端发的是这样」。
+ */
+export const buildChatImageRequest = ({ model, prompt, images, size, resolution, ratioInPrompt }) => {
   const content = []
-  // 比例指令追加在正文末尾，不覆盖用户写的内容
+  // 有些站连参数都吞，比例写进正文是最后一道保险，不覆盖用户写的内容。
+  // （清晰度不写：那是推理配置不是画面语义，写进提示词改变不了像素数，写了反而误导）
   const directive = ratioInPrompt ? buildRatioDirective(size) : ''
   const text = [String(prompt || '').trim(), directive].filter(Boolean).join('\n')
   if (text) content.push({ type: 'text', text })
   images.forEach(url => content.push({ type: 'image_url', image_url: { url } }))
+
   const request = {
     model,
     messages: [{ role: 'user', content: content.length ? content : prompt }]
   }
-  if (size || resolution) {
+
+  const sizeFields = buildImageSizeFields({ size, resolution })
+  if (sizeFields) {
+    // 嵌套那份单独成形（它是 `{aspect_ratio, image_size}` 这个固定形状），
+    // 其余几种是顶层的平铺字段
     request.image_config = {}
-    if (size) request.image_config.aspect_ratio = normalizeRatioKey(size, { fallback: String(size) })
-    if (resolution) request.image_config.image_size = String(resolution).toUpperCase()
+    if (sizeFields.aspect_ratio) request.image_config.aspect_ratio = sizeFields.aspect_ratio
+    if (sizeFields.image_size) request.image_config.image_size = sizeFields.image_size
+    Object.assign(request, sizeFields)
   }
   return request
 }
@@ -99,14 +120,39 @@ export const generateImage = async (payload = {}, options = {}) => {
   // 渠道显式声明过协议就完全听它的，不做任何自动改道
   const explicitOverride = upstream.providerConfig?.protocols?.[effectiveCapability]
 
+  // 生图/改图端点默认只发标准字段 —— 多一个未知键就整个请求 400 才是常态，
+  // 想广播多种尺寸写法的渠道要显式开 broadcastImageParams（见 providerCapabilities）
+  const strictParams = !allowsExtraImageParams(upstream.providerConfig, upstream.baseUrl)
+
   let protocol = resolveProviderEndpointRule(upstream.providerConfig, effectiveCapability).protocol
-  if (!explicitOverride && prefersChatProtocolForImage(modelKey)) {
+  if (!explicitOverride && prefersGeminiNativeImage(upstream.providerConfig, upstream.baseUrl, modelKey)) {
+    // Gemini 系在支持原生路由的渠道上优先走原生 —— 只有这条路认 1K/2K/4K
+    protocol = 'gemini'
+  } else if (!explicitOverride && prefersChatProtocolForImage(modelKey)) {
     // Gemini / Nano Banana 系：聚合站的图片端点普遍不收这些模型，只能走对话协议
     protocol = 'chat'
   }
 
   /** 按指定协议发起一次请求 */
   const performRequest = async (useProtocol) => {
+    if (useProtocol === 'gemini') {
+      return requestUpstream({
+        ...upstream,
+        // 计费归属图片能力；路径由 requestPath 显式给出（模型名在 URL 里）
+        endpointType: 'image',
+        requestPath: buildGeminiNativePath(modelKey),
+        json: await buildGeminiImageRequest({
+          model: modelKey,
+          prompt,
+          images: referenceImages,
+          size: payload.size,
+          resolution: payload.resolution
+        }),
+        signal,
+        timeoutMs
+      })
+    }
+
     if (useProtocol === 'multipart') {
       const multipart = await buildImageEditMultipart({
         model: modelKey,
@@ -118,7 +164,8 @@ export const generateImage = async (payload = {}, options = {}) => {
         referenceImages,
         fileNamePrefix: 'ling-canvas-reference',
         // 少数厂商只认 image[] 字段名，可通过渠道配置覆盖
-        imageField: upstream.providerConfig?.imageEditImageField
+        imageField: upstream.providerConfig?.imageEditImageField,
+        strict: strictParams
       })
       return requestUpstream({
         ...upstream,
@@ -140,7 +187,7 @@ export const generateImage = async (payload = {}, options = {}) => {
           images: await toTransportableImages(referenceImages),
           size: payload.size,
           resolution: payload.resolution,
-          // 渠道不认 image_config 时，比例只能靠提示词带过去
+          // 渠道连参数都吞时，比例靠提示词再补一道（清晰度补不了，见 buildImageSizeFields）
           ratioInPrompt: prefersRatioInPrompt(upstream.providerConfig, upstream.baseUrl)
         }),
         signal,
@@ -155,7 +202,8 @@ export const generateImage = async (payload = {}, options = {}) => {
           ? await toTransportableImages(referenceImages)
           : undefined
       },
-      modelKey
+      modelKey,
+      strict: strictParams
     })
     return requestUpstream({
       ...upstream,
@@ -170,12 +218,18 @@ export const generateImage = async (payload = {}, options = {}) => {
   try {
     response = await performRequest(protocol)
   } catch (error) {
-    // 自愈：图片端点回「不支持该模型」时改走对话协议重试一次。
-    // 渠道显式指定过协议则不擅自改道（用户的显式选择优先）。
-    const canRetryViaChat = protocol !== 'chat'
+    // 自愈一：原生 Gemini 路由对面不认（404/405，或文案明说不支持）→ 退回 chat。
+    // 退回去只是丢掉档位（回到改动前的行为：1K 出图），比整次生成失败好。
+    // 鉴权 / 限流 / 上游故障刻意不在这里兜 —— 那些情况下改协议只会掩盖真错误。
+    const canRetryGeminiViaChat = protocol === 'gemini'
+      && !explicitOverride
+      && isGeminiNativeUnavailableError(error)
+    // 自愈二：图片端点回「不支持该模型」→ 改走对话协议
+    const canRetryImageViaChat = protocol !== 'chat' && protocol !== 'gemini'
       && !explicitOverride
       && isUnsupportedImageModelError(error)
-    if (!canRetryViaChat) throw error
+    // 渠道显式指定过协议则不擅自改道（用户的显式选择优先）
+    if (!canRetryGeminiViaChat && !canRetryImageViaChat) throw error
     protocol = 'chat'
     response = await performRequest('chat')
   }

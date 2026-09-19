@@ -49,6 +49,7 @@ import { INPUT_HANDLE, OUTPUT_HANDLE, NODE_DEFINITIONS } from '../../config/node
 import { makeToken, refKey } from '../../utils/promptRefs'
 import { buildNodeNotices } from '../../utils/nodeNotices'
 import { normalizeRatioKey, findSizeByRatio, ratioDisplay } from '../../utils/ratio'
+import { resolveImageTierOptions } from '../../utils/imageTiers'
 import { isLikelyTextModel, enrichModelError } from '../../composables/useModelGuard'
 
 const props = defineProps({
@@ -109,9 +110,13 @@ watch(selectedModel, (value) => {
 
 /* ---------------------------------------------------------------- 尺寸 */
 const resolutionOptions = computed(() => {
-  const declared = currentModel.value?.imageResolutions || currentModel.value?.resolutions
-  const values = Array.isArray(declared) && declared.length ? declared : ['1K', '2K', '4K']
-  return values.map(value => ({ value: String(value).toUpperCase(), label: String(value).toUpperCase() }))
+  const upstream = modelStore.resolveUpstreamContext(providerId.value)
+  return resolveImageTierOptions({
+    model: currentModel.value,
+    modelKey: selectedModel.value,
+    providerConfig: upstream.providerConfig,
+    baseUrl: upstream.baseUrl
+  }).map(value => ({ value, label: value }))
 })
 const selectedResolution = computed(() => {
   const available = resolutionOptions.value.map(item => item.value)

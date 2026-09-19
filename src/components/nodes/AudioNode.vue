@@ -12,6 +12,8 @@
     :notices="notices"
     uploadable
     viewable
+    media-kind="audio"
+    :media-url="data.url || ''"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"

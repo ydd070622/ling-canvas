@@ -40,6 +40,11 @@ export const joinUrl = (baseUrl, path) => {
   let suffix = normalizeStringValue(path)
   if (!suffix) return base
   if (!suffix.startsWith('/')) suffix = `/${suffix}`
+  // 原生 Gemini 路径是 /v1beta/...，与 /v1 平级。base 若已带 /v1（用户很常这么填），
+  // 直接拼会得到 /v1/v1beta/... —— 这里要把那个 /v1 摘掉。
+  if (/\/v1$/i.test(base) && /^\/v1beta\//i.test(suffix)) {
+    return `${base.replace(/\/v1$/i, '')}${suffix}`
+  }
   if (/\/v1$/i.test(base) && /^\/v1\//i.test(suffix)) {
     suffix = suffix.replace(/^\/v1/i, '')
   }

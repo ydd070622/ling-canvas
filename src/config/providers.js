@@ -202,6 +202,9 @@ export const PROVIDERS = {
         if (params.size) adapted.size = params.size
         if (params.n) adapted.n = params.n
         if (params.quality) adapted.quality = params.quality
+        // 清晰度档位（1K/2K/4K）。**漏掉这一行等于永远按上游默认档出图** ——
+        // 用户选 4K 会静默拿到 1K（3:4 时就是 896x1200），而且中转站照 1K 计费。
+        if (params.resolution) adapted.resolution = params.resolution
         if (params.style) adapted.style = params.style
         if (params.image) adapted.image = params.image
         return adapted

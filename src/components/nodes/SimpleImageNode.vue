@@ -16,6 +16,8 @@
     :fail-text="data.error || ''"
     uploadable
     viewable
+    media-kind="image"
+    :media-url="data.url || ''"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"
@@ -56,6 +58,7 @@ import {
   duplicateNode, removeNode
 } from '../../stores/canvas'
 import { normalizeRatioKey, findSizeByRatio, ratioDisplay } from '../../utils/ratio'
+import { resolveImageTierOptions } from '../../utils/imageTiers'
 import { isLikelyTextModel, enrichModelError } from '../../composables/useModelGuard'
 import { buildNodeNotices } from '../../utils/nodeNotices'
 import { makeToken, refKey } from '../../utils/promptRefs'
@@ -136,11 +139,13 @@ const selectedSize = computed(() => {
   return ''
 })
 const resolutionOptions = computed(() => {
-  const declared = currentModel.value?.imageResolutions || currentModel.value?.resolutions
-  const values = Array.isArray(declared) && declared.length
-    ? declared
-    : (/seedream/i.test(selectedModel.value) ? ['2K', '4K'] : ['1K', '2K', '4K'])
-  return values.map(value => ({ value: String(value).toUpperCase(), label: String(value).toUpperCase() }))
+  const upstream = modelStore.resolveUpstreamContext(providerId.value)
+  return resolveImageTierOptions({
+    model: currentModel.value,
+    modelKey: selectedModel.value,
+    providerConfig: upstream.providerConfig,
+    baseUrl: upstream.baseUrl
+  }).map(value => ({ value, label: value }))
 })
 const selectedResolution = computed(() => {
   const available = resolutionOptions.value.map(item => item.value)

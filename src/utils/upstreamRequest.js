@@ -11,6 +11,8 @@
  */
 
 import { toDataUrl } from './resultParser'
+import { normalizeRatioKey } from './ratio'
+import { GEMINI_NATIVE_PATH } from '@/config/providerCapabilities'
 
 const normalizeStringValue = value => String(value ?? '').trim()
 
@@ -166,6 +168,158 @@ export const toTransportableReferenceImage = async value => {
 }
 
 /**
+ * 尺寸参数 → 各家读得懂的那几种写法 | Size params in every dialect
+ *
+ * **背景：这一层没有统一标准。** 中转站要把 OpenAI 兼容格式翻成 Gemini 原生格式
+ * （`generationConfig.imageConfig`），而这层翻译各家写法不同、还都是抄来抄去：
+ *
+ * | 写法 | 长什么样 | 谁认 |
+ * |---|---|---|
+ * | 嵌套 | `image_config: { aspect_ratio, image_size }` | 火宝等 |
+ * | 扁平 | `aspect_ratio` / `image_size` 直接放顶层 | LiteLLM 系（为兼容保留） |
+ * | 生图端点那套 | `size`（比例）+ `quality`（1k/2k/4k） | OpenAI 兼容生图层 |
+ * | 分辨率 | `resolution: "4K"` | reAPI 等 |
+ *
+ * 我们的处境是**没法在运行时判断对面认哪种**。所以一次全发：每家只读自己认识的
+ * 那个，多出来的字段一律忽略。
+ *
+ * 这不是预防性设计，是踩出来的 —— linkapi 对 `image_config` 完全无视，我们被
+ * `prefersChatProtocolForImage` 强制走 chat 协议、又只发了这一个字段，于是选了
+ * 4K 静默降级成 1K（896x1200）。而别人的画布接同一个站能选尺寸，说明它读的是
+ * 另外那几种写法。
+ *
+ * 三条硬约束（都踩过）：
+ * 1. **比例必须是 `3:4` 冒号写法**。`3x4` 解析不出比例，会被归一到 1:1 ——
+ *    而本项目的 banana 尺寸表存的偏偏就是 `3x4` 这种键
+ * 2. **K 必须大写**（`4K`），小写会被拒
+ * 3. **不能只给像素尺寸**：Gemini 不支持任意像素，只有「比例 + 档位」两个自由度。
+ *    给 `3584x4800` 和给「3:4 + 4K」是同一件事，但后者处处认
+ */
+
+/** 清晰度档位 → `quality` 该写的值。数字档位不含糊，且 2K 在 OpenAI 原生的
+ *  quality 里没有对应值（只有 standard/hd），拿 hd 去表达 2K 更容易撞上
+ *  「hd = 最高档」的实现。 */
+const QUALITY_BY_TIER = { '1K': '1k', '2K': '2k', '4K': '4k' }
+
+/** OpenAI 生图端点认的 quality 取值。档位映射出来的 `4k` 不在其中。 */
+const STRICT_QUALITY_VALUES = ['low', 'medium', 'high', 'auto', 'standard', 'hd']
+
+/**
+ * 这个尺寸值是「比例 key」还是「真实像素」。
+ * 比例 key 用的是小整数（banana 尺寸表最大到 16），像素尺寸最小也在千位，
+ * 所以 32 这条线能干净地把两者分开。
+ */
+const isRatioKey = value => {
+  const match = String(value || '').trim().match(/^(\d+)[x×:](\d+)$/)
+  return !!match && Number(match[1]) <= 32 && Number(match[2]) <= 32
+}
+
+/**
+ * `size` 字段本身该写什么。
+ *
+ * 小整数比例（banana 的 `3x4`）→ 冒号写法，否则中转站解析不出比例会掉回 1:1；
+ * 真实像素（seedream 的 `2560x1440`、OpenAI 原生的 `1024x1024`）→ 原样保留，
+ * 那些端点就是按像素读的，换成比例反而废掉。
+ */
+export const normalizeSizeForUpstream = value => {
+  const text = normalizeStringValue(value)
+  if (!text) return ''
+  return isRatioKey(text) ? normalizeRatioKey(text, { fallback: text }) : text
+}
+
+/**
+ * 比例 + 档位 → 各家可能读的平铺字段。
+ * 不含 `image_config`（那是嵌套形状，由 chat 协议单独成形）。
+ *
+ * @param {Object} input
+ * @param {string} [input.size]
+ * @param {string} [input.resolution]
+ * @returns {Object|null} 两者都缺时返回 null
+ */
+export const buildImageSizeFields = ({ size, resolution } = {}) => {
+  const ratio = size ? normalizeRatioKey(size, { fallback: '' }) : ''
+  const tier = normalizeStringValue(resolution).toUpperCase()
+  if (!ratio && !tier) return null
+
+  const fields = {}
+  if (ratio) {
+    fields.aspect_ratio = ratio
+    // 生图端点那套要的直接就是比例。刻意不传像素：`size: "3584x4800"` 会被
+    // 拿去反推比例，推不出标准比例时直接掉回 1:1，比不传还糟
+    fields.size = ratio
+  }
+  if (tier) {
+    fields.image_size = tier
+    fields.resolution = tier
+    fields.quality = QUALITY_BY_TIER[tier] || tier.toLowerCase()
+  }
+  return fields
+}
+
+/**
+ * 原生 Gemini 路由的路径：模型名在 URL 里，不在请求体里。
+ *
+ * @param {string} model
+ * @returns {string}
+ */
+export const buildGeminiNativePath = model => (
+  GEMINI_NATIVE_PATH.replace('{model}', encodeURIComponent(normalizeStringValue(model)))
+)
+
+/**
+ * 原生 Gemini 请求体 | Native generateContent body
+ *
+ * **这是唯一一条尺寸参数真被认的路**（取证见 config/providerCapabilities 的
+ * 「原生 Gemini 协议」一节：同一模型同一提示词，chat 回 1408x768、原生回 3584x4800）。
+ *
+ * 形状与 OpenAI 兼容完全无关 —— 全部驼峰、层级化：
+ *
+ *   { contents: [{ role: 'user', parts: [{ text }, { inlineData: {...} }] }],
+ *     generationConfig: { imageConfig: { aspectRatio, imageSize } } }
+ *
+ * 两条硬约束：
+ *
+ * 1. **参考图必须给 inlineData（裸 base64），原生协议不接受图片 URL。**
+ *    所以 http(s) 链接也要先取回字节 —— 不能走 `toTransportableReferenceImage`
+ *    那条「外链原样保留」的捷径。
+ * 2. **不要顺手把 snake_case 那套也塞进来。** 这条路是有 schema 的，
+ *    chat 那条可以乱塞多种写法赌对面认识，这条不行 —— 多出来的键没有「会被忽略」
+ *    的保证。档位只有一个正确写法：`generationConfig.imageConfig.imageSize`。
+ *
+ * @param {Object} input
+ * @param {string} input.model
+ * @param {string} [input.prompt]
+ * @param {string[]} [input.images]
+ * @param {string} [input.size]        比例，如 '3:4'
+ * @param {string} [input.resolution]  档位，如 '4K'
+ * @returns {Promise<Object>}
+ */
+export const buildGeminiImageRequest = async ({ model, prompt, images, size, resolution } = {}) => {
+  const parts = []
+  const text = normalizeStringValue(prompt)
+  if (text) parts.push({ text })
+
+  for (const imageValue of normalizeReferenceImageList(images)) {
+    const { dataBase64, mime } = await readReferenceImageBytes(imageValue)
+    if (!dataBase64) throw new Error('参考图内容为空')
+    parts.push({ inlineData: { mimeType: mime || 'image/png', data: dataBase64 } })
+  }
+
+  // 原生协议的 contents 不能为空，也不接受空 part
+  if (!parts.length) throw new Error('原生 Gemini 请求至少需要提示词或参考图')
+
+  const imageConfig = {}
+  const ratio = size ? normalizeRatioKey(size, { fallback: '' }) : ''
+  const tier = normalizeStringValue(resolution).toUpperCase()
+  if (ratio) imageConfig.aspectRatio = ratio
+  if (tier) imageConfig.imageSize = tier
+
+  const body = { contents: [{ role: 'user', parts }] }
+  if (Object.keys(imageConfig).length) body.generationConfig = { imageConfig }
+  return body
+}
+
+/**
  * 组装图生图（image-edit）的 multipart 载荷。
  *
  * @param {Object} input
@@ -178,6 +332,7 @@ export const toTransportableReferenceImage = async value => {
  * @param {string[]} [input.referenceImages]
  * @param {string} [input.fileNamePrefix]
  * @param {string} [input.imageField] 参考图字段名，默认 'image'
+ * @param {boolean} [input.strict] 该渠道是否评判参数名（true 时只发标准字段）
  * @returns {Promise<{fields:Array<{name:string,value:string}>, files:Array<{name:string,fileName:string,mime:string,dataBase64:string}>}>}
  */
 export const buildImageEditMultipart = async (input = {}) => {
@@ -197,9 +352,26 @@ export const buildImageEditMultipart = async (input = {}) => {
   if (prompt) fields.push({ name: 'prompt', value: prompt })
   const desiredCount = Math.max(1, Math.floor(Number(input.count) > 0 ? Number(input.count) : 1))
   fields.push({ name: 'n', value: String(desiredCount) })
-  if (size) fields.push({ name: 'size', value: size })
-  if (quality) fields.push({ name: 'quality', value: quality })
-  if (resolution) fields.push({ name: 'resolution', value: resolution })
+
+  const sizeFields = buildImageSizeFields({ size, resolution })
+  if (size) fields.push({ name: 'size', value: normalizeSizeForUpstream(size) })
+  // 档位比调用方给的 quality 更具体（那是画布里的默认风格值），有档位就听档位的。
+  // 但评判参数名的渠道只认 OpenAI 那套 quality 取值（low/medium/high/auto/standard/hd），
+  // 我们的档位映射出来的 '4k' 不在其中 —— 与其赌它不校验取值，不如不发：
+  // 生图端点的尺寸本来就由 `size` 决定，quality 只影响保真度。
+  const qualityValue = input.strict
+    ? (STRICT_QUALITY_VALUES.includes(String(quality).toLowerCase()) ? quality : '')
+    : (sizeFields?.quality || quality)
+  if (qualityValue) fields.push({ name: 'quality', value: qualityValue })
+  // 剩下的扁平写法（aspect_ratio / image_size / resolution）只在对面不评判参数名时补发。
+  // 评判参数的渠道会因为这些多出来的键**整个请求 400**（linkapi 实测），
+  // 而尺寸控制本来就靠上面那个标准字段 `size`，不需要它们。
+  if (sizeFields && !input.strict) {
+    Object.entries(sizeFields).forEach(([name, value]) => {
+      if (name === 'size' || name === 'quality') return
+      fields.push({ name, value })
+    })
+  }
 
   const files = []
   for (let index = 0; index < referenceImages.length; index += 1) {
@@ -221,8 +393,11 @@ export const buildImageEditMultipart = async (input = {}) => {
 /**
  * 清洗 JSON 模式的请求体：剥离内部字段、统一 count→n、丢弃空值。
  * 对应 CanvasMind `normalizeImageGenerationRequestBody`。
+ *
+ * @param {boolean} [strict] 该渠道是否评判参数名 —— true 时只保留标准字段，
+ *   不补发 aspect_ratio / image_size / resolution（见上面 multipart 的说明）。
  */
-export const normalizeImageGenerationRequestBody = ({ requestBody = {}, modelKey = '' } = {}) => {
+export const normalizeImageGenerationRequestBody = ({ requestBody = {}, modelKey = '', strict = false } = {}) => {
   const body = { ...requestBody, model: normalizeStringValue(modelKey || requestBody.model) }
 
   const rawN = Number(body.n)
@@ -245,6 +420,23 @@ export const normalizeImageGenerationRequestBody = ({ requestBody = {}, modelKey
     const value = normalizeStringValue(body[key])
     if (value) body[key] = value
     else delete body[key]
+  }
+
+  // `size` 里的小整数比例（banana 的 `3x4`）要改写成 `3:4`，真实像素原样保留 ——
+  // 这条路上跑的模型比 chat 协议杂，不能一律按比例处理
+  if (body.size) body.size = normalizeSizeForUpstream(body.size)
+  // 再补一套扁平字段：Gemini 系模型被迫落到生图端点时，档位得有个地方表达。
+  // 评判参数名的渠道上必须跳过 —— 多一个未知键就是 400（linkapi 实测）。
+  // 注意 `resolution` 还在 `...payload` 里，不能只「不补发」，得主动摘掉。
+  if (strict) {
+    for (const key of ['aspect_ratio', 'image_size', 'resolution']) delete body[key]
+  } else {
+    const sizeFields = buildImageSizeFields({ size: body.size, resolution: body.resolution })
+    if (sizeFields) {
+      if (sizeFields.aspect_ratio && !body.aspect_ratio) body.aspect_ratio = sizeFields.aspect_ratio
+      if (sizeFields.image_size && !body.image_size) body.image_size = sizeFields.image_size
+      if (sizeFields.resolution) body.resolution = sizeFields.resolution
+    }
   }
 
   const images = normalizeReferenceImageList(body.image)

@@ -103,6 +103,26 @@
             </label>
           </div>
 
+          <details class="advanced-config" :open="!!formData.advanced.trim()">
+            <summary>高级配置 · 渠道兼容性</summary>
+            <p class="advanced-hint">
+              中转站对同一套参数的反应差别很大，这里是逐个渠道的手动纠正开关。
+              留空即用默认行为。填写后点「保存供应商」生效。
+            </p>
+            <ul class="advanced-keys">
+              <li v-for="(hint, key) in overrideKeyHints" :key="key">
+                <code>{{ key }}</code><span>{{ hint }}</span>
+              </li>
+            </ul>
+            <textarea
+              v-model="formData.advanced"
+              class="advanced-input"
+              spellcheck="false"
+              placeholder='{ "geminiNative": true, "broadcastImageParams": false }'
+            ></textarea>
+            <p v-if="advancedError" class="advanced-error">{{ advancedError }}</p>
+          </details>
+
         </div>
 
         <div class="models-card">
@@ -194,6 +214,7 @@ import {
 } from '@vicons/ionicons5'
 import { useModelStore } from '../stores/pinia'
 import { IMAGE_MODEL_FEATURE, VIDEO_MODEL_FEATURE } from '../config/models'
+import { PROVIDER_OVERRIDE_KEYS, findUnknownOverrideKeys } from '../config/providerCapabilities'
 
 const REMOTE_MODELS_CACHE_KEY = 'api-remote-models-by-provider'
 
@@ -227,13 +248,47 @@ const formData = reactive({
   provider: modelStore.currentProvider,
   name: '',
   baseUrl: '',
-  apiKey: ''
+  apiKey: '',
+  // 渠道兼容性覆盖的 JSON 文本（见 config/providerCapabilities 的 PROVIDER_OVERRIDE_KEYS）
+  advanced: ''
 })
 
 const providerOptions = computed(() => modelStore.providerList)
 const currentProvider = computed(() => providerOptions.value.find(item => item.key === formData.provider))
 const isCustomProvider = computed(() => !!currentProvider.value?.isCustom)
 const isLinkapi = computed(() => currentProvider.value?.key === 'linkapi')
+const overrideKeyHints = PROVIDER_OVERRIDE_KEYS
+
+/**
+ * 高级配置的实时校验。
+ * 只报「语法错」和「不认识的键」两类 —— 前者不报就会静默丢掉整块配置，
+ * 后者是最贵的一种错：写 `gemini_native` 不报错、也不生效，只会在某次出图时
+ * 行为不对，而且完全看不出跟这里有关。
+ */
+const advancedError = computed(() => {
+  const raw = formData.advanced.trim()
+  if (!raw) return ''
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    return `JSON 格式不对：${error.message}`
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return '要填一个对象，例如 {"geminiNative": true}'
+  }
+  const unknown = findUnknownOverrideKeys(parsed)
+  if (unknown.length) {
+    return `不认识的键：${unknown.join('、')}。可用键只有 ${Object.keys(PROVIDER_OVERRIDE_KEYS).join('、')}`
+  }
+  return ''
+})
+
+/** 文本框 → 覆盖对象。留空返回 {}，表示清掉这个渠道的覆盖。 */
+const parseAdvanced = () => {
+  const raw = formData.advanced.trim()
+  return raw ? JSON.parse(raw) : {}
+}
 const remoteModels = computed(() => remoteModelsByProvider.value[formData.provider] || [])
 
 const modelFilters = [
@@ -263,6 +318,10 @@ const updateForm = () => {
     || modelStore.customProviders[formData.provider]?.defaultBaseUrl
     || (formData.provider === modelStore.currentProvider ? modelStore.currentBaseUrl : '')
   if (!formData.baseUrl && config?.defaultBaseUrl) formData.baseUrl = config.defaultBaseUrl
+  const override = modelStore.providerOverrides[formData.provider]
+  formData.advanced = override && Object.keys(override).length
+    ? JSON.stringify(override, null, 2)
+    : ''
   ensureConfiguredModelsVisible(formData.provider)
   connectionStatus.value = remoteModelsByProvider.value[formData.provider]?.length ? 'success' : 'idle'
   activeModelFilter.value = 'all'
@@ -358,6 +417,10 @@ const saveProvider = (notify = true) => {
     message.warning('请填写接口地址')
     return false
   }
+  if (advancedError.value) {
+    message.warning(advancedError.value)
+    return false
+  }
   saving.value = true
   try {
     modelStore.updateProviderLabel(formData.provider, formData.name)
@@ -369,6 +432,9 @@ const saveProvider = (notify = true) => {
     }
     modelStore.setApiKeyByProvider(formData.provider, formData.apiKey.trim())
     modelStore.setBaseUrlByProvider(formData.provider, formData.baseUrl.trim().replace(/\/$/, ''))
+    // 覆盖对内置渠道（openai / chatfire）同样有效 —— 它们不在 customProviders 里，
+    // 这份单独存，别试图写进渠道对象
+    modelStore.setProviderOverrides(formData.provider, parseAdvanced())
     modelStore.setProvider(formData.provider)
     emit('saved')
     if (notify) message.success('供应商配置已保存')
@@ -643,6 +709,36 @@ const clearProviderConfiguration = provider => {
 .config-grid { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(280px, 1.4fr); gap: 14px; margin-top: 18px; }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 12px; }
 .field.full { grid-column: 1 / -1; }
+
+.advanced-config { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 14px; }
+.advanced-config summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 600; user-select: none; }
+.advanced-config summary:hover { color: var(--text-primary); }
+.advanced-hint { margin: 10px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.advanced-keys { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 5px; }
+.advanced-keys li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.advanced-keys code {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: 11px/1.6 ui-monospace, Consolas, monospace;
+}
+.advanced-input {
+  margin-top: 12px;
+  min-height: 96px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 12px/1.6 ui-monospace, Consolas, monospace;
+}
+.advanced-input:focus { outline: none; border-color: var(--accent-color, #6366f1); }
+.advanced-error { margin: 8px 0 0; color: #dc2626; font-size: 12px; line-height: 1.5; }
 
 .models-card { display: flex; min-height: 0; flex: 1; flex-direction: column; margin-top: 14px; }
 .models-header { flex: 0 0 auto; align-items: center; margin-bottom: 12px; }

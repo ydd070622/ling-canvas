@@ -14,7 +14,7 @@
     class="flow-node-outer"
     :class="[
       `flow-node-${tone}`,
-      focused ? 'is-focused' : 'is-compact',
+      expanded ? 'is-focused' : 'is-compact',
       { 'is-multi': multi, 'is-dropzone': dragOver }
     ]"
     :style="cardStyle"
@@ -36,6 +36,18 @@
         <button v-if="viewable" class="flow-tool-btn nodrag" type="button" title="查看" @click="emit('view')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
         </button>
+        <!-- 保存到本地：要先把字节取回来再挂 <a download>，所以是异步的 ——
+             取的过程中禁用，避免连点存出好几份 -->
+        <button
+          v-if="viewable && mediaUrl"
+          class="flow-tool-btn nodrag"
+          type="button"
+          :title="downloading ? '正在保存…' : '保存到本地'"
+          :disabled="downloading"
+          @click="saveMedia"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg>
+        </button>
         <button v-if="editable" class="flow-tool-btn nodrag" type="button" title="编辑提示词" @click="emit('edit')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5 17.5 10.5" /></svg>
         </button>
@@ -54,12 +66,12 @@
     <div class="flow-card" :class="{ 'flow-card-failed': failed }">
       <!-- 内容态的节点没有表头，"这是什么"就全靠这个角标说。
            焦点态不显示：那时表头已经写着同样的东西，再来一遍是重复。 -->
-      <span v-if="!focused" class="flow-zoom-tag">
+      <span v-if="!expanded" class="flow-zoom-tag">
         <span class="flow-zoom-tag-icon" v-html="NODE_ICONS[tone]"></span>
         <span class="flow-zoom-tag-name">{{ typeLabel }}</span>
       </span>
 
-      <div v-if="focused" class="flow-card-head">
+      <div v-if="expanded" class="flow-card-head">
         <span class="flow-head-left">
           <span class="flow-head-dot" :class="`flow-tone-${tone}`"></span>
           <span
@@ -77,7 +89,7 @@
 
       <div
         v-for="(notice, index) in notices"
-        v-show="focused"
+        v-show="expanded"
         :key="index"
         class="flow-notice"
         :class="`is-${notice.kind}`"
@@ -99,7 +111,7 @@
       <!-- 内容态：表头、提示条都收起来了，但"这节点出错了"不能一起收掉，
            否则一张失败的卡片看起来和正常的一模一样 -->
       <span
-        v-if="!focused && (failed || notices.length)"
+        v-if="!expanded && (failed || notices.length)"
         class="flow-compact-flag is-fail"
         :title="failText || notices[0]?.text || '生成失败'"
       ></span>
@@ -107,14 +119,14 @@
       <!-- 右下角缩放把手：只有可缩放的节点（文本）才有。
             挂在卡片右下角外面一点，不吃框选（nodrag/nopan）。 -->
       <span
-        v-if="focused && resizable"
+        v-if="expanded && resizable"
         class="flow-resize-grip nodrag nopan"
         title="拖动改变大小"
         @mousedown.stop.prevent="startResize"
       ></span>
 
       <NodePort type="target" side="left" :tone="tone" />
-      <NodePort type="source" side="right" :tone="tone" />
+      <NodePort v-if="hasOutput" type="source" side="right" :tone="tone" />
     </div>
 
   </div>
@@ -127,6 +139,7 @@ import NodePort from './NodePort.vue'
 import { canvasViewport, updateNode } from '../../../stores/canvas'
 import { NODE_ICONS } from '../../../config/nodeIcons'
 import { NODE_DEFINITIONS } from '../../../config/nodeRegistry'
+import { downloadMedia } from '../../../utils/downloadMedia'
 
 const props = defineProps({
   nodeId: { type: String, required: true },
@@ -134,6 +147,14 @@ const props = defineProps({
   title: { type: String, default: '' },
   /** 是否展开（= 恰好选中这一个节点） */
   focused: { type: Boolean, default: false },
+  /**
+   * 常驻展开 | Pinned open
+   *
+   * 不看选中状态，永远渲染完整 chrome。给室内渲染这类「卡片本体就是一整块大表单」
+   * 的节点用：表单收成不可交互的静态块之后，用户根本不知道参数改哪去了。
+   * 只有真正需要展开的节点传这个，其余节点仍然靠选中决定。
+   */
+  alwaysExpanded: { type: Boolean, default: false },
   /** 多选中的一员：加描边，但不展开 */
   multi: { type: Boolean, default: false },
   statusText: { type: String, default: '' },
@@ -144,12 +165,29 @@ const props = defineProps({
   failText: { type: String, default: '' },
   /** 卡片宽度；0 = 用默认宽度。素材比例不同时由外层节点算好传进来 */
   cardWidth: { type: Number, default: 0 },
+  /**
+   * 有没有输出口 | Has an output port
+   *
+   * 查看型节点（图片对比）没有下游可接的东西，右口一存在就会被当成"能往下接"。
+   * 不渲染 Handle 就彻底连不出边 —— 比渲染出来再在校验里拒掉干净。
+   */
+  hasOutput: { type: Boolean, default: true },
   /** 右下角是否出现缩放把手 */
   resizable: { type: Boolean, default: false },
   /** 有本地文件可上传（图片 / 视频 / 音频） */
   uploadable: { type: Boolean, default: false },
   /** 有内容可全屏查看（图片 / 视频 / 音频） */
   viewable: { type: Boolean, default: false },
+  /**
+   * 可保存素材的地址 | Downloadable source
+   *
+   * 单独一个 prop 而不是让 NodeFrame 自己 emit：下载要先取字节再落盘，
+   * 是外壳能自己做完的事，没必要让每个媒体节点各写一遍。
+   * 空值 = 还没有内容，按钮不出现。
+   */
+  mediaUrl: { type: String, default: '' },
+  /** 素材类型，用于取不到响应头时兜底扩展名；空值则按 tone 推断 */
+  mediaKind: { type: String, default: '' },
   /** 多一个「编辑提示词」按钮（AI 任务节点） */
   editable: { type: Boolean, default: false }
 })
@@ -164,6 +202,9 @@ const emit = defineEmits([
  * 名字留给展开后的表头去显示。
  */
 const typeLabel = computed(() => NODE_DEFINITIONS[props.tone]?.label || '')
+
+/** 正文 chrome 是否铺开。常驻展开的节点与选中状态无关，但工具条仍只在选中时出现 */
+const expanded = computed(() => props.focused || props.alwaysExpanded)
 
 const cardStyle = computed(() => (
   props.cardWidth ? { '--flow-card-width': `${props.cardWidth}px` } : null
@@ -213,6 +254,23 @@ const uploadTitle = computed(() => {
   const what = props.tone === 'video' ? '视频' : props.tone === 'audio' ? '音频' : '图片'
   return `上传本地${what}`
 })
+
+/* ------------------------------------------------------------ 保存到本地 */
+const downloading = ref(false)
+const saveMedia = async () => {
+  if (downloading.value) return
+  downloading.value = true
+  try {
+    await downloadMedia({
+      url: props.mediaUrl,
+      kind: props.mediaKind || (['video', 'audio'].includes(props.tone) ? props.tone : 'image'),
+      // 节点名往往已经带后缀（上传的素材），downloadFileName 会认出来不再叠一层
+      label: props.title
+    })
+  } finally {
+    downloading.value = false
+  }
+}
 
 /* 拖文件到节点上：媒体节点才接收 */
 const dragOver = ref(false)

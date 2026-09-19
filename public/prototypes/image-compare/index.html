@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>图片对比 · 节点预览</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;color:#e9edf4;background:#111214;font-size:12px;--line:#33353b;--muted:#858b97;--blue:#7b94ff;--cyan:#06b6d4;--cyan-ink:#67e8f9}*{box-sizing:border-box}body{margin:0}button{font:inherit;cursor:pointer;color:inherit}button:disabled{cursor:default;opacity:.55}button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+header{height:66px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #ffffff0c;background:#17181be8;position:sticky;top:0;z-index:5}.brand{display:flex;align-items:center;gap:14px}.mark{width:30px;height:30px;border:1px solid #505870;border-radius:9px;display:grid;place-items:center;color:#a8b7ff;font-size:18px}.brand strong{font-size:14px;font-weight:550}.divider{height:18px;width:1px;background:#37393f}.muted{color:var(--muted)}.badge{font-size:10px;border:1px solid #414654;color:#acb8dd;padding:4px 8px;border-radius:5px}.top-actions{display:flex;align-items:center;gap:18px}.quiet{background:transparent;border:1px solid #383b43;border-radius:7px;padding:8px 12px}
+.canvas{min-height:calc(100vh - 66px);background-image:radial-gradient(#3a3c425c 1px,transparent 1px);background-size:20px 20px;padding:38px 28px 96px;overflow:auto}
+.workspace{display:grid;grid-template-columns:200px 392px;gap:76px;justify-content:center;align-items:start;position:relative;max-width:1100px;margin:auto}
+.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:0}.source-col,.node-wrap{position:relative;z-index:1}
+.column-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;color:#adb3be;font-size:12px;letter-spacing:.4px}.column-title small{font-size:10px;color:#686e7a}
+.source-col{padding-top:75px;display:flex;flex-direction:column;gap:16px}
+.image-card{position:relative}
+.photo{aspect-ratio:256/340;border-radius:10px;background-image:url('./reference.png');background-size:750% 268%;background-repeat:no-repeat;border:1px solid #ffffff12;position:relative;overflow:hidden}
+.s0{background-position:8.77% 18.91%}.r0{background-position:62.08% 18.91%}
+.number{position:absolute;top:7px;left:7px;display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#17181dca;color:#eee;font-size:10px;backdrop-filter:blur(8px)}
+.role{position:absolute;top:7px;right:7px;padding:3px 7px;border-radius:6px;font-size:10px;backdrop-filter:blur(8px);background:#17181dca;color:#cfd6e4}.role.is-before{color:#8be9f8;border:1px solid #0e7490}.role.is-after{color:#f8b48b;border:1px solid #9a4f18}
+.caption{display:flex;justify-content:space-between;gap:8px;padding:9px 1px 0;color:#bec3cc;font-size:11px}.caption small{color:#737985;font-size:9px;white-space:nowrap}
+.ghost{aspect-ratio:256/340;border:1px dashed #3d4350;border-radius:10px;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;color:#68707f;font-size:10px;text-align:center;line-height:1.8;background:#1a1b1f80}.ghost i{font-size:19px;font-style:normal;color:#4d5563}
+.port{position:absolute;top:255px;left:-7px;width:12px;height:12px;border:3px solid #1c1e25;border-radius:50%;background:#22d3ee;box-shadow:0 0 0 1px #2b7d8c}
+.source-note{margin-top:6px;border-top:1px solid #2b2d32;padding-top:15px;line-height:1.9;color:#6e7581;font-size:11px}.source-note b{color:#a9b4c7;font-weight:500}
+.node-label{display:flex;align-items:center;gap:8px;font-size:12px;color:#b5bdd1;margin-bottom:11px}.node-label .dot{width:7px;height:7px;background:var(--cyan);border-radius:50%;box-shadow:0 0 12px #06b6d488}
+.node{background:#1d1e22;border:1px solid #434957;border-radius:17px;box-shadow:0 18px 70px #0006;position:relative}
+.node-body{padding:16px}
+.cmp{position:relative;aspect-ratio:256/340;border-radius:12px;border:1px solid #ffffff14;overflow:hidden;background:#15161a;--split:50%;touch-action:none;user-select:none}
+.cmp.is-live{cursor:ew-resize}
+.cmp-layer{position:absolute;inset:0}
+.cmp-layer .photo{position:absolute;inset:0;border:0;border-radius:0;aspect-ratio:auto}
+.cmp-layer.over{clip-path:inset(0 calc(100% - var(--split)) 0 0)}
+.cmp-divider{position:absolute;top:0;bottom:0;left:var(--split);width:2px;margin-left:-1px;background:#eef2f8;box-shadow:0 0 16px #000a}
+.cmp-handle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:32px;height:32px;border-radius:50%;background:#eef2f8;color:#15161a;display:grid;place-items:center;font-size:12px;letter-spacing:-1px;box-shadow:0 4px 18px #0009;cursor:ew-resize}
+.cmp-pill{position:absolute;bottom:10px;padding:4px 9px;border-radius:7px;background:#17181dd0;color:#dfe5ef;font-size:10px;backdrop-filter:blur(8px);border:1px solid #ffffff14;max-width:47%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmp-pill.left{left:10px}.cmp-pill.right{right:10px}
+.cmp-empty{aspect-ratio:256/340;border:1px dashed #3a404c;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#6e788b;padding:24px;line-height:1.9;background:#1a1b1f}
+.cmp-empty .symbol{width:46px;height:46px;border-radius:12px;border:1px solid #2f5560;color:#5fc4d8;display:grid;place-items:center;font-size:21px;margin-bottom:14px}
+.cmp-empty strong{color:#a6b0c2;font-weight:500}.cmp-empty p{margin:8px 0 0;font-size:11px}
+.cmp-wait{position:absolute;top:0;bottom:0;right:0;width:50%;background:#111214cc;border-left:1px dashed #5b6472;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#9aa4b6;font-size:10px;text-align:center;line-height:1.8;backdrop-filter:blur(3px)}
+.node-footer{border-top:1px solid #ffffff09;padding:13px 16px 16px}
+.cmp-actions{display:flex;gap:8px}
+.cmp-swap{flex:1;height:34px;border:1px solid #3a414d;background:#22242a;border-radius:8px;color:#c4ccdb;font-size:11px}
+.bottom-bar{position:fixed;bottom:18px;left:24px;background:#202227e8;border:1px solid #3b404c;border-radius:9px;padding:10px 14px;font-size:10px;color:#8c97ac;backdrop-filter:blur(10px);z-index:4;display:flex;align-items:center;gap:9px}
+.bottom-bar b{color:#c1cbe0;font-weight:400;margin-right:5px}.bottom-bar button{border:1px solid #3d424e;background:#262930;border-radius:6px;padding:6px 10px;font-size:10px;color:#a7b0c0}.bottom-bar button.active{border-color:#2b6b7a;color:#8be9f8;background:#123039}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);padding:12px 22px;background:#31394b;border:1px solid #596b90;color:#e5edff;border-radius:9px;z-index:40;box-shadow:0 8px 30px #0006}
+.hidden{display:none!important}
+@media(max-width:900px){.workspace{grid-template-columns:180px 350px;gap:34px}.canvas{padding-left:18px;padding-right:18px}.wires{display:none}}
+@media(max-width:640px){.workspace{display:flex;flex-direction:column;align-items:center;gap:26px}.source-col{padding-top:0;width:min(100%,350px);order:1}.node-wrap{width:min(100%,392px);order:0}.bottom-bar{left:12px;right:12px;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="mark">L</div><strong>Ling Canvas</strong><span class="divider"></span><span class="muted">图片对比节点</span><span class="badge">UI 预览</span></div>
+  <div class="top-actions"><button class="quiet" id="reset">重置预览</button></div>
+</header>
+
+<main class="canvas">
+  <div class="workspace">
+    <svg class="wires" id="wires" aria-hidden="true"></svg>
+
+    <section class="source-col">
+      <div class="column-title"><span>上游素材</span><small id="source-count">已连 2 张</small></div>
+      <div id="sources" style="display:flex;flex-direction:column;gap:16px"></div>
+      <div class="source-note">顺序读入边，不读文件名。<br>先连上来的那张 = <b>前</b>（滑块左侧）<br>后连上来的那张 = <b>后</b>（滑块右侧）</div>
+    </section>
+
+    <section class="node-wrap">
+      <div class="node-label"><i class="dot"></i>图片对比</div>
+      <div class="node">
+        <i class="port in" id="port-in"></i>
+
+        <div class="node-body" id="body-slot"></div>
+
+        <div class="node-footer">
+          <div class="cmp-actions"><button class="cmp-swap" id="swap">⇄ 交换前后</button></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="bottom-bar">
+  <b>▨ 状态演示</b>
+  <button data-state="0">还没连图</button>
+  <button data-state="1">只连了 1 张</button>
+  <button data-state="2" class="active">已连 2 张</button>
+</div>
+<div class="toast hidden" id="toast" role="status"></div>
+
+<script>
+const $ = id => document.getElementById(id)
+
+/* 两张示例素材：sprite 里同一机位的前后两张 —— s0 是 SU 截图，r0 是渲染效果 */
+const ITEMS = [
+  { name: '餐厅正面 · SU 截图', cls: 's0' },
+  { name: '餐厅正面 · 渲染效果', cls: 'r0' }
+]
+
+const state = { count: 2, split: 50, order: [0, 1] }
+let toastTimer
+
+const roleText = role => (role === 'before' ? '前' : '后')
+
+function toast (text) {
+  const box = $('toast')
+  box.textContent = text
+  box.classList.remove('hidden')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => box.classList.add('hidden'), 3000)
+}
+
+/* ---------- 左栏：上游素材 ---------- */
+function renderSources () {
+  const slot = $('sources')
+  const live = state.order.slice(0, state.count)
+  const cards = live.map((itemIndex, position) => {
+    const item = ITEMS[itemIndex]
+    const role = position === 0 ? 'before' : 'after'
+    return `<div class="image-card">
+      <div class="photo ${item.cls}"><span class="number">${position + 1}</span><span class="role is-${role}">${roleText(role)}</span></div>
+      <div class="caption"><span>${item.name}</span><small>连线 ${position + 1}</small></div>
+    </div>`
+  })
+  for (let position = state.count; position < 2; position += 1) {
+    cards.push(`<div class="image-card"><div class="ghost"><i>＋</i><span>等待连线<br>第 ${position + 1} 张</span></div><div class="caption"><span class="muted">未接入</span><small>${position === 0 ? '将成为「前」' : '将成为「后」'}</small></div></div>`)
+  }
+  slot.innerHTML = cards.join('')
+  $('source-count').textContent = state.count ? `已连 ${state.count} 张` : '未接入'
+}
+
+/* ---------- 卡片主体 ---------- */
+function renderBody () {
+  if (state.count === 0) {
+    $('body-slot').innerHTML = `<div class="cmp-empty">
+      <div class="symbol">▨</div><strong>从左侧连入两张图片</strong>
+      <p>先连上来的作为「前」，<br>后连上来的作为「后」</p></div>`
+    return
+  }
+
+  const before = ITEMS[state.order[0]]
+
+  if (state.count === 1) {
+    $('body-slot').innerHTML = `
+      <div class="cmp">
+        <div class="cmp-layer base"><div class="photo ${before.cls}"></div></div>
+        <span class="cmp-pill left">前 · ${before.name}</span>
+        <div class="cmp-wait"><i style="font-size:17px;font-style:normal">＋</i><span>等待第二张图<br>连上后自动作为「后」显示在右侧</span></div>
+      </div>`
+    return
+  }
+
+  const after = ITEMS[state.order[1]]
+  const box = document.createElement('div')
+  box.className = 'cmp is-live'
+  box.id = 'cmp'
+  box.style.setProperty('--split', state.split + '%')
+  box.innerHTML = `
+    <div class="cmp-layer base"><div class="photo ${after.cls}"></div></div>
+    <div class="cmp-layer over"><div class="photo ${before.cls}"></div></div>
+    <span class="cmp-pill left">前 · ${before.name}</span>
+    <span class="cmp-pill right">后 · ${after.name}</span>
+    <div class="cmp-divider" id="divider" tabindex="0" role="slider" aria-label="前后对比滑块" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(state.split)}"><span class="cmp-handle">‹›</span></div>`
+
+  const slot = $('body-slot')
+  slot.innerHTML = ''
+  slot.appendChild(box)
+  bindSlider(box)
+}
+
+/* ---------- 滑块 ---------- */
+function setSplit (percent) {
+  state.split = Math.min(100, Math.max(0, percent))
+  const box = $('cmp')
+  if (!box) return
+  box.style.setProperty('--split', state.split + '%')
+  const divider = $('divider')
+  if (divider) divider.setAttribute('aria-valuenow', Math.round(state.split))
+}
+
+function bindSlider (box) {
+  const divider = $('divider')
+  let dragging = false
+
+  const move = (event) => {
+    const rect = box.getBoundingClientRect()
+    setSplit(((event.clientX - rect.left) / rect.width) * 100)
+  }
+  box.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    dragging = true
+    box.setPointerCapture(event.pointerId)
+    divider.focus()
+    move(event)
+  })
+  box.addEventListener('pointermove', (event) => { if (dragging) move(event) })
+  const end = () => { dragging = false }
+  box.addEventListener('pointerup', end)
+  box.addEventListener('pointercancel', end)
+
+  divider.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 10 : 2
+    if (event.key === 'ArrowLeft') setSplit(state.split - step)
+    else if (event.key === 'ArrowRight') setSplit(state.split + step)
+    else if (event.key === 'Home') setSplit(0)
+    else if (event.key === 'End') setSplit(100)
+    else return
+    event.preventDefault()
+  })
+}
+
+/* ---------- 组装 ---------- */
+function render () {
+  renderSources()
+  renderBody()
+  $('swap').disabled = state.count < 2
+  document.querySelectorAll('[data-state]').forEach(button => {
+    button.classList.toggle('active', Number(button.dataset.state) === state.count)
+  })
+  drawWires()
+}
+
+document.querySelectorAll('[data-state]').forEach(button => {
+  button.addEventListener('click', () => {
+    state.count = Number(button.dataset.state)
+    state.order = [0, 1]
+    render()
+  })
+})
+$('swap').addEventListener('click', () => {
+  state.order = [state.order[1], state.order[0]]
+  render()
+  toast('已交换前后 —— 滑块左侧现在是上一张「后」')
+})
+$('reset').addEventListener('click', () => location.reload())
+
+/* ---------- 连线 ---------- */
+function drawWires () {
+  const workspace = document.querySelector('.workspace')
+  const svg = $('wires')
+  const base = workspace.getBoundingClientRect()
+  svg.setAttribute('viewBox', `0 0 ${base.width} ${base.height}`)
+  const point = (el, side) => {
+    const rect = el.getBoundingClientRect()
+    const x = side === 'right' ? rect.right : side === 'left' ? rect.left : rect.left + rect.width / 2
+    return { x: x - base.left, y: rect.top + rect.height / 2 - base.top }
+  }
+  const inlet = point($('port-in'), 'center')
+  const paths = []
+  document.querySelectorAll('#sources .photo').forEach((el) => {
+    const from = point(el, 'right')
+    const bend = Math.max(34, Math.abs(inlet.x - from.x) * 0.5)
+    paths.push(`<path d="M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${inlet.x - bend} ${inlet.y}, ${inlet.x} ${inlet.y}" fill="none" stroke="#4a7f8c" stroke-width="1.1" opacity=".75"/>`)
+  })
+  svg.innerHTML = paths.join('')
+}
+
+new ResizeObserver(drawWires).observe(document.querySelector('.workspace'))
+window.addEventListener('resize', drawWires)
+
+render()
+</script>
+</body>
+</html>

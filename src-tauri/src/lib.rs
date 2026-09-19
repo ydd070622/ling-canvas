@@ -199,6 +199,7 @@ fn build_headers(input: &HashMap<String, String>) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
+
 #[tauri::command]
 async fn http_request(
     args: HttpRequestArgs,
@@ -296,6 +297,7 @@ async fn http_request(
             .text()
             .await
             .map_err(|err| format!("读取上游响应失败: {err}"))?;
+
 
         Ok(HttpResponse {
             status: status.as_u16(),
@@ -473,14 +475,16 @@ struct BinaryPayload {
     byte_length: usize,
 }
 
-/// 拉取二进制资源（参考图/首帧图）并回传 base64。
+/// 取二进制资源（参考图 / 首帧图 / 待保存的素材）的字节。
 ///
 /// 来源很杂，按来源分流：
 ///   - http(s) 外链（上游返回的图片地址）→ 走网络，顺带绕开 CORS
 ///   - file: / asset: / 裸磁盘路径        → 本机读盘
 ///   - blob:                              → 只能由前端在 webview 内解析，这里明确报错
-#[tauri::command]
-async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayload, String> {
+///
+/// `fetch_binary`（把字节交给前端）与 `save_media_file`（直接落盘）共用这一份，
+/// 免得"能读到的格式"在两个命令之间出现两套口径。
+async fn load_binary(url: &str, timeout_ms: Option<u64>) -> Result<BinaryPayload, String> {
     let raw = url.trim().to_string();
     if raw.is_empty() {
         return Err("资源地址为空".into());
@@ -554,6 +558,72 @@ async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayl
         byte_length: bytes.len(),
         data_base64: STANDARD.encode(&bytes),
     })
+}
+
+#[tauri::command]
+async fn fetch_binary(url: String, timeout_ms: Option<u64>) -> Result<BinaryPayload, String> {
+    load_binary(&url, timeout_ms).await
+}
+
+/// 把一份素材存到用户选定的位置（原生「另存为」）| Native save-as
+///
+/// **必须在 Rust 侧做。** 前端那条路走不通：WebView2 不会理会 `<a download>` +
+/// blob 地址，点了既不下载也不报错。这里换成原生保存对话框，路径由用户自己选。
+///
+/// 字节两个来源二选一（Tauri 的入参会从 camelCase 映射到 snake_case 参数名）：
+///   - `url`         ：http(s) 外链 / 本地路径，走 `load_binary`
+///   - `data_base64` ：`data:` / `blob:` 地址只有 webview 解析得出来，
+///                     前端先解码好再送过来（`load_binary` 读不了这两种）
+///
+/// 取消返回 `Ok(None)`，前端据此不提示成功、也不当作失败。
+#[tauri::command]
+async fn save_media_file(
+    app: tauri::AppHandle,
+    file_name: String,
+    url: Option<String>,
+    data_base64: Option<String>,
+) -> Result<Option<String>, String> {
+    let trimmed_url = url.unwrap_or_default().trim().to_string();
+    let bytes = if !trimmed_url.is_empty() {
+        let payload = load_binary(&trimmed_url, None).await?;
+        STANDARD
+            .decode(&payload.data_base64)
+            .map_err(|err| format!("素材内容解码失败: {err}"))?
+    } else if let Some(data) = data_base64.filter(|value| !value.is_empty()) {
+        STANDARD
+            .decode(&data)
+            .map_err(|err| format!("素材内容解码失败: {err}"))?
+    } else {
+        return Err("没有可保存的素材内容".into());
+    };
+
+    // 必须自己持有一份：这个值要移进 spawn_blocking 的闭包（'static），
+    // 借用入参 `file_name` 活不了那么长
+    let trimmed = file_name.trim();
+    let default_name = if trimmed.is_empty() { "素材".to_string() } else { trimmed.to_string() };
+    let dialog_app = app.clone();
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        // blocking_* 只能在非主线程调：它内部 run_on_main_thread 建对话框，
+        // 再在当前线程 rx.recv() 阻塞。放主线程会死锁（同 pick_asset_root）。
+        dialog_app
+            .dialog()
+            .file()
+            .set_title("保存素材")
+            .set_file_name(default_name.as_str())
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|err| format!("保存对话框打开失败: {err}"))?;
+
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path
+        .into_path()
+        .map_err(|err| format!("无法解析所选位置: {err}"))?;
+    fs::write(&path, &bytes).map_err(|err| format!("写入失败 ({}): {err}", path.display()))?;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1269,6 +1339,7 @@ pub fn run() {
             http_request,
             cancel_http_request,
             fetch_binary,
+            save_media_file,
             list_asset_library,
             read_asset_file,
             stat_asset_files,

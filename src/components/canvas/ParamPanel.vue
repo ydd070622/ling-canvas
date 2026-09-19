@@ -17,6 +17,7 @@
               @click="emit('update:resolution', option)"
             >{{ option }}</button>
           </div>
+          <p v-if="resolutionHint" class="param-note">{{ resolutionHint }}</p>
         </section>
 
         <section v-if="videoPresetOptions.length" class="param-section">
@@ -79,6 +80,8 @@ const props = defineProps({
   anchor: { type: Object, default: null },
   resolution: { type: String, default: '' },
   resolutionOptions: { type: Array, default: () => [] },
+  /** 档位被渠道锁死时的说明（空串 = 可自由切换） */
+  resolutionHint: { type: String, default: '' },
   ratio: { type: String, default: 'auto' },
   ratioOptions: { type: Array, default: () => [] },
   count: { type: Number, default: 1 },
@@ -167,6 +170,14 @@ onBeforeUnmount(() => {
 }
 
 .param-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+
+/* 档位被渠道锁死时的说明 —— 不写这句，三档突然变一档只会像界面坏了 */
+.param-note {
+  margin: 9px 0 0;
+  color: var(--text-tertiary, #94a3b8);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
 .param-grid.is-ratio { grid-template-columns: repeat(5, 1fr); }
 .param-grid.is-count { grid-template-columns: repeat(3, 1fr); }
 

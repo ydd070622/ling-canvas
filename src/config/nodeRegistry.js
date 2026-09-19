@@ -15,8 +15,9 @@ import {
   DEFAULT_VIDEO_MODEL,
   VIDEO_MODELS
 } from './models'
+import { RENDER_DEFAULTS } from '../utils/renderPrompt'
 
-export const CONTENT_NODE_TYPES = Object.freeze(['text', 'image', 'video', 'audio', 'task'])
+export const CONTENT_NODE_TYPES = Object.freeze(['text', 'image', 'video', 'audio', 'task', 'render', 'compare'])
 // 节点类型里能承载二进制媒体（存进 IndexedDB、渲染成 <img>/<video>/<audio> :src）的那些。
 // text 节点也在 CONTENT_NODE_TYPES 里，但它没有 url 字段，不要混用。
 export const MEDIA_NODE_TYPES = Object.freeze(['image', 'video', 'audio'])
@@ -94,11 +95,46 @@ export const NODE_MODES = Object.freeze({
       roles: { text: ['描述', '补充', '补充', '补充'], image: ['参考', '参考', '参考', '参考', '参考', '参考'], video: ['参考视频', '参考视频'], audio: ['参考音频', '参考音频'] }
     }
   },
+  /**
+   * 超级节点 | Super node
+   *
+   * 一张卡片 = 一整组子任务：上游每张图就是**一个视角**，逐视角出图（N 进 N 出），
+   * 共用同一套结构 / 人物 / 灯光 / 环境参数。这是它与 task 的本质区别 ——
+   * task 的 count 是「一个提示词出 N 张」，这里是「N 个视角各出 1 张」。
+   *
+   * viewMode（单 / 多视角）是行为字段而非模式：它不改槽位语义，只改跑几个视角，
+   * 所以不在这里，而是落在 data 上。
+   *
+   * 容量给到 8 是留余量（原型用 4）。因为 mode 保持 auto，getAcceptLimit 走
+   * 「跨模式取最大」分支，第 9 张图会落进 idle 槽，而不是在连线时被硬拒。
+   */
+  render: {
+    gen: {
+      label: '室内渲染',
+      accepts: { image: 8, text: 2 },
+      roles: {
+        image: ['视角', '视角', '视角', '视角', '视角', '视角', '视角', '视角'],
+        text: ['补充', '补充']
+      }
+    }
+  },
+  /**
+   * 查看型节点 | Viewer node
+   *
+   * 只收两张图 —— 第一张当「前」、第二张当「后」，就这一种用法，所以整张表只有一项，
+   * 也不带 roles（前 / 后不走槽位角色：交换前后是卡片上的一个按钮，不是连线语义）。
+   *
+   * 它必须在这张表里有条目，`getAcceptLimit` 才会返回非零 —— 表里没有的类型
+   * 一张上游都连不进来（见 getAcceptLimit 的头一段）。
+   */
+  compare: {
+    hold: { label: '图片对比', accepts: { image: 2 } }
+  },
 })
 
 /** 每种节点类型的默认模式与承载模式的字段名 */
 export const NODE_MODE_FIELD = Object.freeze({
-  text: 'mode', image: 'mode', video: 'mode', audio: 'mode', task: 'mode'
+  text: 'mode', image: 'mode', video: 'mode', audio: 'mode', task: 'mode', render: 'mode', compare: 'mode'
 })
 
 /**
@@ -237,6 +273,46 @@ export const NODE_DEFINITIONS = Object.freeze({
       resolution: '1K',
       count: 1,
       duration: videoModel?.defaultParams?.duration || 5,
+      ...baseRefData()
+    })
+  },
+  /**
+   * 超级节点：一张卡片 = 上游每个视角各出 1 张图。
+   *
+   * 参数默认值来自 utils/renderPrompt 的 RENDER_DEFAULTS —— 那里是唯一真相，
+   * 组件的 readParams() 也读它，所以这里不重复写一遍字段。
+   */
+  render: {
+    label: '室内渲染',
+    defaultMode: 'gen',
+    createData: () => ({
+      label: '室内渲染',
+      prompt: '',
+      model: '',
+      mode: AUTO_MODE,
+      ...RENDER_DEFAULTS,
+      viewOutputIds: [],
+      viewErrors: [],
+      expanded: true,
+      ...baseRefData()
+    })
+  },
+  /**
+   * 查看型节点：两张图进、一个滑块出。
+   *
+   * 不生成、不产出，所以右侧没有输出口（NodeFrame 的 has-output）。它的「结果」
+   * 就是卡片里那个对比视图本身 —— 没有可以往下游接的东西。
+   *
+   * `swap`：手动交换前后的标记。默认顺序由入边先后决定（先连上来的当「前」），
+   * 用户按了「交换前后」就记在这里 —— 它是用户的判断，得跟着存档活下来。
+   */
+  compare: {
+    label: '图片对比',
+    defaultMode: 'hold',
+    createData: () => ({
+      label: '图片对比',
+      mode: AUTO_MODE,
+      swap: false,
       ...baseRefData()
     })
   },

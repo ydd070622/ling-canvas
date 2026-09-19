@@ -24,10 +24,18 @@
       </div>
 
       <div class="compose-main">
-        <button class="compose-attach" type="button" title="添加本地文件" @click="emit('attach')">
+        <button v-if="!isParamlessNode" class="compose-attach" type="button" title="添加本地文件" @click="emit('attach')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
         </button>
+        <!-- 这两类节点没有"提示词"这回事，正文框换成一句说明 -->
+        <p v-if="isRenderNode" class="compose-note">
+          参数在卡片上设置，比例跟随每个视角的原图。这里只负责开始 / 停止。
+        </p>
+        <p v-else-if="isCompareNode" class="compose-note">
+          图片对比不用生成：连入两张图片后，在卡片里拖中间的滑块看前后差异。
+        </p>
         <textarea
+          v-else
           ref="inputRef"
           v-model="text"
           class="compose-input"
@@ -38,7 +46,9 @@
           @click="updateMention"
           @blur="closeMention"
         ></textarea>
+        <!-- 图片对比没有可生成的东西，这颗键整颗收起来（留着禁用态只会让人找原因） -->
         <button
+          v-if="!isCompareNode"
           class="compose-send"
           type="button"
           :class="{ 'is-ready': sendReady, 'is-busy': editingBusy }"
@@ -55,7 +65,7 @@
         </button>
       </div>
 
-      <div class="compose-options">
+      <div v-if="!isParamlessNode" class="compose-options">
         <div class="opt-left">
           <label class="node-type-pill">
             <span class="node-type-dot" :class="`tone-${effectiveTarget}`"></span>
@@ -125,6 +135,7 @@
       :anchor="paramTriggerRef"
       :resolution="resolution"
       :resolution-options="effectiveTarget === 'image' ? resolutionOptions : []"
+      :resolution-hint="effectiveTarget === 'image' ? imageTier.note : ''"
       :ratio="ratio"
       :ratio-options="ratioOptions"
       :count="count"
@@ -166,9 +177,12 @@ import {
   startBatchOperation, endBatchOperation, renumberNodeRefs
 } from '../../stores/canvas'
 import { useModelStore } from '../../stores/pinia'
-import { INPUT_HANDLE, OUTPUT_HANDLE, KIND_TITLE, isReferenceableType } from '../../config/nodeRegistry'
+import {
+  INPUT_HANDLE, OUTPUT_HANDLE, KIND_TITLE, isReferenceableType, NODE_DEFINITIONS
+} from '../../config/nodeRegistry'
 import { computeSlots, refKey } from '../../utils/promptRefs'
 import { findSizeByRatio, approximateRatio, normalizeRatioKey } from '../../utils/ratio'
+import { resolveImageTierOptions, imageTierLockNote } from '../../utils/imageTiers'
 import ParamPanel from './ParamPanel.vue'
 import OptionPanel from './OptionPanel.vue'
 import { normalizePreset, toStoredPreset } from '../../config/promptPresets'
@@ -211,10 +225,24 @@ const selectedNodes = computed(() => nodes.value.filter(node => selectedNodeIds.
 /** 恰好选中一个内容节点 = 编辑它的提示词 */
 const editingNode = computed(() => (selectedNodes.value.length === 1 ? selectedNodes.value[0] : null))
 const isEditing = computed(() => Boolean(editingNode.value))
+/**
+ * 室内渲染是唯一一个「参数不在 composer 上」的节点 —— 它自己就是一张大表单。
+ * 选中它时 composer 只剩一颗开始 / 停止按钮，正文框与整行选项都收起来：
+ * 参数只有卡片这一个可编辑面，镜像一份到这里必然失步。
+ */
+const isRenderNode = computed(() => isEditing.value && editingNode.value.type === 'render')
+/**
+ * 图片对比是第二个「参数不在 composer 上」的节点，而且更彻底：它没有提示词、
+ * 也没有可生成的东西 —— 参数就是那两根连线本身。选中它时 composer 只留一句说明，
+ * 正文框、选项行、发送键全部让位。
+ */
+const isCompareNode = computed(() => isEditing.value && editingNode.value.type === 'compare')
+/** 这两类节点的可编辑面都在卡片上，composer 只说明、不编辑 */
+const isParamlessNode = computed(() => isRenderNode.value || isCompareNode.value)
 
 const contextChips = computed(() => selectedNodes.value.map(node => ({
   id: node.id,
-  label: `${node.data?.label || KIND_TITLE[node.type] || node.type}`
+  label: `${node.data?.label || KIND_TITLE[node.type] || NODE_DEFINITIONS[node.type]?.label || node.type}`
 })))
 
 const deselect = (id) => {
@@ -275,17 +303,22 @@ const modelButtonLabel = computed(() => {
 })
 
 /**
- * 图片的清晰度档位（1K / 2K / 4K…）：跟模型的声明走。
- * 模型没声明就给通用三档；Seedream 系只有 2K/4K 两档。
+ * 图片的清晰度档位（1K / 2K / 4K…）：跟模型的声明走，
+ * 还要看当前渠道能不能真把档位送进去 —— 详见 utils/imageTiers。
  */
-const resolutionOptions = computed(() => {
-  const model = modelStore.getImageModel?.(selectedModel.value)
-  const declared = model?.imageResolutions || model?.resolutions
-  const values = Array.isArray(declared) && declared.length
-    ? declared
-    : (/seedream/i.test(selectedModel.value) ? ['2K', '4K'] : ['1K', '2K', '4K'])
-  return values.map(value => String(value).toUpperCase())
+const imageTier = computed(() => {
+  const upstream = modelStore.resolveUpstreamContext(
+    modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE') || ''
+  )
+  const args = {
+    model: modelStore.getImageModel?.(selectedModel.value),
+    modelKey: selectedModel.value,
+    providerConfig: upstream.providerConfig,
+    baseUrl: upstream.baseUrl
+  }
+  return { options: resolveImageTierOptions(args), note: imageTierLockNote(args) }
 })
+const resolutionOptions = computed(() => imageTier.value.options)
 
 // 换模型后原来那档可能不存在了（1K 的模型换到只有 2K/4K 的），落到新模型的第一档
 watch([selectedModel, resolutionOptions], () => {
@@ -399,6 +432,10 @@ const desiredParams = () => {
 const applyOptionsToNode = () => {
   const node = editingNode.value
   if (!node) return
+  // 室内渲染 / 图片对比的参数（或压根没有参数）只在卡片上，这一套选项对它没有意义。
+  // 必须在这里早退：否则选中它的瞬间，这个 watcher 就会把 composer 里的图片模型、
+  // 张数、清晰度写进节点，静默盖掉卡片上刚设好的参数。
+  if (isParamlessNode.value) return
   const patch = desiredParams()
   const changed = Object.entries(patch).some(([key, value]) => (node.data?.[key] ?? null) !== (value ?? null))
   if (!changed) return
@@ -452,7 +489,7 @@ watch(preset, (value) => {
 
 /* ---------------------------------------------------------------- 生成（编辑模式） */
 /** 能生成的节点类型：音频是纯承载，没有生成 */
-const RUNNABLE = ['text', 'image', 'video', 'task']
+const RUNNABLE = ['text', 'image', 'video', 'task', 'render']
 const canRun = computed(() => Boolean(editingNode.value) && RUNNABLE.includes(editingNode.value.type))
 /** 正在跑：loading 或者视频在等异步任务 */
 const editingBusy = computed(() => Boolean(
@@ -518,10 +555,13 @@ const mentioned = ref([])
 const mentionOpen = ref(false)
 const mentionFrom = ref(-1)
 
-/** 可以被引用的节点：内容型、有产出、不是正在编辑的那个 */
+/**
+ * 可以被引用的节点：承载内容、且不是正在编辑的那个。
+ * 用 isReferenceableType 而不是逐个排除 group / task —— 任务与室内渲染都是**指令**，
+ * 没有可被引用的内容，而 KIND_TITLE 里也没有它们，漏掉一个就会往正文里插入 `@undefined1`。
+ */
 const referenceable = computed(() => nodes.value.filter(node => (
-  node.type !== 'group' && node.type !== 'task'
-  && node.id !== editingNode.value?.id
+  isReferenceableType(node.type) && node.id !== editingNode.value?.id
 )))
 
 const tokenFor = (node, index) => `@${KIND_TITLE[node.type]}${index}`
@@ -639,6 +679,15 @@ watch([() => editingNode.value?.id, targetType], () => {
 })
 
 const send = async () => {
+  // 室内渲染：只借用这颗按钮当作开始 / 停止。必须在 resolveTokens / editNode 之前拦下 ——
+  // 那两条会往节点里写 prompt 与 refBindings，而它的提示词是 buildRenderPrompt 现算的。
+  if (isRenderNode.value) {
+    const node = editingNode.value
+    if (editingBusy.value) cancelNode(node.id)
+    else runNode(node.id)
+    return
+  }
+
   if (isEditing.value) {
     const node = editingNode.value
     if (editingBusy.value) {
@@ -849,6 +898,17 @@ const viewportCenter = () => {
   line-height: 1.45;
 }
 .compose-input::placeholder { color: var(--text-tertiary); }
+/* 室内渲染选中时顶掉正文框的那句话：和输入框同高，按钮的中线才对得上 */
+.compose-note {
+  min-height: 42px;
+  flex: 1;
+  margin: 0;
+  padding: 11px 8px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .compose-attach, .compose-send {
   display: grid;
   width: 42px;

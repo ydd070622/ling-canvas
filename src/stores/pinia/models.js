@@ -14,6 +14,7 @@ import {
   DEFAULT_VIDEO_MODEL
 } from '@/config/models'
 import { PROVIDERS, getProviderList, getDefaultProvider, getProviderConfig, getDefaultBaseUrl } from '@/config/providers'
+import { mergeProviderOverride } from '@/config/providerCapabilities'
 
 // 存储键名
 const STORAGE_KEYS = {
@@ -32,7 +33,8 @@ const STORAGE_KEYS = {
   CUSTOM_PROVIDERS: 'custom-api-providers',
   PROVIDER_ALIASES: 'api-provider-aliases',
   PROVIDER_ORDER: 'api-provider-order',
-  HIDDEN_PROVIDERS: 'api-hidden-providers'
+  HIDDEN_PROVIDERS: 'api-hidden-providers',
+  PROVIDER_OVERRIDES: 'api-provider-overrides'
 }
 
 /**
@@ -112,6 +114,9 @@ export const useModelStore = defineStore('model', () => {
   const providerAliases = ref(getStoredJson(STORAGE_KEYS.PROVIDER_ALIASES, {}))
   const providerOrder = ref(getStoredJson(STORAGE_KEYS.PROVIDER_ORDER, []))
   const hiddenProviders = ref(getStoredJson(STORAGE_KEYS.HIDDEN_PROVIDERS, []))
+  // 渠道级能力覆盖（设置界面「高级配置」）。**单独存一份而不是写进渠道对象** ——
+  // 内置渠道（openai / chatfire）不在 customProviders 里，没有对象可写。
+  const providerOverrides = ref(getStoredJson(STORAGE_KEYS.PROVIDER_OVERRIDES, {}))
 
   // 当前选中的渠�?
   const currentProvider = ref(getStored(STORAGE_KEYS.PROVIDER) || getDefaultProvider())
@@ -140,8 +145,11 @@ export const useModelStore = defineStore('model', () => {
     })
   })
 
-  // 当前渠道配置
-  const providerConfig = computed(() => customProviders.value[currentProvider.value] || getProviderConfig(currentProvider.value))
+  // 当前渠道配置（渠道对象 + 用户手填的能力覆盖）
+  const providerConfig = computed(() => mergeProviderOverride(
+    customProviders.value[currentProvider.value] || getProviderConfig(currentProvider.value),
+    providerOverrides.value[currentProvider.value]
+  ))
 
   // 当前渠道标签
   const providerLabel = computed(() => providerList.value.find(provider => provider.key === currentProvider.value)?.label || providerConfig.value.label || currentProvider.value)
@@ -208,6 +216,7 @@ export const useModelStore = defineStore('model', () => {
     delete customProviders.value[key]
     delete apiKeysByProvider.value[key]
     delete baseUrlsByProvider.value[key]
+    delete providerOverrides.value[key]
     if (currentProvider.value === key) setProvider(getDefaultProvider())
     return true
   }
@@ -217,6 +226,7 @@ export const useModelStore = defineStore('model', () => {
     // 清除 API 配置
     delete apiKeysByProvider.value[key]
     delete baseUrlsByProvider.value[key]
+    delete providerOverrides.value[key]
     if (customProviders.value[key]) {
       // 自定义供应商：直接删除
       delete customProviders.value[key]
@@ -306,9 +316,22 @@ export const useModelStore = defineStore('model', () => {
    */
   const getProviderConfigById = (providerId) => {
     if (!providerId) return null
-    if (customProviders.value[providerId]) return customProviders.value[providerId]
-    if (PROVIDERS[providerId]) return PROVIDERS[providerId]
-    return null
+    const base = customProviders.value[providerId] || PROVIDERS[providerId]
+    if (!base) return null
+    return mergeProviderOverride(base, providerOverrides.value[providerId])
+  }
+
+  /**
+   * 写入渠道级能力覆盖（设置界面「高级配置」）。
+   * 传空对象等于清掉这个渠道的覆盖，让它回到内置默认行为。
+   */
+  const setProviderOverrides = (providerId, override = {}) => {
+    if (!providerId) return false
+    const next = { ...providerOverrides.value }
+    if (Object.keys(override).length) next[providerId] = override
+    else delete next[providerId]
+    providerOverrides.value = next
+    return true
   }
 
   const getApiKeyByProvider = (providerId) => apiKeysByProvider.value[providerId] || ''
@@ -850,6 +873,7 @@ export const useModelStore = defineStore('model', () => {
   watch(providerAliases, (val) => setStoredJson(STORAGE_KEYS.PROVIDER_ALIASES, val), { deep: true })
   watch(providerOrder, (val) => setStoredJson(STORAGE_KEYS.PROVIDER_ORDER, val), { deep: true })
   watch(hiddenProviders, (val) => setStoredJson(STORAGE_KEYS.HIDDEN_PROVIDERS, val), { deep: true })
+  watch(providerOverrides, (val) => setStoredJson(STORAGE_KEYS.PROVIDER_OVERRIDES, val), { deep: true })
 
   return {
     // Provider
@@ -862,6 +886,8 @@ export const useModelStore = defineStore('model', () => {
     customProviders,
     providerAliases,
     providerOrder,
+    providerOverrides,
+    setProviderOverrides,
     addCustomProvider,
     updateCustomProvider,
     updateProviderLabel,

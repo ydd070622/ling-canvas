@@ -373,6 +373,7 @@ import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
 import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
 import { focusedNodeId, selectedNodeIds } from '../composables/useFocusMode'
+import { activeEdgeId, clearEdgeFocus } from '../composables/useEdgeFocus'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
 let handleBeforeUnload = null
@@ -425,6 +426,8 @@ import SimpleTextNode from '../components/nodes/SimpleTextNode.vue'
 import SimpleImageNode from '../components/nodes/SimpleImageNode.vue'
 import AudioNode from '../components/nodes/AudioNode.vue'
 import TaskNode from '../components/nodes/TaskNode.vue'
+import RenderNode from '../components/nodes/RenderNode.vue'
+import CompareNode from '../components/nodes/CompareNode.vue'
 import FlowEdge from '../components/edges/FlowEdge.vue'
 import AssetPickerModal from '../components/canvas/AssetPickerModal.vue'
 import MediaViewer from '../components/canvas/MediaViewer.vue'
@@ -450,6 +453,8 @@ const nodeTypes = {
   image: markRaw(SimpleImageNode),
   audio: markRaw(AudioNode),
   task: markRaw(TaskNode),
+  render: markRaw(RenderNode),
+  compare: markRaw(CompareNode),
   group: markRaw(GroupNode)
 }
 
@@ -508,6 +513,8 @@ const nodeTypeLabels = {
   video: '视频',
   audio: '音频',
   task: 'AI 任务',
+  render: '室内渲染',
+  compare: '图片对比',
 }
 
 const getNodeTypeLabel = (type) => nodeTypeLabels[type] || '节点'
@@ -643,11 +650,18 @@ const clearHistorySelection = () => {
 const deleteSelectedCanvasElements = () => {
   const selectedNodeIds = nodes.value.filter(node => node.selected).map(node => node.id)
   const selectedEdgeIds = edges.value.filter(edge => edge.selected).map(edge => edge.id)
-  if (!selectedNodeIds.length && !selectedEdgeIds.length) return false
+  // 点中某条线（剪刀已经钉出来）时按 Delete 也应该剪断它。这一步不走 Vue Flow 的选中，
+  // 所以得单独接一下 —— 见 composables/useEdgeFocus 里"为什么不用 edge.selected"。
+  const focusedEdgeId = activeEdgeId.value && !selectedEdgeIds.includes(activeEdgeId.value)
+    ? activeEdgeId.value
+    : ''
+  if (!selectedNodeIds.length && !selectedEdgeIds.length && !focusedEdgeId) return false
 
   startBatchOperation()
   selectedNodeIds.forEach(removeNode)
   selectedEdgeIds.forEach(removeEdge)
+  // 走 cutEdge 而不是 removeEdge：它会顺带把目标节点正文里的引用编号重排
+  if (focusedEdgeId) cutEdge(focusedEdgeId)
   endBatchOperation()
   return true
 }
@@ -891,11 +905,14 @@ const canAcceptKind = (type, kind) =>
 /**
  * 创建菜单里能建的类型 | Types offered by the create menu
  *
- * 只留文本 / 图片 / 视频 —— 这三个是实际会用到的内容载体。音频与 AI 任务仍保留在底层
+ * 只留文本 / 图片 / 视频 / 室内渲染 / 图片对比。音频与 AI 任务仍保留在底层
  * （composer 建任务节点走的是 addNode，不经过这个菜单），只是不再从这里出现。
  * 数组顺序就是菜单里的排列顺序。
+ *
+ * 室内渲染与图片对比必须在这里 —— 它们没有别的入口（不像任务节点能由 composer
+ * 建出来），从菜单里拿掉这个功能就没法新建了。
  */
-const MENU_NODE_TYPES = Object.freeze(['text', 'image', 'video'])
+const MENU_NODE_TYPES = Object.freeze(['text', 'image', 'video', 'render', 'compare'])
 
 /**
  * 可新建的节点类型 | Options for the create menu
@@ -1222,6 +1239,9 @@ const onNodeClick = (event) => {
   // 光在 connectEnd 里还原还不够：随后的 click 事件会再选一次，这里必须也挡住。
   if (event.event?.target?.closest?.('.vue-flow__handle')) return
 
+  // 点节点＝注意力换到节点上，钉住的剪刀收起来
+  clearEdgeFocus()
+
   const clickedId = event.node.id
   // Shift+点击 = 加选/取消（与框选同一种"多选"语义）；否则只选中它自己
   const additive = Boolean(event.event?.shiftKey)
@@ -1326,6 +1346,8 @@ const onEdgesChange = (changes) => {
 // 取消选中即收起（焦点态是选中状态的派生物），这正是"点空白回到内容态"的行为。
 const onPaneClick = () => {
   closeMenu()
+  // 点空白：钉住的剪刀跟着收起来（选中的连线同理）
+  clearEdgeFocus()
   if (nodes.value.some(node => node.selected)) {
     nodes.value = nodes.value.map(node => ({ ...node, selected: false }))
   }
@@ -1889,6 +1911,16 @@ const fillNodeWithFile = (nodeId, file, dataUrl) => {
   const want = file.type.startsWith('video/') ? 'video' : 'image'
   if (node.type === 'text') {
     window.$message?.warning('文本节点放不了图片或视频，拖到空白处可以新建节点')
+    return true
+  }
+  // 室内渲染的输入是「视角」，由连线决定编号与顺序，塞一张散图进去没有槽位可落
+  if (node.type === 'render') {
+    window.$message?.warning('室内渲染不接受直接拖入的素材，请把空间截图连到它左侧的输入口')
+    return true
+  }
+  // 图片对比的前后由连线先后决定，同理：素材得是画布上的节点，连进去
+  if (node.type === 'compare') {
+    window.$message?.warning('图片对比不接受直接拖入的素材，请把两张图连到它左侧的输入口')
     return true
   }
   if (node.type !== want) {

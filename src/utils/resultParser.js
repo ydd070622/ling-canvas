@@ -105,6 +105,23 @@ export const collectImageResults = raw => {
   } else if (payload && typeof payload === 'object') {
     push(extractUrlFromEntry(payload), payload.revised_prompt || '')
 
+    // 原生 Gemini：图在 candidates[].content.parts[].inlineData.data。
+    // 这条**必须显式处理** —— 那是裸 base64，没有 `data:image` 前缀，
+    // 末尾「整包里捞 data URL」的兜底对它完全无效（会判定为「没返回图片」）。
+    const nativeParts = Array.isArray(payload.candidates)
+      ? payload.candidates.flatMap(candidate => candidate?.content?.parts || [])
+      : []
+    nativeParts.forEach(part => {
+      const inline = part?.inlineData || part?.inline_data
+      const data = inline?.data
+      if (typeof data === 'string' && data) {
+        push(toDataUrl(data, inline.mimeType || inline.mime_type || 'image/png'))
+      }
+      // 有些实现把图放在 fileData.fileUri 上（先上传再引用）
+      const fileUri = (part?.fileData || part?.file_data)?.fileUri || (part?.fileData || part?.file_data)?.file_uri
+      if (typeof fileUri === 'string' && fileUri) push(fileUri)
+    })
+
     // chat 协议出图：内容里带 markdown / data URL
     const contents = payload.choices?.map(choice => choice?.message?.content)
       ?? (typeof payload.content === 'string' ? [payload.content] : [])

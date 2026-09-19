@@ -95,6 +95,36 @@ const server = createServer(async (req, res) => {
   if (path === '/v1/ratelimited/images/generations') {
     return sendJson(500, { error: { message: 'rate limit exceeded' } })
   }
+  // 原生 Gemini 路由：模型名在 URL 里，图以**裸 base64** 放在 inlineData.data
+  // （没有 `data:image` 前缀，所以末尾那条「整包文本里捞 data URL」的兜底捞不到它）
+  if (/^\/v1beta\/models\/.+:generateContent$/.test(path)) {
+    return sendJson(200, {
+      candidates: [{
+        content: {
+          parts: [{ inlineData: { mimeType: 'image/png', data: REFERENCE_BYTES.toString('base64') } }]
+        }
+      }],
+      usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 2520, totalTokenCount: 2531 }
+    })
+  }
+  // 复刻「老中转站」：只有 OpenAI 兼容那套，没有原生路由 —— 供退回 chat 的自愈测试用
+  if (/^\/legacy\/v1beta\/models\/.+:generateContent$/.test(path)) {
+    return sendJson(404, { error: { message: 'no such route' } })
+  }
+  if (path === '/legacy/v1/chat/completions') {
+    return sendJson(200, {
+      choices: [{ message: { role: 'assistant', content: `![img](${base}/assets/chat-image.png)` } }]
+    })
+  }
+  // 原生路由回 401：这是鉴权问题，不是「没有这条路」，绝不能靠改道掩盖
+  if (/^\/autherr\/v1beta\/models\/.+:generateContent$/.test(path)) {
+    return sendJson(401, { error: { message: 'invalid api key' } })
+  }
+  if (path === '/autherr/v1/chat/completions') {
+    return sendJson(200, {
+      choices: [{ message: { role: 'assistant', content: `![img](${base}/assets/chat-image.png)` } }]
+    })
+  }
 
   return sendJson(404, { error: { message: `no route ${path}` } })
 })
@@ -221,7 +251,12 @@ await test('buildImageEditMultipart：data URL → 文件字段（含 MIME 与�
     referenceImages: [dataUrl]
   })
   const names = multipart.fields.map(field => field.name)
-  assert.deepEqual(names, ['model', 'prompt', 'n', 'size'])
+  // aspect_ratio 属于「一次把所有写法都发出去」那一套（见 buildImageSizeFields）：
+  // 各家中转站认的写法不统一，多发的字段最多被忽略。
+  // size 保持原样的真实像素（1024x1024 不能被改写成比例），aspect_ratio 才是 1:1。
+  assert.deepEqual(names, ['model', 'prompt', 'n', 'size', 'aspect_ratio'])
+  assert.equal(multipart.fields.find(f => f.name === 'size').value, '1024x1024')
+  assert.equal(multipart.fields.find(f => f.name === 'aspect_ratio').value, '1:1')
   assert.equal(multipart.fields.find(f => f.name === 'n').value, '3')
   assert.equal(multipart.files.length, 1)
   assert.equal(multipart.files[0].name, 'image')
@@ -866,6 +901,284 @@ await test('边界：渠道显式声明协议时不被自动改道', async () =>
   )
   assert.equal(images[0].url, `${base}/assets/out.png`)
   assert.equal(countPath('/v1/images/generations') - generationsBefore, 1, '显式选择优先')
+})
+
+// ---------------------------------------------------------------------------
+// 11c. 原生 Gemini 协议路由
+//
+// 背景：gemini 系图片模型在 chat 那条路上尺寸参数**全被吞**（选 4K 拿 1K，
+// 还按 1K 计费）。价格表里这些模型的 supported_endpoint_types 是
+// ["gemini","openai"] —— 原生路由是通的，且认 generationConfig.imageConfig.imageSize。
+// 这一节把「选哪条路 / 请求长什么样 / 响应怎么解析 / 对面没有时怎么办」全部锁死。
+// ---------------------------------------------------------------------------
+const { buildGeminiNativePath } = await import('../src/utils/upstreamRequest.js')
+const { resolveImageTierOptions, imageTierLockNote } = await import('../src/utils/imageTiers.js')
+const { prefersGeminiNativeImage } = await import('../src/config/providerCapabilities.js')
+
+const nativeKey = modelStore.addCustomProvider('GeminiNativeRelay')
+modelStore.updateCustomProvider(nativeKey, { defaultBaseUrl: base, geminiNative: true })
+modelStore.setApiKeyByProvider(nativeKey, 'k')
+const nativeUpstream = modelStore.resolveUpstreamContext(nativeKey)
+
+await test('原生路由判定：仅 gemini 系 + 支持原生路由的渠道', () => {
+  assert.equal(prefersGeminiNativeImage({ geminiNative: true }, base, 'gemini-3.1-flash-image'), true)
+  assert.equal(prefersGeminiNativeImage({}, 'https://linkapi.pro', 'gemini-3.1-flash-image'), true)
+  // 没实测过的站不猜 —— 除非渠道显式打开
+  assert.equal(prefersGeminiNativeImage({}, 'https://api.chatfire.cn', 'gemini-3.1-flash-image'), false)
+  assert.equal(prefersGeminiNativeImage({ geminiNative: false }, 'https://linkapi.pro', 'gemini-3.1-flash-image'), false)
+  // gpt-image 走生图端点、size 本来就认，不需要这条路
+  assert.equal(prefersGeminiNativeImage({ geminiNative: true }, base, 'gpt-image-2'), false)
+  assert.equal(prefersGeminiNativeImage({}, '', 'gemini-3.1-flash-image'), false)
+})
+
+await test('原生路由：尺寸走 generationConfig.imageConfig，响应能解析出图', async () => {
+  const chatBefore = countPath('/v1/chat/completions')
+  const images = await generateImage(
+    { model: 'gemini-3.1-flash-image', prompt: '一只猫', size: '3:4', resolution: '4K' },
+    { upstream: nativeUpstream }
+  )
+
+  const request = lastRequest('/v1beta/models/gemini-3.1-flash-image:generateContent')
+  assert.ok(request, '应打到原生 generateContent 端点')
+  assert.equal(countPath('/v1/chat/completions') - chatBefore, 0, '不应再走 chat')
+
+  const raw = request.body.toString('utf8')
+  const body = JSON.parse(raw)
+  assert.equal(body.contents[0].parts[0].text, '一只猫')
+  assert.deepEqual(body.generationConfig.imageConfig, { aspectRatio: '3:4', imageSize: '4K' })
+  // 这条路是有 schema 的：chat 那套「多写法一起广播」不能塞进来
+  assert.ok(!raw.includes('image_config'), '不该混入 snake_case 字段')
+  assert.ok(!raw.includes('image_size'), '不该混入 snake_case 字段')
+
+  assert.equal(images[0].url, `data:image/png;base64,${REFERENCE_BYTES.toString('base64')}`)
+})
+
+await test('原生路由：参考图转 inlineData，绝不外发 URL', async () => {
+  const referenceUrl = `${base}/assets/ref.png`
+  await generateImage(
+    { model: 'gemini-3.1-flash-image', prompt: '改成夜景', image: [referenceUrl] },
+    { upstream: nativeUpstream }
+  )
+
+  const raw = lastRequest('/v1beta/models/gemini-3.1-flash-image:generateContent').body.toString('utf8')
+  const parts = JSON.parse(raw).contents[0].parts
+  assert.equal(parts[0].text, '改成夜景')
+  assert.equal(parts[1].inlineData.mimeType, 'image/png')
+  assert.equal(parts[1].inlineData.data, REFERENCE_BYTES.toString('base64'))
+  // 原生协议不接受图片 URL —— 必须真把字节取回来，而不是把地址丢过去
+  assert.ok(!raw.includes(referenceUrl), '不该把图片 URL 交给原生协议')
+})
+
+await test('原生路由：对面没有这条路（404）→ 退回 chat', async () => {
+  const legacyKey = modelStore.addCustomProvider('LegacyRelay')
+  modelStore.updateCustomProvider(legacyKey, { defaultBaseUrl: `${base}/legacy`, geminiNative: true })
+  modelStore.setApiKeyByProvider(legacyKey, 'k')
+  const legacyUpstream = modelStore.resolveUpstreamContext(legacyKey)
+
+  const nativePath = '/legacy/v1beta/models/gemini-3.1-flash-image:generateContent'
+  const nativeBefore = countPath(nativePath)
+  const chatBefore = countPath('/legacy/v1/chat/completions')
+
+  const images = await generateImage(
+    { model: 'gemini-3.1-flash-image', prompt: '一只猫' },
+    { upstream: legacyUpstream }
+  )
+  assert.equal(images[0].url, `${base}/assets/chat-image.png`)
+  assert.equal(countPath(nativePath) - nativeBefore, 1, '应先试原生路由')
+  assert.equal(countPath('/legacy/v1/chat/completions') - chatBefore, 1, '再退回 chat 重试')
+})
+
+await test('原生路由：鉴权失败不退回 chat（真错误不该被改道掩盖）', async () => {
+  const authKey = modelStore.addCustomProvider('AuthErrorRelay')
+  modelStore.updateCustomProvider(authKey, { defaultBaseUrl: `${base}/autherr`, geminiNative: true })
+  modelStore.setApiKeyByProvider(authKey, 'k')
+  const authUpstream = modelStore.resolveUpstreamContext(authKey)
+
+  const chatBefore = countPath('/autherr/v1/chat/completions')
+  await assert.rejects(
+    () => generateImage({ model: 'gemini-3.1-flash-image', prompt: 'p', resolution: '4K' }, { upstream: authUpstream }),
+    /HTTP 401/
+  )
+  assert.equal(countPath('/autherr/v1/chat/completions') - chatBefore, 0, '401 不该触发改道重试')
+})
+
+await test('档位闸门：原生路由可用则不锁档位，关掉才锁回 1K', () => {
+  const gemini = { modelKey: 'gemini-3.1-flash-image' }
+  // linkapi 上 gemini 走原生路由 —— 1K/2K/4K 都是真能拿到的
+  assert.deepEqual(resolveImageTierOptions({ ...gemini, baseUrl: 'https://linkapi.pro' }), ['1K', '2K', '4K'])
+  assert.equal(imageTierLockNote({ ...gemini, baseUrl: 'https://linkapi.pro' }), '')
+  // 显式关掉原生 → 退回 chat，那条路吞档位 → 锁成 1K 并说明原因
+  const locked = { ...gemini, baseUrl: 'https://linkapi.pro', providerConfig: { geminiNative: false } }
+  assert.deepEqual(resolveImageTierOptions(locked), ['1K'])
+  assert.match(imageTierLockNote(locked), /不支持指定清晰度/)
+  // gpt-image 走生图端点，size 本来就认，不该被连坐
+  assert.deepEqual(resolveImageTierOptions({ modelKey: 'gpt-image-2', baseUrl: 'https://linkapi.pro' }), ['1K', '2K', '4K'])
+})
+
+await test('URL 拼接：原生路径与 base 自带 /v1 不冲突', () => {
+  const path = buildGeminiNativePath('gemini-3.1-flash-image')
+  assert.equal(path, '/v1beta/models/gemini-3.1-flash-image:generateContent')
+  assert.equal(joinUrl('https://linkapi.pro', path), `https://linkapi.pro${path}`)
+  // base 自带 /v1 时不能拼成 /v1/v1beta/...
+  assert.equal(joinUrl('https://linkapi.pro/v1', path), `https://linkapi.pro${path}`)
+  // 原有的 /v1 去重不能被破坏
+  assert.equal(joinUrl('https://x.pro/v1', '/v1/chat/completions'), 'https://x.pro/v1/chat/completions')
+  assert.equal(joinUrl('https://x.pro/v1/', '/v1/images/generations'), 'https://x.pro/v1/images/generations')
+})
+
+// ---------------------------------------------------------------------------
+// 11d. 生图/改图端点的参数广播开关
+//
+// 实测 linkapi.pro：`/v1/images/edits` 对未知参数名直接 400
+// （`Unknown parameter: 'aspect_ratio'`），炸的是整个请求。
+// 「一次把各种写法全广播」只适用于 chat —— 那条路容忍未知字段。
+//
+// **默认方向是「不广播」**：OpenAI 兼容站照着 schema 校验才是常态。
+// 这里记的是「哪些站宽松」而不是「哪些站严格」，因为写错这一侧的代价不对称 ——
+// 猜宽了整批请求 400（一张图都出不来），猜窄了只是少一种没人用的写法。
+// ---------------------------------------------------------------------------
+const { allowsExtraImageParams } = await import('../src/config/providerCapabilities.js')
+
+await test('参数广播判定：默认关，只有显式开启的渠道才广播', () => {
+  assert.equal(allowsExtraImageParams({}, 'https://linkapi.pro'), false, '没实测过的站一律按严格处理')
+  assert.equal(allowsExtraImageParams({}, 'https://api.chatfire.cn'), false)
+  assert.equal(allowsExtraImageParams({ defaultBaseUrl: 'https://linkapi.pro' }), false)
+  assert.equal(allowsExtraImageParams({}, ''), false)
+  assert.equal(allowsExtraImageParams({ broadcastImageParams: true }, 'https://api.chatfire.cn'), true)
+  assert.equal(allowsExtraImageParams({ broadcastImageParams: false }, 'https://anything.pro'), false)
+})
+
+await test('图生图 multipart：严格模式不广播未知字段（否则整个请求 400）', async () => {
+  const strictMultipart = await buildImageEditMultipart({
+    model: 'gpt-image-2',
+    prompt: 'edit it',
+    size: '1024x1536',
+    resolution: '4K',
+    referenceImages: [dataUrl],
+    strict: true
+  })
+  const names = strictMultipart.fields.map(field => field.name)
+  // 只留 OpenAI schema 内的字段；aspect_ratio / image_size / resolution 全部不发
+  assert.deepEqual(names, ['model', 'prompt', 'n', 'size'])
+  assert.equal(strictMultipart.fields.find(f => f.name === 'size').value, '1024x1536')
+  // 档位映射出来的 '4k' 不是 OpenAI 的 quality 取值，严格渠道上一并不发
+  assert.equal(names.includes('quality'), false, '档位的 4k 不是合法 quality 取值')
+
+  // 广播模式才把全部写法发出去，谁认哪种就用哪种
+  const loose = await buildImageEditMultipart({
+    model: 'gpt-image-2',
+    prompt: 'edit it',
+    size: '1024x1536',
+    resolution: '4K',
+    referenceImages: [dataUrl]
+  })
+  assert.ok(loose.fields.map(f => f.name).includes('aspect_ratio'))
+})
+
+await test('文生图 JSON：严格模式摘掉 payload 里带来的 resolution', async () => {
+  const body = normalizeImageGenerationRequestBody({
+    // resolution 是通过 ...payload 进来的，不能只「不补发」，得主动摘
+    requestBody: { model: 'gpt-image-2', prompt: 'p', size: '1024x1536', resolution: '4K' },
+    modelKey: 'gpt-image-2',
+    strict: true
+  })
+  assert.equal(body.resolution, undefined)
+  assert.equal(body.image_size, undefined)
+  assert.equal(body.aspect_ratio, undefined)
+  assert.equal(body.size, '1024x1536', 'size 是标准字段，必须保留')
+
+  const loose = normalizeImageGenerationRequestBody({
+    requestBody: { model: 'gpt-image-2', prompt: 'p', size: '1024x1536', resolution: '4K' },
+    modelKey: 'gpt-image-2'
+  })
+  assert.equal(loose.resolution, '4K', '广播模式仍然补发档位')
+})
+
+await test('端到端：默认渠道的生图端点只发四件套（linkapi 那类站不再 400）', async () => {
+  const key = modelStore.addCustomProvider('DefaultStrictRelay')
+  modelStore.updateCustomProvider(key, {
+    defaultBaseUrl: base,
+    endpoints: { chat: '/v1/chat/completions', image: '/v1/images/generations' }
+  })
+  modelStore.setApiKeyByProvider(key, 'k')
+  const upstream = modelStore.resolveUpstreamContext(key)
+
+  await generateImage(
+    { model: 'gpt-image-2', prompt: 'p', size: '1024x1536', resolution: '4K', n: 1 },
+    { upstream }
+  )
+  const body = JSON.parse(lastRequest('/v1/images/generations').body.toString('utf8'))
+  assert.deepEqual(Object.keys(body).sort(), ['model', 'n', 'prompt', 'size'])
+  assert.equal(body.size, '1024x1536', 'size 保持真实像素，不能被改写成比例')
+})
+
+await test('端到端：显式开广播的渠道才把尺寸写法全发出去', async () => {
+  const key = modelStore.addCustomProvider('BroadcastRelay')
+  modelStore.updateCustomProvider(key, {
+    defaultBaseUrl: base,
+    endpoints: { chat: '/v1/chat/completions', image: '/v1/images/generations' },
+    broadcastImageParams: true
+  })
+  modelStore.setApiKeyByProvider(key, 'k')
+  const upstream = modelStore.resolveUpstreamContext(key)
+
+  await generateImage(
+    { model: 'gpt-image-2', prompt: 'p', size: '1024x1536', resolution: '4K', n: 1 },
+    { upstream }
+  )
+  const body = JSON.parse(lastRequest('/v1/images/generations').body.toString('utf8'))
+  assert.equal(body.resolution, '4K')
+  assert.ok(body.aspect_ratio, '广播模式下才补发扁平写法')
+  assert.ok(body.image_size)
+})
+
+// ---------------------------------------------------------------------------
+// 11e. 渠道级覆盖（设置界面「高级配置」）
+//
+// 内置渠道（openai / chatfire）**不在 customProviders 里**，所以覆盖必须单独
+// 存一份、resolveUpstreamContext 时合并 —— 否则「把内置 openai 指向 linkapi」
+// 这种最常见的用法，一个开关都设不了。
+// ---------------------------------------------------------------------------
+const { mergeProviderOverride, findUnknownOverrideKeys } = await import('../src/config/providerCapabilities.js')
+
+await test('覆盖合并：endpoints / protocols 逐项深合并，不抹掉没提到的能力', () => {
+  const merged = mergeProviderOverride(
+    { label: 'X', endpoints: { chat: '/v1/chat/completions', image: '/v1/images/generations' } },
+    { endpoints: { image: '/v1/custom/generations' } }
+  )
+  assert.equal(merged.endpoints.image, '/v1/custom/generations', '覆盖的项生效')
+  assert.equal(merged.endpoints.chat, '/v1/chat/completions', '没提到的项保留')
+  assert.equal(merged.label, 'X')
+})
+
+await test('覆盖白名单：typo 的键会被识别出来（不报错就等于静默失效）', () => {
+  assert.deepEqual(findUnknownOverrideKeys({ geminiNative: true, broadcastImageParams: false }), [])
+  assert.deepEqual(findUnknownOverrideKeys({ gemini_native: true }), ['gemini_native'])
+  assert.deepEqual(findUnknownOverrideKeys({}), [])
+  assert.deepEqual(findUnknownOverrideKeys(null), [])
+})
+
+await test('覆盖端到端：内置渠道设了开关后判定立刻改变', () => {
+  const before = modelStore.resolveUpstreamContext('chatfire')
+  assert.equal(
+    prefersGeminiNativeImage(before.providerConfig, before.baseUrl, 'gemini-3.1-flash-image'),
+    false,
+    '内置渠道默认没有原生路由'
+  )
+
+  modelStore.setProviderOverrides('chatfire', { geminiNative: true })
+  const after = modelStore.resolveUpstreamContext('chatfire')
+  assert.equal(
+    prefersGeminiNativeImage(after.providerConfig, after.baseUrl, 'gemini-3.1-flash-image'),
+    true,
+    '开关合并进 providerConfig 后才判得出来'
+  )
+
+  // 清成空对象 = 回到内置默认行为
+  modelStore.setProviderOverrides('chatfire', {})
+  const cleared = modelStore.resolveUpstreamContext('chatfire')
+  assert.equal(cleared.providerConfig.geminiNative, undefined)
+  assert.equal(prefersGeminiNativeImage(cleared.providerConfig, cleared.baseUrl, 'gemini-3.1-flash-image'), false)
 })
 
 // ---------------------------------------------------------------------------

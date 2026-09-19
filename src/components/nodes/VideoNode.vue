@@ -15,6 +15,8 @@
     :fail-text="data.error || ''"
     uploadable
     viewable
+    media-kind="video"
+    :media-url="data.url || ''"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"
