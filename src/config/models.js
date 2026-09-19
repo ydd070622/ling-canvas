@@ -3,6 +3,25 @@
  * Centralized model configuration | 集中模型配置
  */
 
+/* --------------------------------------------------------------------------
+   生图 / 生视频模型的 key 特征 | Media model key patterns
+
+   做模型用途判定用的（底部栏挑模型、节点生成前拦截对话模型），**只有这一份** ——
+   之前「拉模型列表时判类型」和「生成前判用途」各写了一条正则，同一个 gpt-image-2
+   在设置里是图片模型、到生成时被判成文本模型，就是两套正则打架的结果。
+
+   `image` 必须按**独立词**匹配，不能只认开头和结尾：模型 id 里它可能在中间
+   （gpt-image-2 / gpt-image-1-mini）、在末尾（gemini-3.1-flash-image）、
+   或紧跟版本号（gpt-image2）。早先只写了 `^image` 与 `[-_.]image$` 两种形状，
+   `gpt-image-2` 两头不沾，既不算媒体模型，又被 `^gpt-` 认成对话模型。
+   -------------------------------------------------------------------------- */
+const IMAGE_KEY = 'imagen|banana|seedream|nano-|dall|flux|pix|stable[.-]?diffusion|(?:^|[-_. ])image(?:\\d|[-_. ]|$)'
+const VIDEO_KEY = 'seedance|kling|runway|sora|veo|vidu|wan\\d|video'
+
+export const IMAGE_MODEL_FEATURE = new RegExp(IMAGE_KEY, 'i')
+export const VIDEO_MODEL_FEATURE = new RegExp(VIDEO_KEY, 'i')
+export const MEDIA_MODEL_FEATURE = new RegExp(`${IMAGE_KEY}|${VIDEO_KEY}`, 'i')
+
 // Seedream image size options | 豆包图片尺寸选项
 export const SEEDREAM_SIZE_OPTIONS = [
     { label: '21:9', key: '3024x1296' },

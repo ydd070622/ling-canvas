@@ -6,13 +6,12 @@ import { ref } from 'vue'
 import { updateProjectCanvas, getProjectCanvas } from './projects'
 import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
-import { migrateCanvasDocument, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
+import { migrateCanvasDocument, dropUnsupportedNodes, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
 import {
   computeSlots,
   resolveRefs,
   renumberRefs,
-  removeOrphanRefs as buildOrphanCleanup,
-  defaultStale
+  removeOrphanRefs as buildOrphanCleanup
 } from '../utils/promptRefs'
 import { resolveAssetUrl, runLimited, statAssetFiles } from '../services/assetLibrary'
 
@@ -86,11 +85,11 @@ const saveToHistory = (force = false) => {
   history.value.push(state)
 
   // Limit history size | 限制历史大小
-  if (history.value.length > MAX_HISTORY) {
-    history.value.shift()
-  } else {
-    historyIndex.value++
-  }
+  if (history.value.length > MAX_HISTORY) history.value.shift()
+
+  // 索引永远指向最新一条。以前只在没触发上限时才 ++，一旦开始丢弃最老的一条，
+  // 索引就停在倒数第二条不动了，从那一刻起撤销/重做整体偏一位。
+  historyIndex.value = history.value.length - 1
 }
 
 // Coalesce rapid form edits into a single undo step.
@@ -269,11 +268,29 @@ export const addNodes = (nodeSpecs, autoBatch = true) => {
 }
 
 // Update node data | 更新节点数据
+/**
+ * 预检拦下的那条报错 | Pre-flight error
+ *
+ * 点生成被预检拦下时会在节点上写一条 `error`（"请输入提示词…"这类）。**用户一改这个节点，
+ * 它就作废** —— 你已经补了正文 / 换了预设 / 加了连线，那条提示就不该继续挂着。
+ *
+ * 刻意放在这里同步做，而不是让节点组件去 watch「预检是否重新通过」：
+ * 那样的判断要读组件自己的 `props.data`，而清 error 又会改 `nodes.value`、再次触发判断，
+ * 此时组件还没重渲染、读到的仍是上一帧，条件永远为真 —— 会变成清不掉的死循环。
+ *
+ * 只作废预检那类（`errorKind === 'preflight'`），真正的接口报错不动。
+ */
+const stripPreflight = (node, patch) => {
+  if (node?.data?.errorKind !== 'preflight') return null
+  if (patch && patch.error !== undefined) return null
+  return { error: '', errorKind: '' }
+}
+
 export const updateNode = (id, data) => {
   const now = Date.now()
-  nodes.value = nodes.value.map(node =>
-    node.id === id ? { ...node, data: { ...node.data, ...data, updatedAt: data.updatedAt || now } } : node
-  )
+  nodes.value = nodes.value.map(node => (node.id === id
+    ? { ...node, data: { ...node.data, ...stripPreflight(node, data), ...data, updatedAt: data.updatedAt || now } }
+    : node))
   scheduleHistorySave()
   debouncedSave()
 }
@@ -286,7 +303,7 @@ export const updateNodeMeta = (id, patch) => {
 }
 
 /* ==========================================================================
-   引用与失效 | References & staleness
+   引用 | References
    ========================================================================== */
 
 const findNode = (id) => nodes.value.find(node => String(node.id) === String(id))
@@ -303,50 +320,22 @@ const hasResult = (node) =>
   node?.type === 'text' ? !!String(node.data?.content || '').trim() : !!node.data?.url
 
 /**
- * 把某节点的产出变更沿下游递归标记为「失效」。
- * 直接下游用 direct，更远用 indirect；遇到正在生成的下游就停止下传（它跑完会自己再触发）。
- * 直接修改 node.data，刻意不走 updateNode：标记失效不该进撤销栈、也不该触发保存风暴。
+ * 「上游已变更」的失效标记机制**已整体移除**。
+ *
+ * 它做的是：任何一处编辑都沿下游 BFS，给每个下游写 `stale`、再触发一次存档。
+ * 但界面上它只表现为一句"上游数据已变更，建议重新生成"——用户明确说这条没用
+ * （改完上游本来就要重新生成，提示不提示都一样），于是连标记本身一起去掉：
+ * 没有 UI 承载的话，留着只是每次编辑都白遍历一遍全图 + 多存一次盘。
+ *
+ * 旧项目数据里残留的 `data.stale` 不再被读取，留着不影响任何行为。
  */
-export const propagateStale = (fromId) => {
-  const queue = edges.value.filter(e => e.source === fromId).map(e => ({ id: e.target, depth: 1 }))
-  const seen = new Set()
-  let changed = 0
-  while (queue.length) {
-    const { id, depth } = queue.shift()
-    if (seen.has(id)) continue
-    seen.add(id)
-    const node = findNode(id)
-    if (!node) continue
-    if (node.data?.loading) continue
-    const current = node.data?.stale
-    const reason = depth === 1 ? 'direct' : 'indirect'
-    // 直接上游的变更要能覆盖掉之前「间接」的判定
-    if (!current?.is || (depth === 1 && current.reason === 'indirect')) {
-      node.data.stale = { is: true, reason, since: Date.now() }
-      changed++
-    }
-    edges.value.filter(e => e.source === id).forEach(e => queue.push({ id: e.target, depth: depth + 1 }))
-  }
-  if (changed) debouncedSave()
-  return changed
-}
-
-export const clearStale = (id) => {
-  const node = findNode(id)
-  if (node?.data?.stale?.is) node.data.stale = defaultStale()
-}
-
-export const isStale = (id) => !!findNode(id)?.data?.stale?.is
 
 /**
- * 一次「离散」修改：进撤销栈 + 让下游失效。
+ * 一次「离散」修改：进撤销栈。
  * 连续输入（打字）请直接用 updateNode —— 它内部是 350ms 合并的。
  */
 export const editNode = (id, patch) => {
-  const node = findNode(id)
-  const had = hasResult(node)
   updateNode(id, patch)
-  if (had) propagateStale(id)
 }
 
 /** 重算某节点正文里的引用编号（重排顺序、断线、切模式之后调用） */
@@ -377,9 +366,6 @@ export const cutEdge = (edgeId) => {
   edges.value = edges.value.filter(e => e.id !== edgeId)
   normalizeEdgeOrders()
   renumberNodeRefs(targetId)
-  const node = findNode(targetId)
-  if (node && hasResult(node)) node.data.stale = { is: true, reason: 'direct', since: Date.now() }
-  propagateStale(targetId)
   saveToHistory(true)
   debouncedSave()
   return targetId
@@ -404,8 +390,6 @@ export const dropOrphanRefs = (id) => {
   const cleanup = buildOrphanCleanup(node, nodes.value, edges.value)
   if (!cleanup) return 0
   updateNode(id, { prompt: cleanup.prompt, refBindings: cleanup.refBindings, error: '' })
-  const next = findNode(id)
-  if (next) next.data.stale = defaultStale()
   return removed
 }
 
@@ -417,37 +401,20 @@ export const setNodeMedia = (id, { url, base64, fileName }) => {
   editNode(id, patch)
 }
 
-/* 连续输入时的失效传播要合并：打字不该每敲一个字就往下游传一遍 */
-let staleTimer = null
-const scheduleStaleFrom = (id) => {
-  if (staleTimer) clearTimeout(staleTimer)
-  staleTimer = setTimeout(() => {
-    staleTimer = null
-    propagateStale(id)
-  }, 800)
-}
-
 /**
  * 连续输入的字段编辑（正文 / 文本内容）。
- * 撤销由 scheduleHistorySave 在 350ms 内合并成一步；失效传播再晚一点、也只跑一次。
+ * 撤销由 scheduleHistorySave 在 350ms 内合并成一步。
  */
 export const editField = (id, field, value) => {
   const node = findNode(id)
   if (!node) return
-  const markStale = hasResult(node)
   const now = Date.now()
   nodes.value = nodes.value.map(n => (String(n.id) === String(id) ? {
     ...n,
-    data: {
-      ...n.data,
-      [field]: value,
-      updatedAt: now,
-      ...(markStale ? { stale: { is: true, reason: 'direct', since: now } } : {})
-    }
+    data: { ...n.data, ...stripPreflight(n), [field]: value, updatedAt: now }
   } : n))
   scheduleHistorySave()
   debouncedSave()
-  if (markStale) scheduleStaleFrom(id)
 }
 
 /** 取某节点当前的槽位与引用状态（组件用） */
@@ -489,11 +456,8 @@ export const removeNode = (id) => {
   edges.value = edges.value.filter(edge => edge.source !== id && edge.target !== id)
   normalizeEdgeOrders()
   victims.forEach((victimId) => {
-    const node = findNode(victimId)
-    if (!node) return
+    if (!findNode(victimId)) return
     renumberNodeRefs(victimId)
-    if (hasResult(node)) node.data.stale = { is: true, reason: 'direct', since: Date.now() }
-    propagateStale(victimId)
   })
 
   saveToHistory() // Save after removing node | 删除节点后保存
@@ -545,8 +509,7 @@ export const duplicateNode = (id) => {
       ...sourceNode.data,
       refBindings: rebind,
       // 生成中的任务不跟着复制，副本从干净状态开始
-      loading: false,
-      stale: defaultStale()
+      loading: false
     },
     zIndex: maxZIndex + 1
   }
@@ -669,8 +632,11 @@ export const loadProject = (projectId) => {
     // Restore nodes | 恢复节点
     // 瞬态状态必须清掉：上一轮生成没跑完就关掉应用时，loading/autoExecute
     // 会跟着落盘，直接恢复会得到「永远生成中」的空转节点。
-    nodes.value = resetTransientNodeState(migratedCanvasData.nodes || [])
-    edges.value = migratedCanvasData.edges || []
+    nodes.value = dropUnsupportedNodes(resetTransientNodeState(migratedCanvasData.nodes || []))
+    // 边要跟着过滤：连到已被丢弃的节点上的边留着只会指向空气
+    const aliveIds = new Set(nodes.value.map(node => node.id))
+    edges.value = (migratedCanvasData.edges || [])
+      .filter(edge => aliveIds.has(edge.source) && aliveIds.has(edge.target))
     canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
@@ -946,7 +912,6 @@ export const updateViewport = (viewport) => {
  */
 export const undo = () => {
   if (historyIndex.value <= 0) {
-    window.$message?.info('没有可撤销的操作')
     return false
   }
   
@@ -960,7 +925,6 @@ export const undo = () => {
  */
 export const redo = () => {
   if (historyIndex.value >= history.value.length - 1) {
-    window.$message?.info('没有可重做的操作')
     return false
   }
   

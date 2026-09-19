@@ -8,6 +8,7 @@
 import { computed } from 'vue'
 import { nodes, edges } from '../stores/canvas'
 import { computeSlots, resolveRefs, checkGenerate } from '../utils/promptRefs'
+import { presetTextOf } from '../config/promptPresets'
 
 export function useNodeRefs(nodeId) {
   const node = computed(() => nodes.value.find(n => String(n.id) === String(nodeId)))
@@ -40,36 +41,46 @@ export function useNodeRefs(nodeId) {
   /** 按角色取上游素材：视频节点的首帧/尾帧靠这个 */
   const mediaByRole = computed(() => {
     const map = {}
-    refs.value.forEach((r) => {
-      if (r.status !== 'ok') return
-      const url = r.slot.src.data?.url
+    slots.value.forEach((slot) => {
+      const url = slot.src.data?.url
       if (!url) return
-      const role = r.slot.role || '参考'
+      const role = slot.role || '参考'
       ;(map[role] = map[role] || []).push(url)
     })
     return map
   })
 
-  /** 连入的图片素材（按引用顺序） */
-  const referenceImages = computed(() => refs.value
-    .filter(r => r.status === 'ok' && r.kind === 'image' && r.slot.src.data?.url)
-    .map(r => r.slot.src.data.url))
+  /**
+   * 本次要发给模型的图片素材。
+   *
+   * **连线即使用** —— 取的是槽位（实际连上来的上游），不是正文里写没写 `@图片1`。
+   * 之前是"连了线还要在正文里点名才算用"，结果连了一张参考图却被告知"本次生成不会用到它"，
+   * 与直觉相悖。现在连上就送出去，正文里的 `@图片1` 只用来在句子里指代某一张。
+   */
+  const referenceImages = computed(() => slots.value
+    .filter(slot => slot.kind === 'image' && slot.src.data?.url)
+    .map(slot => slot.src.data.url))
 
   const firstFrame = computed(() => mediaByRole.value['首帧']?.[0] || '')
   const lastFrame = computed(() => mediaByRole.value['尾帧']?.[0] || '')
 
   /**
    * 正文转成真正发给模型的提示词。
-   * 文本引用替换成上游正文（这才是「引用」的语义），
-   * 图片/视频引用替换成可读标记 —— 媒体本身走接口的素材字段，不靠提示词表达。
+   *
+   * 顺序：**预设 → 正文（token 就地展开）→ 没被点名的上游正文**。
+   * 正文里的 `@文本1` 会换成该上游的正文（这就是在句子里指代它）；
+   * 连上但没在正文里点名的文本上游同样算用到，接在末尾 —— 否则用户连了文本却毫无作用，
+   * 又要靠一条警告去解释。媒体不走提示词表达，它们在请求的素材字段里。
    */
   const buildPrompt = () => {
     const text = String(node.value?.data?.prompt || '')
+    const usedEdges = new Set()
     let out = ''
     let last = 0
     refs.value.forEach((r) => {
       out += text.slice(last, r.from)
       if (r.status === 'ok') {
+        usedEdges.add(r.slot.edge.id)
         if (r.kind === 'text') out += String(r.slot.src.data?.content || '').trim()
         else out += r.kind === 'image' ? `参考图${r.slot.index}` : `参考视频${r.slot.index}`
       } else {
@@ -77,7 +88,17 @@ export function useNodeRefs(nodeId) {
       }
       last = r.to
     })
-    return (out + text.slice(last)).replace(/[ \t]{2,}/g, ' ').trim()
+
+    const parts = [(out + text.slice(last)).replace(/[ \t]{2,}/g, ' ').trim()]
+    slots.value
+      .filter(slot => slot.kind === 'text' && !usedEdges.has(slot.edge.id))
+      .map(slot => String(slot.src.data?.content || '').trim())
+      .filter(Boolean)
+      .forEach(content => parts.push(content))
+
+    const body = parts.filter(Boolean).join('\n')
+    const preset = presetTextOf(node.value?.data?.preset)
+    return preset ? `${preset}\n${body}`.trim() : body
   }
 
   return {

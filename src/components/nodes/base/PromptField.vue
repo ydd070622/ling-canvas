@@ -46,7 +46,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { KIND_TITLE } from '../../../config/nodeRegistry'
+import { makeToken, refKey } from '../../../utils/promptRefs'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -236,13 +236,13 @@ const applyInsert = (insertions) => {
   const caret = mentionAt.value >= 0 ? caretOffset(el) : caretOffset(el)
   const from = mentionAt.value >= 0 ? mentionAt.value : caret
   const text = props.modelValue || ''
-  const tokens = insertions.map(i => `{{${KIND_TITLE[i.kind]} ${i.index}}}`)
+  const tokens = insertions.map(i => makeToken(i.kind, i.index))
   const next = `${text.slice(0, from)}${tokens.join(' ')} ${text.slice(caret)}`
 
   closeMention()
   emit('update:modelValue', next)
   insertions.forEach(i => emit('insert-ref', {
-    key: `${KIND_TITLE[i.kind]} ${i.index}`,
+    key: refKey(i.kind, i.index),
     edgeId: i.edgeId
   }))
 

@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 import { streamChatCompletions } from '@/api'
 import { addEdge, addNode, nodes, startBatchOperation, endBatchOperation, updateNode } from '@/stores/canvas'
-import { getModeDef, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE } from '@/config/nodeRegistry'
+import { getModeDef, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE, AUTO_MODE } from '@/config/nodeRegistry'
 
 const WORKFLOW_TYPES = Object.freeze({
   TEXT_TO_IMAGE: 'text_to_image',
@@ -30,7 +30,9 @@ shots 为 [{title,prompt}]。当信息不足时选择 text_to_image，并保留�
 const createFlowEdge = (source, target, sourceType, targetType, order = 1) => {
   const targetNode = nodes.value.find(node => node.id === target)
   if (!targetNode) throw new Error('工作流连线失败：目标节点不存在')
-  if (!(getModeDef(targetNode)?.accepts?.[sourceType] > 0)) {
+  // auto 节点不钉模式：它按实际连上来的上游自行推断。钉死成"能收第一条边"的那个模式，
+  // 后面第二条边就对不上了 —— 声明式的模式是静态的，推断是跟着实况走的。
+  if (targetNode.data?.mode !== AUTO_MODE && !(getModeDef(targetNode)?.accepts?.[sourceType] > 0)) {
     const mode = findModeAccepting(targetType, sourceType)
     if (!mode) throw new Error(`不支持的工作流连接：${sourceType} → ${targetType}`)
     updateNode(target, { mode })

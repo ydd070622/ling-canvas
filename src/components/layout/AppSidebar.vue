@@ -77,7 +77,6 @@ const confirmFolderModal = () => {
     if (status === 'ok') {
       showFolderModal.value = false
       navigateToFolder(value.trim())
-      window.$message?.success('文件夹已创建')
     } else {
       window.$message?.warning(status === 'empty' ? '文件夹名称不能为空' : '已存在同名文件夹')
     }
@@ -87,7 +86,6 @@ const confirmFolderModal = () => {
   const status = ui.renameFolder(folderModalTarget.value, value)
   if (status === 'ok') {
     showFolderModal.value = false
-    window.$message?.success('文件夹已重命名')
   } else if (status === 'unchanged') {
     showFolderModal.value = false
   } else if (status === 'empty') {
@@ -111,7 +109,6 @@ const handleFolderAction = (key, name) => {
     negativeText: '取消',
     onPositiveClick: () => {
       ui.removeFolder(name)
-      window.$message?.success('文件夹已删除')
     }
   })
 }

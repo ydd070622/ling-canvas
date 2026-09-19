@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>底部栏 发送 / 暂停 按钮 · 重新设计（方案对比）</title>
+<!-- 原型稿：只为对比形态，不改仓库里的组件。
+     现状直接抄 CanvasComposer.vue 的数值，其余三案是候选。 -->
+<style>
+  :root {
+    --bg-primary: #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f1f5f9;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --text-tertiary: #94a3b8;
+    --border-color: #e2e8f0;
+    --flow-ok: #10b981;
+    --flow-accent: #4489f7;
+  }
+  .dark {
+    --bg-primary: #090909;
+    --bg-secondary: #161616;
+    --bg-tertiary: #242424;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-tertiary: #6b7280;
+    --border-color: #334155;
+    --flow-ok: #34d399;
+    --flow-accent: #4489f7;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 34px 40px 60px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  }
+  h1 { font-size: 17px; font-weight: 650; margin: 0 0 4px; }
+  h2 { font-size: 13px; font-weight: 600; margin: 38px 0 12px; color: var(--text-secondary); letter-spacing: .02em; }
+  .lede { font-size: 12.5px; line-height: 1.7; color: var(--text-secondary); margin: 0 0 8px; }
+
+  /* ---------- 复刻 composer 本体（数值来自 CanvasComposer.vue） ---------- */
+  .bar {
+    width: 840px;
+    padding: 11px 11px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 22px;
+    background: var(--bg-secondary);
+    box-shadow: 0 16px 48px rgba(19, 23, 30, 0.14), 0 1px 2px rgba(19, 23, 30, 0.05);
+  }
+  .dark .bar { box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
+  .main { display: flex; align-items: flex-end; gap: 6px; }
+  .attach {
+    display: grid; place-items: center;
+    width: 42px; height: 42px; flex: 0 0 auto;
+    border: 0; border-radius: 13px; background: transparent;
+    color: var(--text-tertiary); cursor: pointer;
+  }
+  .attach svg { width: 21px; height: 21px; }
+  .input {
+    flex: 1; min-height: 42px; padding: 10px 8px;
+    color: var(--text-primary); font-size: 14.5px; line-height: 1.45;
+  }
+  .input.ph { color: var(--text-tertiary); }
+  .opts { display: flex; align-items: center; gap: 4px; padding: 5px 0 2px; }
+  .chip {
+    display: flex; height: 32px; align-items: center; gap: 7px;
+    padding: 0 10px; border-radius: 8px;
+    color: var(--text-secondary); font-size: 12.5px; font-weight: 500;
+  }
+  .chip::after { content: "⌄"; font-size: 11px; color: var(--text-tertiary); }
+  .chip.strong { font-weight: 650; color: var(--text-primary); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; }
+
+  /* ---------- 现状：抄当前实现 ---------- */
+  .now { background: #17191c; color: #fff; }
+  .now-run { background: #10b981; color: #fff; }
+
+  /* ---------- 通用按钮基底 ---------- */
+  .btn {
+    display: grid; place-items: center; flex: 0 0 auto;
+    border: 0; cursor: pointer; padding: 0;
+    transition: background-color .14s ease, color .14s ease, border-color .14s ease, opacity .14s ease;
+  }
+  .btn svg { width: 18px; height: 18px; }
+
+  /* ===== 方案 A｜描边圆形，运行态换成细环 + 方块 ===== */
+  .A { width: 38px; height: 38px; border-radius: 50%; background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+  .A svg { width: 17px; height: 17px; }
+  .A.on { background: var(--text-primary); color: var(--bg-secondary); border-color: transparent; }
+  .A.stop { background: transparent; color: var(--flow-ok); border-color: color-mix(in srgb, var(--flow-ok) 42%, transparent); }
+  .A.stop svg { width: 20px; height: 20px; }
+  .A:disabled { color: var(--text-tertiary); opacity: .4; }
+
+  /* ===== 方案 B｜胶囊标签，明写「生成 / 停止」 ===== */
+  .B { height: 32px; border-radius: 999px; padding: 0 14px 0 11px; gap: 6px; font-size: 12.5px; font-weight: 600;
+       grid-auto-flow: column; background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+  .B svg { width: 15px; height: 15px; }
+  .B.on { background: var(--text-primary); color: var(--bg-secondary); border-color: transparent; }
+  .B.stop { background: color-mix(in srgb, var(--flow-ok) 12%, transparent); color: var(--flow-ok);
+            border-color: color-mix(in srgb, var(--flow-ok) 40%, transparent); }
+  .B.stop svg { width: 14px; height: 14px; }
+
+  /* ===== 方案 C｜保持实心方块但收干净（改动最小） ===== */
+  .C { width: 34px; height: 34px; border-radius: 11px; background: #17191c; color: #fff; }
+  .C svg { width: 15px; height: 15px; }
+  .C.stop { background: #2c2f33; color: #fff; }
+  .C.stop svg { width: 18px; height: 18px; }
+  .C:disabled { opacity: .3; }
+
+  /* ---------- 状态带 ---------- */
+  .states { display: flex; align-items: center; gap: 26px; margin: 14px 0 0 2px; }
+  .state { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .state span { font-size: 11px; color: var(--text-tertiary); }
+  .state .holder { display: grid; place-items: center; width: 42px; height: 42px; }
+  .state .holder.wide { width: auto; padding: 0 4px; }
+
+  .why { width: 840px; margin: 12px 0 0; font-size: 12.5px; line-height: 1.75; color: var(--text-secondary); }
+  .why b { color: var(--text-primary); font-weight: 600; }
+  .tag { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 5px;
+         background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>底部栏「发送 / 暂停」按钮 · 四案对比</h1>
+<p class="lede">
+  现状：42×42 纯黑实心方块（radius 13）+ 18px 粗实心箭头；运行时整块变 <code>#10b981</code> 绿 + 白方块。<br />
+  问题是<b>体量</b>（整条栏唯一的重物）、<b>几何</b>（栏 22 / chip 8 / 按钮 13，三套圆角）、<b>语义</b>（绿色是"成功"色，却表示"正在跑、点我停止"）。
+  下面每案都放在真实比例的栏里，看的是"它在栏里占多重的分量"。
+</p>
+
+<h2>现状</h2>
+<div class="bar">
+  <div class="main">
+    <button class="attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg></button>
+    <div class="input ph">描述下一步，或用 @ 引用上游</div>
+    <button class="btn now" style="width:42px;height:42px;border-radius:13px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l7 7h-4.5v9h-5v-9H5z" /></svg></button>
+  </div>
+  <div class="opts">
+    <div class="chip strong"><span class="dot"></span>图片</div>
+    <div class="chip">未配置模型</div>
+    <div class="chip">自适应 · 1 张</div>
+    <div class="chip">✦ 预设</div>
+  </div>
+</div>
+<div class="states">
+  <div class="state"><div class="holder"><button class="btn now" style="width:42px;height:42px;border-radius:13px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l7 7h-4.5v9h-5v-9H5z" /></svg></button></div><span>发送</span></div>
+  <div class="state"><div class="holder"><button class="btn now" style="width:42px;height:42px;border-radius:13px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg></button></div><span>编辑模式</span></div>
+  <div class="state"><div class="holder"><button class="btn now-run" style="width:42px;height:42px;border-radius:13px"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2" /></svg></button></div><span>运行中（点=停止）</span></div>
+  <div class="state"><div class="holder"><button class="btn now" disabled style="width:42px;height:42px;border-radius:13px;opacity:.32"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l7 7h-4.5v9h-5v-9H5z" /></svg></button></div><span>禁用</span></div>
+</div>
+
+<h2>方案 A｜描边圆形，运行态只换内容不换形状（推荐）</h2>
+<div class="bar">
+  <div class="main">
+    <button class="attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg></button>
+    <div class="input ph">描述下一步，或用 @ 引用上游</div>
+    <button class="btn A on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button>
+  </div>
+  <div class="opts">
+    <div class="chip strong"><span class="dot"></span>图片</div>
+    <div class="chip">未配置模型</div>
+    <div class="chip">自适应 · 1 张</div>
+    <div class="chip">✦ 预设</div>
+  </div>
+</div>
+<div class="states">
+  <div class="state"><div class="holder"><button class="btn A"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button></div><span>空闲</span></div>
+  <div class="state"><div class="holder"><button class="btn A on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button></div><span>有内容 · 可发送</span></div>
+  <div class="state"><div class="holder"><button class="btn A stop">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="42 14" transform="rotate(-90 12 12)" opacity=".85"/><rect x="8.6" y="8.6" width="6.8" height="6.8" rx="1.6" fill="currentColor"/></svg>
+  </button></div><span>运行中 · 细环 + 方块</span></div>
+  <div class="state"><div class="holder"><button class="btn A" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button></div><span>禁用</span></div>
+</div>
+<p class="why">
+  <span class="tag">38px 正圆</span>体量降下来之后，栏里的视觉重心回到输入框和参数行上；1px 描边和 chip 的 8px 圆角是同一套"轻描边"语言，不再多出第三种几何。<br />
+  <span class="tag">细线箭头</span>17px 线性图标（stroke 2.1），跟 12.5px 的文字一个重量级；实心粗箭头是现在最显笨的一处。<br />
+  <span class="tag">运行态不换形状</span>同一个圆、同一个位置，只把箭头换成"细环 + 实心方块"。环只占 1.6px，颜色用主题绿但不铺满，既表示"进行中"又不做成录音键。<b>点它 = 停止</b>，形状没变过，不用重新认。
+</p>
+
+<h2>方案 B｜胶囊标签：直接把「生成 / 停止」写出来</h2>
+<div class="bar">
+  <div class="main">
+    <button class="attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg></button>
+    <div class="input ph">描述下一步，或用 @ 引用上游</div>
+    <button class="btn B on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg>生成</button>
+  </div>
+  <div class="opts">
+    <div class="chip strong"><span class="dot"></span>图片</div>
+    <div class="chip">未配置模型</div>
+    <div class="chip">自适应 · 1 张</div>
+    <div class="chip">✦ 预设</div>
+  </div>
+</div>
+<div class="states">
+  <div class="state"><div class="holder wide"><button class="btn B">生成</button></div><span>空内容 · 幽灵</span></div>
+  <div class="state"><div class="holder wide"><button class="btn B on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg>生成</button></div><span>可发送</span></div>
+  <div class="state"><div class="holder wide"><button class="btn B stop"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5" /></svg>停止</button></div><span>运行中</span></div>
+  <div class="state"><div class="holder wide"><button class="btn B" disabled style="opacity:.4">生成</button></div><span>禁用</span></div>
+</div>
+<p class="why">
+  <span class="tag">32px 高</span>和右边那排 chip 等高，视觉上并入参数行，栏里不再有孤立的方块。<br />
+  <span class="tag">写字不画符号</span>"生成 / 停止"没有歧义 —— 现在那个方块到底表示"暂停"还是"停止"、点了是暂停还是取消，全靠猜。<br />
+  <span class="tag">代价</span>多占约 46px 宽；而且它在栏里的位置比 A 偏左、不再贴着输入框右下角，动线上要重新适应。
+</p>
+
+<h2>方案 C｜保持实心方块，只收干净（改动最小、最保守）</h2>
+<div class="bar">
+  <div class="main">
+    <button class="attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg></button>
+    <div class="input ph">描述下一步，或用 @ 引用上游</div>
+    <button class="btn C"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button>
+  </div>
+  <div class="opts">
+    <div class="chip strong"><span class="dot"></span>图片</div>
+    <div class="chip">未配置模型</div>
+    <div class="chip">自适应 · 1 张</div>
+    <div class="chip">✦ 预设</div>
+  </div>
+</div>
+<div class="states">
+  <div class="state"><div class="holder"><button class="btn C"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button></div><span>34px · radius 11</span></div>
+  <div class="state"><div class="holder"><button class="btn C stop">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="38 22" transform="rotate(-90 12 12)" opacity=".7"/><rect x="8.8" y="8.8" width="6.4" height="6.4" rx="1.5" fill="currentColor"/></svg>
+  </button></div><span>运行中 · 深灰不用绿</span></div>
+  <div class="state"><div class="holder"><button class="btn C" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg></button></div><span>禁用</span></div>
+</div>
+<p class="why">
+  <span class="tag">只改三个数</span>42→34、radius 13→11、图标 18→15 且换成细线，运行态从<a>整块绿</a>改成深灰 + 细环。<br />
+  保留了"发送是全栏唯一实心块"这个原有主张，风险最小；但那块黑在素白栏里依旧是最重的东西，只是从"砖"变成"小砖"。
+</p>
+
+</body>
+</html>

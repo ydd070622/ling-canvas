@@ -144,7 +144,7 @@ const handleSearchShortcut = async (event) => {
 <style scoped>
 /* 标题栏容器 | Title bar container */
 .title-bar {
-  @apply relative flex h-[48px] shrink-0 items-center justify-between select-none
+  @apply relative flex h-[40px] shrink-0 items-center justify-between select-none
     border-b border-gray-100 bg-white px-5 dark:border-gray-800 dark:bg-[#121212];
 }
 
@@ -165,7 +165,7 @@ const handleSearchShortcut = async (event) => {
 }
 
 .title-bar__search {
-  @apply absolute left-1/2 top-1/2 flex h-10 w-[430px] -translate-x-1/2 -translate-y-1/2
+  @apply absolute left-1/2 top-1/2 flex h-8 w-[430px] -translate-x-1/2 -translate-y-1/2
     items-center gap-3 rounded-full border border-gray-200 bg-white px-4 text-gray-400
     shadow-[0_5px_20px_rgba(31,41,55,0.08)] transition-all dark:border-gray-700 dark:bg-[#1d1d1d];
   -webkit-app-region: no-drag;

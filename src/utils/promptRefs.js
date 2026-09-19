@@ -1,15 +1,26 @@
 /**
  * Prompt references | 提示词里的上游引用
  *
- * 全显式引用模型：连了线不等于用了上游素材，必须在正文里写 `{{Text 1}}` /
- * `{{Image 2}}` 才会生效。编号 = 该类型入边按 `edge.data.order` 升序的位次。
+ * 全显式引用模型：连了线不等于用了上游素材，必须在正文里写 `@图片1` / `@文本2`
+ * 才会生效。编号 = 该类型入边按 `edge.data.order` 升序的位次。
+ *
+ * token 字面量与绑定键同名（`@图片1` ↔ key `图片1`），统一由 `refKey()` 产出，
+ * 不要在别处手拼这个格式。
  *
  * 这些函数都是纯函数（显式传入 nodes / edges），便于单独验证。
  */
-import { KIND_TITLE, KIND_CODE, getAcceptLimit, getSlotRole, getModeDef } from '../config/nodeRegistry'
+import {
+  KIND_TITLE, KIND_CODE, getAcceptLimit, getSlotRole, getModeDef, isReferenceableType
+} from '../config/nodeRegistry'
+import { presetTextOf } from '../config/promptPresets'
 
-export const TOKEN_RE = /\{\{\s*(Image|Video|Text)\s+(\d+)\s*\}\}/g
-const KIND_BY_TITLE = { Image: 'image', Video: 'video', Text: 'text' }
+export const TOKEN_RE = /@(文本|图片|视频|音频)(\d+)/g
+const KIND_BY_TITLE = Object.fromEntries(
+  Object.entries(KIND_TITLE).map(([kind, title]) => [title, kind])
+)
+
+/** token 的绑定键（不含 `@`）：`图片1` */
+export const refKey = (kind, index) => `${KIND_TITLE[kind]}${index}`
 
 /** 进入某节点的边，按入边顺序升序 */
 export const incomingEdges = (nodeId, edges) =>
@@ -26,7 +37,7 @@ export const parseTokens = (text) => {
   while ((match = TOKEN_RE.exec(source))) {
     out.push({
       raw: match[0],
-      key: `${match[1]} ${match[2]}`,
+      key: `${match[1]}${match[2]}`,
       kind: KIND_BY_TITLE[match[1]],
       index: Number(match[2]),
       from: match.index,
@@ -36,23 +47,30 @@ export const parseTokens = (text) => {
   return out
 }
 
-export const makeToken = (kind, index) => `{{${KIND_TITLE[kind]} ${index}}}`
+export const makeToken = (kind, index) => `@${refKey(kind, index)}`
 
 /**
  * 入边 → 槽位 | Map inbound edges onto semantic slots
  *
  * 容量之外的边落进 `idle`（仍保留连线，只是当前模式用不到、也不占编号）。
+ *
+ * 先收集**全部可引用上游的种类**再逐个分配槽位：auto 节点要靠这份种类清单反推模式
+ * （接 1 张图 → 图生图，2 张 → 首尾帧），边分配边算会得到互相矛盾的槽位语义。
  */
 export const computeSlots = (node, nodes, edges) => {
+  const inbound = incomingEdges(node?.id, edges)
+  const sources = inbound.map(edge => nodes.find(n => n.id === edge.source))
+  const sourceKinds = sources.filter(src => isReferenceableType(src?.type)).map(src => src.type)
+
   const used = {}
   const slots = []
   const idle = []
 
-  incomingEdges(node?.id, edges).forEach((edge) => {
-    const src = nodes.find(n => n.id === edge.source)
-    if (!src || src.type === 'group') return
+  inbound.forEach((edge, i) => {
+    const src = sources[i]
+    if (!src || !isReferenceableType(src.type)) return
     const kind = src.type
-    const limit = getAcceptLimit(node, kind)
+    const limit = getAcceptLimit(node, kind, sourceKinds)
     const taken = used[kind] || 0
     if (limit === 0 || taken >= limit) {
       idle.push({ edge, src, kind })
@@ -66,11 +84,11 @@ export const computeSlots = (node, nodes, edges) => {
       index: taken + 1,
       code: KIND_CODE[kind] + (taken + 1),
       token: makeToken(kind, taken + 1),
-      role: getSlotRole(node, kind, taken)
+      role: getSlotRole(node, kind, taken, sourceKinds)
     })
   })
 
-  return { slots, idle, modeDef: getModeDef(node) }
+  return { slots, idle, modeDef: getModeDef(node, sourceKinds) }
 }
 
 /** 解析每个 token 的状态：ok / orphan（绑定边已删）/ beyond（编号越界） */
@@ -115,7 +133,7 @@ export const renumberRefs = (node, nodes, edges) => {
     const edgeId = boundEdge(token)
     if (!edgeId) return null
     const slot = byEdge.get(edgeId)
-    return slot ? `${KIND_TITLE[slot.kind]} ${slot.index}` : token.key
+    return slot ? refKey(slot.kind, slot.index) : token.key
   }
 
   const rewrites = []
@@ -124,7 +142,7 @@ export const renumberRefs = (node, nodes, edges) => {
     const key = keyFor(token)
     if (!key || key === token.key) return
     if (orphanKeys.has(key)) { collided = true; return }
-    rewrites.push({ from: token.from, to: token.to, text: `{{${key}}}` })
+    rewrites.push({ from: token.from, to: token.to, text: `@${key}` })
   })
 
   if (collided) {
@@ -168,7 +186,7 @@ export const checkGenerate = (node, nodes, edges) => {
   const beyond = refs.find(r => r.status === 'beyond')
   if (beyond) {
     const count = slots.filter(s => s.kind === beyond.kind).length
-    const what = beyond.kind === 'image' ? '图片' : beyond.kind === 'video' ? '视频' : '文本'
+    const what = KIND_TITLE[beyond.kind] || '内容'
     return {
       ok: false, code: 'E_BEYOND', refs, slots,
       message: `引用了不存在的 ${beyond.raw}：当前仅连入 ${count} 个${what}。`
@@ -177,27 +195,28 @@ export const checkGenerate = (node, nodes, edges) => {
 
   const isText = node.type === 'text'
   const hasOwnContent = isText ? !!String(node.data?.content || '').trim() : !!node.data?.url
-  if (!prompt && !refs.length && !hasOwnContent) {
+  // 选了提示词预设也算"有内容"：它不进正文，但生成时会拼在最前面
+  const hasPreset = !!presetTextOf(node?.data?.preset)
+  // 连进来的文本上游同样算内容：连线即使用，它的正文会拼进提示词
+  const hasUpstreamText = slots.some(
+    slot => slot.kind === 'text' && String(slot.src.data?.content || '').trim()
+  )
+  if (!prompt && !hasOwnContent && !hasPreset && !hasUpstreamText) {
     return {
       ok: false, code: 'E_EMPTY', refs, slots,
-      message: isText ? '请输入内容，或连入上游并在正文里引用。' : '请输入提示词，或连入上游并在正文里引用。'
+      message: isText ? '请输入内容，或连入上游。' : '请输入提示词，或连入上游。'
     }
   }
 
-  const usedEdges = new Set(refs.map(r => r.slot?.edge.id).filter(Boolean))
-  const unused = slots.filter(s => !usedEdges.has(s.edge.id))
-  if (unused.length) {
-    return {
-      ok: true, warn: 'W_UNREF', refs, slots,
-      message: `连入了 ${unused.length} 个上游但正文里没有引用，本次生成不会用到它们。`,
-      actions: [{ label: '插入引用', act: 'insert-refs' }, { label: '仍然生成', act: 'run-anyway', ghost: true }]
-    }
-  }
-
+  /**
+   * 这里原本有一条 `W_UNREF`（「连了上游但正文里没引用，本次生成不会用到它们」）。
+   *
+   * 改成**连线即使用**之后它不可能成立了：连上来的就是本次要用的，不再要求正文里点名。
+   * 留着只会误导 —— 用户连了一张参考图，却被告诉"不会用到"。
+   */
   return { ok: true, refs, slots }
 }
 
-export const defaultStale = () => ({ is: false, reason: null, since: null })
 export const defaultRefBindings = () => ({})
 
 /**
@@ -222,7 +241,7 @@ export const removeOrphanRefs = (node, nodes, edges) => {
 export const tokenForEdge = (node, edge, nodes, edges) => {
   const { slots, idle } = computeSlots(node, nodes, edges)
   const slot = slots.find(s => s.edge.id === edge.id)
-  if (slot) return { token: slot.token, key: `${KIND_TITLE[slot.kind]} ${slot.index}`, slot }
+  if (slot) return { token: slot.token, key: refKey(slot.kind, slot.index), slot }
   const idleItem = idle.find(i => i.edge.id === edge.id)
   return idleItem ? { token: null, key: null, idle: idleItem } : null
 }

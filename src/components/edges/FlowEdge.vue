@@ -62,16 +62,42 @@ const props = defineProps({
   selected: Boolean
 })
 
-const { viewport } = useVueFlow()
+const { viewport, findNode } = useVueFlow()
 const hovered = ref(false)
 let leaveTimer = null
 
+/**
+ * 连线端点按**节点卡片的边**算，不用 Vue Flow 传进来的 handle 坐标。
+ *
+ * 两个原因：
+ * 1) 端口在视觉上被挪到了卡片外侧（见 flow-nodes.css 的「端口挪到卡片外面」），
+ *    handle 坐标跟着一起外移，线端就会停在卡片外面 —— 缩小时那段空隙看着就像线断了；
+ * 2) handle 的位置是 Vue Flow 缓存的（节点尺寸变化才重算），实测与 DOM 里的实际位置
+ *    能差出十几像素，拿它画线本来就不稳。
+ *
+ * 节点几何是权威的：左边出、右边进，竖向取卡片中点 —— 与端口画在哪儿无关。
+ */
+const anchorX = (nodeId, side, fallback) => {
+  const node = findNode(nodeId)
+  if (!node) return fallback
+  const width = node.dimensions?.width || node.measured?.width || node.width || 0
+  if (!width) return fallback
+  return side === 'right' ? node.position.x + width : node.position.x
+}
+const anchorY = (nodeId, fallback) => {
+  const node = findNode(nodeId)
+  if (!node) return fallback
+  const height = node.dimensions?.height || node.measured?.height || node.height || 0
+  if (!height) return fallback
+  return node.position.y + height / 2
+}
+
 const path = computed(() => {
   const [edgePath] = getBezierPath({
-    sourceX: props.sourceX,
-    sourceY: props.sourceY,
-    targetX: props.targetX,
-    targetY: props.targetY,
+    sourceX: anchorX(props.source, 'right', props.sourceX),
+    sourceY: anchorY(props.source, props.sourceY),
+    targetX: anchorX(props.target, 'left', props.targetX),
+    targetY: anchorY(props.target, props.targetY),
     sourcePosition: props.sourcePosition,
     targetPosition: props.targetPosition,
     curvature: 0.32

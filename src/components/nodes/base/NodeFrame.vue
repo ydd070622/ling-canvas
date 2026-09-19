@@ -1,34 +1,46 @@
 <template>
   <!-- 节点外壳 | Node frame
-       三种内容节点（文本/图片/视频）共用的卡片骨架：头部、提示条、端口、
-       正文富文本字段、底部动作条、折叠态内容预览、引用顺序浮层。
-       各节点只需通过插槽补上自己的内容区、元信息条与额外操作。 -->
+       按原型 infinite_canvas_node_system_v25.html 的卡片结构：**只有两种状态**。
+
+       - **内容态**（没选中）：只剩内容本身，没有底色 / 描边 / 阴影 / 表头 / 底部。
+       - **焦点态**（恰好选中这一个）：内容 + 表头（类型 + 标题 + 状态）+ 底部一行
+         （类型名 + 尺寸/时长 + 生成按钮）。
+
+       卡片上**不放任何参数控件**：模型 / 比例 / 张数 / 清晰度 / 提示词全部走底部 composer。
+       表头、底部、工具栏都用 v-if 控制，所以尺寸变化只发生在选中态切换的那一刻。
+
+       端口在任何状态下都渲染（靠 opacity 隐藏，见 NodePort 的说明）。 -->
   <div
     class="flow-node-outer"
-    :class="[`flow-node-${tone}`, { 'flow-node-collapsed': !expanded, 'is-dropzone': dragOver }]"
+    :class="[
+      `flow-node-${tone}`,
+      focused ? 'is-focused' : 'is-compact',
+      { 'is-multi': multi, 'is-dropzone': dragOver }
+    ]"
+    :style="cardStyle"
     @dragover="onDragOver"
     @dragleave="dragOver = false"
     @drop="onDrop"
   >
-    <span v-if="!expanded" class="flow-collapsed-label">{{ title }}</span>
-
-    <NodeToolbar>
+    <NodeToolbar v-if="focused">
       <div class="flow-tb-group">
         <button
-          v-if="tone !== 'text'"
+          v-if="uploadable"
           class="flow-tool-btn nodrag"
           type="button"
-          :title="`上传本地${tone === 'video' ? '视频' : '图片'}`"
+          :title="uploadTitle"
           @click="emit('upload')"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5" /><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" /></svg>
         </button>
+        <button v-if="viewable" class="flow-tool-btn nodrag" type="button" title="查看" @click="emit('view')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+        </button>
+        <button v-if="editable" class="flow-tool-btn nodrag" type="button" title="编辑提示词" @click="emit('edit')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5 17.5 10.5" /></svg>
+        </button>
         <button class="flow-tool-btn nodrag" type="button" title="创建副本" @click="emit('duplicate')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.2" /><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" /></svg>
-        </button>
-        <button class="flow-tool-btn nodrag" type="button" :title="expanded ? '折叠' : '展开'" @click="emit('toggle-collapse')">
-          <svg v-if="expanded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H3v-6M15 3h6v6M21 3l-7 7M3 21l7-7" /></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9V3h6M21 15v6h-6M21 3l-7 7M3 21l7-7" /></svg>
         </button>
       </div>
       <div class="flow-tb-sep"></div>
@@ -39,8 +51,15 @@
       </div>
     </NodeToolbar>
 
-    <div class="flow-card" :class="{ 'flow-card-stale': stale, 'flow-card-failed': failed }">
-      <div class="flow-card-head">
+    <div class="flow-card" :class="{ 'flow-card-failed': failed }">
+      <!-- 内容态的节点没有表头，"这是什么"就全靠这个角标说。
+           焦点态不显示：那时表头已经写着同样的东西，再来一遍是重复。 -->
+      <span v-if="!focused" class="flow-zoom-tag">
+        <span class="flow-zoom-tag-icon" v-html="NODE_ICONS[tone]"></span>
+        <span class="flow-zoom-tag-name">{{ typeLabel }}</span>
+      </span>
+
+      <div v-if="focused" class="flow-card-head">
         <span class="flow-head-left">
           <span class="flow-head-dot" :class="`flow-tone-${tone}`"></span>
           <span
@@ -51,11 +70,18 @@
           >{{ title }}</span>
         </span>
         <span class="flow-head-right">
-          <span class="flow-status" :class="statusClass"><i></i>{{ statusText }}</span>
+          <!-- 失败的原因挂在悬停上，不占正文：底部栏那条 toast 已经报过一次了 -->
+          <span class="flow-status" :class="statusClass" :title="failed ? failText : ''"><i></i>{{ statusText }}</span>
         </span>
       </div>
 
-      <div v-for="(notice, index) in notices" :key="index" class="flow-notice" :class="`is-${notice.kind}`">
+      <div
+        v-for="(notice, index) in notices"
+        v-show="focused"
+        :key="index"
+        class="flow-notice"
+        :class="`is-${notice.kind}`"
+      >
         <span class="flow-notice-text">{{ notice.text }}</span>
         <button
           v-for="action in notice.actions"
@@ -70,48 +96,27 @@
         <div class="flow-stage"><slot name="body" /></div>
       </div>
 
-      <div v-if="tone !== 'text'" class="flow-card-meta"><slot name="meta" /></div>
+      <!-- 内容态：表头、提示条都收起来了，但"这节点出错了"不能一起收掉，
+           否则一张失败的卡片看起来和正常的一模一样 -->
+      <span
+        v-if="!focused && (failed || notices.length)"
+        class="flow-compact-flag is-fail"
+        :title="failText || notices[0]?.text || '生成失败'"
+      ></span>
 
-      <PromptField
-        :model-value="prompt"
-        :refs="refs"
-        :candidates="candidates"
-        :placeholder="placeholder"
-        well
-        @update:model-value="emit('update-prompt', $event)"
-        @insert-ref="emit('insert-ref', $event)"
-      />
+      <!-- 右下角缩放把手：只有可缩放的节点（文本）才有。
+            挂在卡片右下角外面一点，不吃框选（nodrag/nopan）。 -->
+      <span
+        v-if="focused && resizable"
+        class="flow-resize-grip nodrag nopan"
+        title="拖动改变大小"
+        @mousedown.stop.prevent="startResize"
+      ></span>
 
-      <div class="flow-card-footer">
-        <slot name="footer-actions" />
-        <span class="flow-footer-note" v-html="footerNote"></span>
-        <button
-          class="flow-send-btn nodrag"
-          :class="{ 'flow-send-cancel': busy }"
-          type="button"
-          :disabled="!busy && disabled"
-          :title="busy ? '取消生成' : '发送生成'"
-          @click="emit(busy ? 'cancel' : 'send')"
-        >
-          <svg v-if="busy" class="flow-stop-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2" /></svg>
-          <svg v-else viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4l17.4-7.1c.9-.4.9-1.2 0-1.6L3.4 3.6c-.8-.3-1.4.2-1.4 1L4 12l-2 7.4c0 .8.6 1.3 1.4 1z" /></svg>
-        </button>
-      </div>
-
-      <div v-if="!expanded" class="flow-peek"><slot name="peek" /></div>
-
-      <NodePort
-        ref="inPortRef"
-        type="target"
-        side="left"
-        :tone="tone"
-        :count="inboundCount"
-        @inspect="refPopOpen = true"
-      />
+      <NodePort type="target" side="left" :tone="tone" />
       <NodePort type="source" side="right" :tone="tone" />
     </div>
 
-    <RefOrderPopover v-model:show="refPopOpen" :node-id="nodeId" :anchor="portAnchor" />
   </div>
 </template>
 
@@ -119,43 +124,101 @@
 import { computed, nextTick, ref } from 'vue'
 import NodeToolbar from './NodeToolbar.vue'
 import NodePort from './NodePort.vue'
-import PromptField from './PromptField.vue'
-import RefOrderPopover from './RefOrderPopover.vue'
-import { updateNode } from '../../../stores/canvas'
+import { canvasViewport, updateNode } from '../../../stores/canvas'
+import { NODE_ICONS } from '../../../config/nodeIcons'
+import { NODE_DEFINITIONS } from '../../../config/nodeRegistry'
 
 const props = defineProps({
   nodeId: { type: String, required: true },
   tone: { type: String, default: 'text' },
   title: { type: String, default: '' },
-  expanded: { type: Boolean, default: true },
-  prompt: { type: String, default: '' },
-  refs: { type: Array, default: () => [] },
-  candidates: { type: Array, default: () => [] },
-  placeholder: { type: String, default: '' },
-  inboundCount: { type: Number, default: 0 },
+  /** 是否展开（= 恰好选中这一个节点） */
+  focused: { type: Boolean, default: false },
+  /** 多选中的一员：加描边，但不展开 */
+  multi: { type: Boolean, default: false },
   statusText: { type: String, default: '' },
   statusClass: { type: String, default: '' },
   notices: { type: Array, default: () => [] },
-  footerNote: { type: String, default: '' },
-  busy: { type: Boolean, default: false },
-  disabled: { type: Boolean, default: false },
-  stale: { type: Boolean, default: false },
-  failed: { type: Boolean, default: false }
+  failed: { type: Boolean, default: false },
+  /** 失败原因原文。卡片正文里不再铺这条错误，只挂在「失败」状态和角标的悬停上 */
+  failText: { type: String, default: '' },
+  /** 卡片宽度；0 = 用默认宽度。素材比例不同时由外层节点算好传进来 */
+  cardWidth: { type: Number, default: 0 },
+  /** 右下角是否出现缩放把手 */
+  resizable: { type: Boolean, default: false },
+  /** 有本地文件可上传（图片 / 视频 / 音频） */
+  uploadable: { type: Boolean, default: false },
+  /** 有内容可全屏查看（图片 / 视频 / 音频） */
+  viewable: { type: Boolean, default: false },
+  /** 多一个「编辑提示词」按钮（AI 任务节点） */
+  editable: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
-  'send', 'cancel', 'remove', 'duplicate', 'toggle-collapse',
-  'upload', 'drop-file', 'update-prompt', 'insert-ref', 'notice-action'
+  'remove', 'duplicate', 'view', 'edit', 'upload', 'drop-file', 'notice-action', 'resize'
 ])
 
-const refPopOpen = ref(false)
-const inPortRef = ref(null)
-const portAnchor = computed(() => inPortRef.value?.$el || null)
+/**
+ * 角标固定显示**类型名**（图片/文本/视频），不是节点自己的名字。
+ * 节点名会随上传的文件变成文件名，那样同一类节点在画布上就认不出来了；
+ * 名字留给展开后的表头去显示。
+ */
+const typeLabel = computed(() => NODE_DEFINITIONS[props.tone]?.label || '')
+
+const cardStyle = computed(() => (
+  props.cardWidth ? { '--flow-card-width': `${props.cardWidth}px` } : null
+))
+
+/**
+ * 拖动右下角改大小 | Resize by dragging the bottom-right grip
+ *
+ * 屏幕位移要除以缩放才是 flow 单位 —— 画布缩到 0.5 时，鼠标走 100px 只等于画布上的 50。
+ */
+const RESIZE_MIN_WIDTH = 160
+// 下限只保证"还看得出是个文本框"。这是**内容区**的高度，卡片会另外加上表头那一段。
+const RESIZE_MIN_HEIGHT = 56
+const startResize = (event) => {
+  const zoom = canvasViewport.value?.zoom || 1
+  const card = event.currentTarget?.closest('.flow-card')
+  if (!card) return
+  const startRect = card.getBoundingClientRect()
+  // 宽度按**卡片**量、高度按**内容区**量：
+  // 卡片高度里含表头那一段固定开销，把它算进尺寸会让"拖动量的高度"和用户看到的
+  // 内容区不一致；而宽度没有这个问题（表头本来就跟着卡片一起变宽）。
+  const stage = card.querySelector('.flow-stage')
+  const from = { x: event.clientX, y: event.clientY }
+  // 注意：offsetHeight / offsetWidth 是**布局尺寸，不受 CSS 缩放影响**，
+  // 画布的缩放是靠 transformationpane 上的 scale 做的，所以它们本来就是 flow 坐标，
+  // 不能再除 zoom（和"保持卡片中心不动"那里踩过的是同一个坑）。
+  const start = {
+    width: card.offsetWidth,
+    height: stage?.offsetHeight || card.offsetHeight
+  }
+
+  const onMove = (moveEvent) => {
+    emit('resize', {
+      width: Math.max(RESIZE_MIN_WIDTH, Math.round(start.width + (moveEvent.clientX - from.x) / zoom)),
+      height: Math.max(RESIZE_MIN_HEIGHT, Math.round(start.height + (moveEvent.clientY - from.y) / zoom))
+    })
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+const uploadTitle = computed(() => {
+  const what = props.tone === 'video' ? '视频' : props.tone === 'audio' ? '音频' : '图片'
+  return `上传本地${what}`
+})
 
 /* 拖文件到节点上：媒体节点才接收 */
 const dragOver = ref(false)
+const acceptsDrop = computed(() => ['image', 'video', 'audio'].includes(props.tone))
 const onDragOver = (event) => {
-  if (props.tone === 'text' || !event.dataTransfer?.types?.includes('Files')) return
+  if (!acceptsDrop.value || !event.dataTransfer?.types?.includes('Files')) return
   event.preventDefault()
   event.stopPropagation()
   event.dataTransfer.dropEffect = 'copy'
@@ -163,7 +226,7 @@ const onDragOver = (event) => {
 }
 const onDrop = (event) => {
   dragOver.value = false
-  if (props.tone === 'text') return
+  if (!acceptsDrop.value) return
   const file = event.dataTransfer?.files?.[0]
   if (!file) return
   event.preventDefault()

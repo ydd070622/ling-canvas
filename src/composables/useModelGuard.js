@@ -4,11 +4,8 @@
  * 发送前拦截并提示，避免服务端 500（"only imagen models are supported" 一类报错）
  */
 import { useModelStore } from '../stores/pinia'
-import { CHAT_MODELS } from '../config/models'
+import { CHAT_MODELS, MEDIA_MODEL_FEATURE } from '../config/models'
 
-// 明显是图片/视频模型的特征 | Strongly image/video models
-// 注意：gemini-3.1-flash-image 等 "-image" 后缀模型是生图模型，须豁免
-const MEDIA_MODEL_FEATURE = /(imagen|banana|seedream|seedance|nano-|dall|kling|runway|sora|vidu|pix|[-_.]image$|^image)/i
 // 常见对话模型特征（未出现在内置/自定义模型表时的兜底）| Text-model key patterns
 const TEXT_MODEL_FEATURE = /(^gpt-|^claude|^deepseek|^qwen|^o\d|flash$|-flash|preview$|-preview|^-?lite$|-lite|gemini-[\d.]+(?!.*image)|gemini-pro(?!.*image)|gemini-flash(?!.*image)|chat$|^glm)/i
 

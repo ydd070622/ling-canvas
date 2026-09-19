@@ -193,6 +193,7 @@ import {
   VideocamOutline
 } from '@vicons/ionicons5'
 import { useModelStore } from '../stores/pinia'
+import { IMAGE_MODEL_FEATURE, VIDEO_MODEL_FEATURE } from '../config/models'
 
 const REMOTE_MODELS_CACHE_KEY = 'api-remote-models-by-provider'
 
@@ -383,11 +384,14 @@ const getModelsEndpoint = () => {
   return `${base}/v1/models`
 }
 
+// 生图 / 生视频的识别特征与生成前的用途拦截**共用同一份**（config/models.js）：
+// 两处各写一条正则时，gpt-image-2 会在设置里显示为图片模型、到生成时又被判成
+// 文本模型 —— 同一个模型两种身份，用户只会觉得这个软件在胡说。
 const detectModelType = model => {
   const explicit = String(model.type || model.category || model.model_type || '').toLowerCase()
-  const name = String(model.id || model.name || '').toLowerCase()
-  if (explicit.includes('video') || /(sora|veo|kling|seedance|video|wan\d)/.test(name)) return 'video'
-  if (explicit.includes('image') || /(dall|imagen|image|flux|seedream|nano.?banana|gpt-image|stable.?diffusion)/.test(name)) return 'image'
+  const name = String(model.id || model.name || '')
+  if (explicit.includes('video') || VIDEO_MODEL_FEATURE.test(name)) return 'video'
+  if (explicit.includes('image') || IMAGE_MODEL_FEATURE.test(name)) return 'image'
   return 'text'
 }
 

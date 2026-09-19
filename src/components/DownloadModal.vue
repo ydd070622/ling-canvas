@@ -116,6 +116,5 @@ const videoAssets = computed(() => {
 // Download single asset | 下载单个素材
 const downloadAsset = (asset) => {
   openExternal(asset.url)
-  window.$message?.success('已在新标签页打开')
 }
 </script>

@@ -19,7 +19,6 @@ export function useNodeActions(nodeId) {
     const newNodeId = duplicateNode(nodeId)
     if (newNodeId) {
       setTimeout(() => updateNodeInternals(newNodeId), 50)
-      window.$message?.success('节点已复制')
     }
     return newNodeId
   }
@@ -29,7 +28,6 @@ export function useNodeActions(nodeId) {
    */
   const remove = () => {
     removeNode(nodeId)
-    window.$message?.success('节点已删除')
   }
 
   /**

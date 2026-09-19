@@ -148,7 +148,6 @@ const handleProjectAction = (key, project) => {
   }
   if (key === 'delete') {
     deleteProject(project.id)
-    window.$message?.success('已移入回收站')
   }
 }
 
@@ -160,7 +159,7 @@ const confirmRename = () => {
   renameValue.value = ''
 }
 
-const handleCanvasDelete = () => window.$message?.success('已移入回收站')
+const handleCanvasDelete = () => {}
 
 const handleCanvasRename = (projectId) => {
   const project = projects.value.find(item => item.id === projectId)
@@ -176,7 +175,6 @@ const trashActions = () => [
 const handleTrashAction = (key, project) => {
   if (key === 'restore') {
     restoreProject(project.id)
-    window.$message?.success('项目已恢复')
     return
   }
   dialog.error({

@@ -1,14 +1,21 @@
 import {
+  CANVAS_NODE_TYPES,
   createDefaultNodeData,
+  inferModeKey,
   INPUT_HANDLE,
   OUTPUT_HANDLE,
   NODE_DEFINITIONS,
   NODE_MODES
 } from '../config/nodeRegistry'
-import { makeToken, defaultStale, computeSlots, parseTokens } from './promptRefs'
+import { makeToken, refKey, computeSlots, parseTokens } from './promptRefs'
 
-/** 当前画布文档版本。v3 = 单一输入 handle + 逻辑分槽 + 全显式引用。 */
-export const CANVAS_SCHEMA_VERSION = 3
+/**
+ * 当前画布文档版本。
+ * v3 = 单一输入 handle + 逻辑分槽 + 全显式引用（`{{Image 1}}`）。
+ * v4 = 引用语法换成 `@图片1`，节点类型扩到 文本/图片/视频/音频/AI任务，
+ *      新节点模式改为 `auto`（由上游推断），旧节点的显式 mode 原样保留。
+ */
+export const CANVAS_SCHEMA_VERSION = 4
 
 const LEGACY_TYPE_MAP = Object.freeze({
   imageConfig: 'image',
@@ -46,23 +53,15 @@ const normalizedData = (node, outputData = {}) => {
   }
 }
 
-/** 按入边类型推断节点该用哪个生成模式（迁移时补 mode 用） */
+/**
+ * 按入边类型推断节点该用哪个生成模式（迁移时给老文档补显式 mode 用）
+ *
+ * 老文档一律落成**显式** mode 而不是 `auto`：它们的连线是照着当时那套模式矩阵建的，
+ * 换成自动推断会把槽位语义（首帧/尾帧/底图）改掉。新文档才走 auto。
+ */
 const inferMode = (node, inbound, byId) => {
-  const sources = inbound.map(edge => byId.get(edge.source)).filter(Boolean)
-  if (node.type === 'image') {
-    return sources.some(s => s.type === 'image') ? 'i2i' : 't2i'
-  }
-  if (node.type === 'video') {
-    const images = sources.filter(s => s.type === 'image')
-    if (images.length >= 2) return 'flf'
-    if (images.length === 1) return 'i2v'
-    if (sources.some(s => s.type === 'video')) return 'vref'
-    return 't2v'
-  }
-  if (node.type === 'text') {
-    return sources.some(s => s.type === 'image' || s.type === 'video') ? 'vision' : 'gen'
-  }
-  return NODE_DEFINITIONS[node.type]?.defaultMode || null
+  const kinds = inbound.map(edge => byId.get(edge.source)?.type).filter(Boolean)
+  return inferModeKey(node.type, kinds) || NODE_DEFINITIONS[node.type]?.defaultMode || null
 }
 
 /** 每个目标的入边重新编号 1..n，保证顺序连续无空洞 */
@@ -92,17 +91,50 @@ const backfillRefTokens = (node, edges, nodes) => {
   const { slots } = computeSlots(node, nodes, edges)
   if (!slots.length) return node
   const existing = new Set(parseTokens(node.data.prompt).map(t => t.key))
-  const missing = slots.filter(s => !existing.has(`${s.kind === 'image' ? 'Image' : s.kind === 'video' ? 'Video' : 'Text'} ${s.index}`))
+  const missing = slots.filter(s => !existing.has(refKey(s.kind, s.index)))
   if (!missing.length) return node
 
   const refBindings = { ...(node.data.refBindings || {}) }
   const tokens = missing.map((slot) => {
-    const token = makeToken(slot.kind, slot.index)
-    refBindings[`${slot.kind === 'image' ? 'Image' : slot.kind === 'video' ? 'Video' : 'Text'} ${slot.index}`] = slot.edge.id
-    return token
+    refBindings[refKey(slot.kind, slot.index)] = slot.edge.id
+    return makeToken(slot.kind, slot.index)
   })
   const prompt = `${String(node.data.prompt || '').trim()} ${tokens.join(' ')}`.trim()
   return { ...node, data: { ...node.data, prompt, refBindings } }
+}
+
+const LEGACY_TOKEN_RE = /\{\{\s*(Image|Video|Text)\s+(\d+)\s*\}\}/g
+const LEGACY_TOKEN_KEY_RE = /^(Image|Video|Text)\s+(\d+)$/
+const LEGACY_KIND = { Image: 'image', Video: 'video', Text: 'text' }
+
+/**
+ * v3 → v4：引用语法改写 | Rewrite legacy `{{Image 1}}` tokens
+ *
+ * 正文和 `refBindings` 的键必须一起改 —— 只改正文的话绑定查不到，所有引用会集体
+ * 变成 orphan（"来源连线已被断开"），生成被 `E_ORPHAN` 挡住，而用户并没有删过任何连线。
+ *
+ * 这一步**必须排在 backfillRefTokens 之前**：backfill 靠新语法认 token，
+ * 先 backfill 会把已有引用的老 token 当成"没有引用"，在正文里再补一份，引用就重了。
+ */
+const rewriteLegacyTokens = (node) => {
+  const prompt = String(node?.data?.prompt || '')
+  const bindings = node?.data?.refBindings || {}
+  LEGACY_TOKEN_RE.lastIndex = 0
+  const hasTokens = LEGACY_TOKEN_RE.test(prompt)
+  LEGACY_TOKEN_RE.lastIndex = 0
+  const hasKeys = Object.keys(bindings).some(key => LEGACY_TOKEN_KEY_RE.test(key))
+  if (!hasTokens && !hasKeys) return node
+
+  const nextPrompt = prompt.replace(
+    LEGACY_TOKEN_RE,
+    (_, title, index) => makeToken(LEGACY_KIND[title], Number(index))
+  )
+  const nextBindings = {}
+  Object.entries(bindings).forEach(([key, edgeId]) => {
+    const match = key.match(LEGACY_TOKEN_KEY_RE)
+    nextBindings[match ? refKey(LEGACY_KIND[match[1]], Number(match[2])) : key] = edgeId
+  })
+  return { ...node, data: { ...node.data, prompt: nextPrompt, refBindings: nextBindings } }
 }
 
 /**
@@ -207,10 +239,12 @@ export const migrateCanvasDocument = (document = {}) => {
         data.mode = inferMode(node, inboundByTarget.get(node.id) || [], migratedById)
       }
       data.refBindings = data.refBindings || {}
-      data.stale = data.stale || defaultStale()
     }
     return { ...node, data }
   })
+
+  // 引用语法先改写好，backfill 才认得出现有的引用（顺序不能换，见 rewriteLegacyTokens）
+  nodes = nodes.map(rewriteLegacyTokens)
 
   // 补 token 必须在 mode 与 edges 都定稿之后，才能算准槽位
   nodes = nodes.map((node) => {
@@ -242,6 +276,16 @@ export const migrateCanvasDocument = (document = {}) => {
  * - `autoExecute`：编排器建节点时的一次性触发开关，节点会立刻消费掉；万一没消费
  *   就被落盘，下次打开会凭空跑一次生成（要花钱）。
  */
+/**
+ * 丢掉已经不存在的节点类型 | Drop nodes of types we no longer ship
+ *
+ * 和 resetTransientNodeState 一样**每次读项目都跑**，与版本无关：删掉一个节点类型之后
+ * （比如堆叠），老画布里还留着它的节点数据，恢复出来会是一个没有组件可渲染的空框，
+ * 而且连线还挂在上面。连到被丢弃节点的边由调用方一并滤掉。
+ */
+export const dropUnsupportedNodes = (nodes = []) =>
+  nodes.filter(node => CANVAS_NODE_TYPES.includes(node.type))
+
 export const resetTransientNodeState = (nodes = []) => nodes.map((node) => {
   const hasLoading = node?.data?.loading === true
   const hasAutoExecute = Boolean(node?.data?.autoExecute)

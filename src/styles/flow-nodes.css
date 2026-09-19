@@ -27,6 +27,10 @@
   --flow-text-faint: #bcc6d4;
 
   --flow-well: rgba(30, 52, 82, 0.035);
+  /* 不透明版：内容态（卡片没有底、没有描边）时内容自己得有个实底。
+     这个值要比画布底（#f8fafc）**明显深一档** —— 早先用 #f6f7f9 时两者几乎同色，
+     空节点直接和画布融成一片，看不出边界。 */
+  --flow-well-solid: #e8ebf1;
   --flow-well-hover: rgba(30, 52, 82, 0.055);
   --flow-body-bg: var(--flow-well);
   --flow-body-border: #e8edf4;
@@ -39,6 +43,10 @@
   --flow-tone-image-soft: #ecfdf5;
   --flow-tone-video: #f97316;
   --flow-tone-video-soft: #fff7ed;
+  --flow-tone-audio: #e86262;
+  --flow-tone-audio-soft: #fef2f2;
+  --flow-tone-task: #5e73f1;
+  --flow-tone-task-soft: #eef2ff;
   --flow-tone-group: #94a3b8;
   --flow-tone-group-soft: #f1f5f9;
 
@@ -68,6 +76,7 @@
   --flow-text-faint: #4a5260;
 
   --flow-well: rgba(255, 255, 255, 0.045);
+  --flow-well-solid: #26262b;
   --flow-well-hover: rgba(255, 255, 255, 0.07);
   --flow-body-border: #333336;
   --flow-footer-border: rgba(255, 255, 255, 0.06);
@@ -75,6 +84,8 @@
   --flow-tone-text-soft: color-mix(in srgb, #6366f1 22%, #1b1b1d);
   --flow-tone-image-soft: color-mix(in srgb, #10b981 22%, #1b1b1d);
   --flow-tone-video-soft: color-mix(in srgb, #f97316 22%, #1b1b1d);
+  --flow-tone-audio-soft: color-mix(in srgb, #e86262 22%, #1b1b1d);
+  --flow-tone-task-soft: color-mix(in srgb, #5e73f1 22%, #1b1b1d);
   --flow-tone-group-soft: #232326;
 
   --flow-ok: #34d399;
@@ -93,7 +104,8 @@
 .flow-card {
   position: relative;
   display: flex;
-  width: 392px;
+  /* 宽度由节点按素材比例写进 --flow-card-width（全景满宽、竖图收窄） */
+  width: var(--flow-card-width, 392px);
   flex-direction: column;
   background: var(--flow-card-bg);
   border: 1px solid var(--flow-card-border);
@@ -110,17 +122,16 @@
   box-shadow: 0 0 0 4px var(--flow-accent-ring), var(--flow-card-shadow-hover);
 }
 
-.flow-card.flow-card-stale { border-style: dashed; border-color: var(--flow-busy); }
 .flow-card.flow-card-failed { border-color: var(--flow-fail); }
 
 /* ============ 头部 ============ */
 .flow-card-head {
   display: flex;
-  height: 44px;
+  height: 42px;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 0 8px;
   cursor: grab;
 }
 
@@ -128,6 +139,8 @@
 .flow-head-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--flow-tone-text); }
 .flow-head-dot.flow-tone-image { background: var(--flow-tone-image); }
 .flow-head-dot.flow-tone-video { background: var(--flow-tone-video); }
+.flow-head-dot.flow-tone-audio { background: var(--flow-tone-audio); }
+.flow-head-dot.flow-tone-task { background: var(--flow-tone-task); }
 
 .flow-head-title {
   min-width: 0;
@@ -172,7 +185,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 2px 12px 6px;
+  margin: 2px 8px 8px;
   padding: 7px 9px 7px 8px;
   border-radius: 9px;
   background: var(--flow-well);
@@ -181,7 +194,6 @@
   line-height: 1.5;
 }
 .flow-notice-text { min-width: 0; flex: 1 1 auto; }
-.flow-notice.is-stale { color: var(--flow-busy-text); }
 .flow-notice.is-warn { color: var(--flow-busy-text); }
 .flow-notice.is-error { color: var(--flow-fail-text); }
 .flow-notice button {
@@ -202,7 +214,7 @@
 .flow-notice button.is-ghost { box-shadow: none; opacity: 0.65; }
 
 /* ============ 内容舞台 ============ */
-.flow-card-body { padding: 0 12px; }
+.flow-card-body { padding: 0 8px 8px; }
 
 .flow-stage {
   position: relative;
@@ -211,12 +223,23 @@
   background: var(--flow-well);
 }
 
-.flow-media { position: relative; display: grid; width: 100%; aspect-ratio: 4 / 3; place-items: center; gap: 7px; }
+/* 宽高比由 NodeMedia 按素材真实比例写成行内样式（21:9 的图就显示成 21:9）。
+   下面这两条只是**素材量出来之前**的兜底默认值。
+   极端竖图靠"卡片宽度按比例收窄"（utils/ratio 的 cardWidthForRatio）控制，不在这里限高 ——
+   限高会让竖图退回成接近方形，等于自适配没生效。 */
+.flow-media {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  place-items: center;
+  gap: 7px;
+}
 .flow-media.is-wide { aspect-ratio: 16 / 9; }
 .flow-media img.flow-media-fill,
 .flow-media video.flow-media-fill,
 .flow-media .flow-media-fill { display: block; width: 100%; height: 100%; }
-.flow-media img.flow-media-fill { object-fit: cover; }
+.flow-media img.flow-media-fill { object-fit: contain; }
 .flow-media video.flow-media-fill { background: #000; object-fit: contain; }
 
 .flow-media-meta {
@@ -262,7 +285,6 @@
 }
 .flow-media-empty:hover { color: var(--flow-text-mid); }
 .flow-media-empty svg { width: 26px; height: 26px; margin: 0 auto; opacity: 0.5; }
-.flow-media-empty-hint { font-size: 11px; }
 .flow-media-empty-row { display: flex; gap: 6px; }
 .flow-media-empty-btn {
   display: inline-flex;
@@ -332,10 +354,21 @@
 textarea.flow-pfield-textarea {
   display: block;
   width: 100%;
-  min-height: 132px;
+  /* 它和提示词框共用 .flow-pfield，而那条规则带着 min-height:92 / max-height:300 ——
+     那两个值会让"自由缩放"竖向既拉不小也拉不大（实测正好停在 92 和 300）。
+     这里把上下限交还给拖拽逻辑。 */
+  min-height: 0;
+  max-height: none;
+  /* 用 height 而不是 min-height：默认高度一样是 132，
+     但 min-height 会把"手动拖小"卡住 —— 设成更小的高度也不生效。 */
+  height: 132px;
+  /* 有内边距，文字才不会贴在框边上 */
+  padding: 14px 15px;
   border: 0;
   background: transparent;
   font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
   resize: none;
 }
 textarea.flow-pfield-textarea:focus { outline: none; }
@@ -359,6 +392,7 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-tok.flow-tone-text { background: var(--flow-tone-text-soft); color: var(--flow-tone-text); }
 .flow-tok.flow-tone-image { background: var(--flow-tone-image-soft); color: var(--flow-tone-image); }
 .flow-tok.flow-tone-video { background: var(--flow-tone-video-soft); color: var(--flow-tone-video); }
+.flow-tok.flow-tone-audio { background: var(--flow-tone-audio-soft); color: var(--flow-tone-audio); }
 .flow-tok.is-orphan {
   background: var(--flow-well-hover);
   color: var(--flow-text-weak);
@@ -404,75 +438,72 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-mchip-dot { width: 6px; height: 6px; border-radius: 50%; }
 
 /* ============ 底部动作条 ============ */
-.flow-card-footer {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px 14px;
-}
-.flow-footer-note { min-width: 0; flex: 1 1 auto; color: var(--flow-text-weak); font-size: 10.5px; }
-.flow-footer-note b { color: var(--flow-accent); font-weight: 650; }
+/* 底部一行：类型名在左，尺寸/时长在右，生成按钮在最右 */
 
-.flow-send-btn {
-  display: flex;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  border: 0;
+/* ============ 焦点态 / 内容态 ============
+   展开与否完全由选中状态决定（见 composables/useFocusMode.js）：
+   内容态只剩内容本身，焦点态才长出表头、参数行、提示词与动作条。
+   展开收起时会换尺寸，保持视觉中心不动的补偿在 Canvas.vue 的 watch 里。 */
+
+/* --- 内容态：整张卡片退成"就是那个内容" ---
+   注意底**必须是不透明的**：卡片这时没有描边与阴影，内容是唯一的视觉载体，
+   底一透明，画布网格和别的节点就透过来，空图片节点 / 音频 / 堆叠全是一片发灰的虚影。
+   （媒体节点有真实图片时图片自己盖住底，不受影响。） */
+.flow-node-outer.is-compact .flow-card {
+  background: var(--flow-card-bg);
+  border-color: transparent;
+  box-shadow: none;
+}
+.flow-node-outer.is-compact .flow-card:hover { box-shadow: none; }
+
+.flow-node-outer.is-compact .flow-card-body { padding: 0; }
+.flow-node-outer.is-compact .flow-stage {
+  border-radius: var(--flow-card-radius);
+  background: var(--flow-well-solid);
+  box-shadow: 0 5px 18px -6px rgba(20, 24, 30, 0.16);
+}
+
+/* 文字节点的内容态：把输入框退成一段普通文本 */
+.flow-node-outer.is-compact .flow-pfield-textarea {
+  /* 内容态也保留和焦点态一样的内边距 —— 之前是 3px，文字几乎贴着卡片边 */
+  padding: 14px 15px;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+/* 悬停时给一点"这是可以抓的"的暗示 —— 没有描边的话内容态太像一张静态图 */
+.flow-node-outer.is-compact .flow-card::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--flow-card-radius) + 4px);
+  pointer-events: none;
+  transition: border-color 0.15s ease;
+}
+.flow-node-outer.is-compact .flow-card:hover::after { border-color: rgba(120, 126, 138, 0.26); }
+
+/* --- 多选：描边但不展开 --- */
+.flow-node-outer.is-multi .flow-card {
+  outline: 2px solid rgba(68, 137, 247, 0.62);
+  outline-offset: 3px;
+}
+
+/* --- 内容态的问题角标 ---
+   表头和提示条都收起来了，但"这节点有问题"不能一起收掉 */
+.flow-compact-flag {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  z-index: 6;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--flow-card-bg);
   border-radius: 50%;
-  background: linear-gradient(135deg, #4489f7, #397cf0);
-  color: #fff;
-  cursor: pointer;
-  box-shadow: 0 6px 14px -4px var(--flow-accent-ring);
-  transition: transform 0.15s ease, filter 0.15s ease;
+  pointer-events: none;
 }
-.flow-send-btn:hover { filter: brightness(1.07); transform: scale(1.07); }
-.flow-send-btn:disabled { cursor: wait; opacity: 0.55; transform: none; }
-.flow-send-btn svg { width: 14px; height: 14px; }
-.flow-send-btn.flow-send-cancel { background: linear-gradient(135deg, #fb7185, #ef4444); box-shadow: 0 6px 14px -4px var(--flow-fail-soft); }
-.flow-send-btn.flow-send-cancel .flow-stop-icon { width: 13px; height: 13px; }
-
-.flow-footer-spacer { flex: 1 1 auto; }
-
-/* ============ 收缩态 ============ */
-.flow-collapsed-label { display: none; }
-
-.flow-node-collapsed .flow-card { width: 234px; }
-.flow-node-collapsed .flow-card-body,
-.flow-node-collapsed .flow-card-meta,
-.flow-node-collapsed .flow-card-footer,
-.flow-node-collapsed .flow-notice,
-.flow-node-collapsed .flow-pfield.flow-pfield-well { display: none; }
-.flow-node-collapsed .flow-card-head { border-bottom: 0; }
-
-.flow-peek { display: none; margin: 0 8px 8px; overflow: hidden; border-radius: 9px; background: var(--flow-well); }
-.flow-node-collapsed .flow-peek { display: block; }
-.flow-peek-strip { display: grid; height: 46px; place-items: center; }
-.flow-peek-strip .flow-media-fill { height: 46px; }
-.flow-peek-line {
-  display: -webkit-box;
-  overflow: hidden;
-  padding: 8px 11px;
-  color: var(--flow-text-mid);
-  font-size: 11px;
-  line-height: 1.5;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.flow-peek-empty { padding: 10px 11px; color: var(--flow-text-faint); font-size: 10.5px; }
-.flow-peek-play {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  color: #111;
-}
+.flow-compact-flag.is-fail { background: var(--flow-fail); }
 
 /* ============ 药丸工具栏 ============ */
 .flow-toolbar {
@@ -495,8 +526,10 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   transition: opacity 0.16s ease;
 }
 
-.flow-node-outer:hover .flow-toolbar,
-.canvas-flow .vue-flow__node.selected .flow-toolbar { opacity: 1; pointer-events: auto; }
+/* 工具栏只在焦点态渲染（v-if），这里只需让它显形。
+   用 is-focused 而不是 Vue Flow 的 .selected 类：选中状态是我们自己写在节点对象上的，
+   与 Vue Flow 内部选区未必同步。 */
+.flow-node-outer.is-focused .flow-toolbar { opacity: 1; pointer-events: auto; }
 
 .flow-tb-group { display: flex; align-items: center; gap: 2px; }
 .flow-tb-sep { width: 1px; height: 14px; margin: 0 3px; background: var(--flow-card-border); }
@@ -519,61 +552,68 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-tool-btn svg { width: 14px; height: 14px; }
 .flow-tool-btn:disabled { cursor: not-allowed; opacity: 0.35; }
 
-/* ============ 端口：单一左入 / 单一右出 ============ */
+/* ============ 端口：左右各一个圆形 + ============ */
 .flow-port-anchor { position: absolute; z-index: 5; width: 0; height: 0; }
 .flow-port-anchor.flow-port-side-left { top: 50%; left: 0; }
 .flow-port-anchor.flow-port-side-right { top: 50%; right: 0; }
 
+/* Vue Flow 的 .vue-flow__handle-left/right 已经把圆心落在卡片边上（translate(-50%,-50%)），
+   这里只负责把它画成一个 24px 的圆按钮。
+
+   隐藏只能用 opacity：端口是 **常驻 DOM** 的，一旦 display:none，Vue Flow 量到的
+   handle 矩形就是 0×0，所有连到这个节点的边会集体跑到节点左上角去。 */
 .vue-flow__handle.flow-port {
-  width: 12px;
-  height: 12px;
-  min-width: 12px;
-  min-height: 12px;
-  border: 2px solid var(--flow-text-faint);
+  display: grid;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  place-items: center;
+  border: 1px solid var(--flow-card-border);
   border-radius: 50%;
   background: var(--flow-card-bg);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  color: var(--flow-text-mid);
+  box-shadow: 0 3px 12px -3px rgba(16, 24, 40, 0.3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
 }
 
-.vue-flow__handle.flow-port.flow-tone-text { border-color: var(--flow-tone-text); }
-.vue-flow__handle.flow-port.flow-tone-image { border-color: var(--flow-tone-image); }
-.vue-flow__handle.flow-port.flow-tone-video { border-color: var(--flow-tone-video); }
+/* 悬停整张卡片、或该节点正被编辑时，端口露出来 */
+.flow-node-outer:hover .vue-flow__handle.flow-port,
+.flow-node-outer.is-focused .vue-flow__handle.flow-port,
+.vue-flow__handle.flow-port.connecting,
+.vue-flow__handle.flow-port.connectingto,
+.vue-flow__handle.flow-port.valid {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 .vue-flow__handle.flow-port:hover {
-  box-shadow: 0 0 0 5px var(--flow-accent-soft);
-  transform: scale(1.5);
+  background: var(--flow-text-strong);
+  border-color: var(--flow-text-strong);
+  color: var(--flow-card-bg);
 }
 
+/* 拖动中：起点和可落点都染成主色 */
 .vue-flow__handle.flow-port.connecting,
+.vue-flow__handle.flow-port.connectingto,
 .vue-flow__handle.flow-port.valid {
-  border-color: var(--flow-accent) !important;
-  box-shadow: 0 0 0 6px var(--flow-accent-ring);
-  transform: scale(1.45);
+  border-color: var(--flow-accent);
+  box-shadow: 0 0 0 5px var(--flow-accent-soft);
 }
+
+/* 缩放必须带上前面的 translate，而且**两边的 translate 正负号不同**：
+   Vue Flow 的基准是 `.vue-flow__handle-left { translate(-50%,-50%) }` /
+   `.vue-flow__handle-right { translate(50%,-50%) }`。这里曾经两边都写成 -50%，
+   于是右口一悬停就整体左移一个自身宽度、从鼠标底下溜走 → 失去悬停 → 弹回 → 再悬停，
+   来回振成"左右闪"，压根点不中。左口因为基准本来就是 -50% 才没露馅。 */
+/* 端口的位移与 hover 统一在文件末尾的「端口挪到卡片外面」一节，
+   这里不留第二份 —— 两处都写会互相打架。 */
+
+.flow-port-glyph { font-size: 15px; font-weight: 400; line-height: 1; pointer-events: none; }
 
 /* 输入口的入边数量徽标（点它调引用顺序） */
-.flow-port-count {
-  position: absolute;
-  /* 必须整个让开端口的命中区（端口是以锚点为心的 12px 圆）：之前 -16px 时
-     徽标下半压住端口上半，左口既点不动也拖不动，连线入口等于被自己的角标堵死 */
-  top: -26px;
-  left: 50%;
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border: 0;
-  border-radius: 999px;
-  background: var(--flow-accent);
-  color: #fff;
-  cursor: pointer;
-  font-family: var(--flow-mono, ui-monospace, monospace);
-  font-size: 9px;
-  font-weight: 700;
-  transform: translateX(-50%);
-  box-shadow: 0 0 0 2px var(--flow-card-bg);
-}
-.flow-port-count:hover { filter: brightness(1.1); }
 
 /* ============ 连线 ============ */
 /* 可见的线不能吃鼠标事件 —— 否则它盖在命中区上面，悬停永远落在它身上，
@@ -614,15 +654,26 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  border: 1.5px dashed color-mix(in srgb, var(--flow-tone-group) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--flow-tone-group) 42%, transparent);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--flow-tone-group) 6%, transparent);
+  background: color-mix(in srgb, var(--flow-tone-group) 5%, transparent);
+  /* 组内不吃鼠标：那块区域要留给框选和双击建节点 */
   pointer-events: none;
 }
-.flow-group-title {
+
+/* 唯一可点的部分：框外那一小条标题栏，不覆盖组内区域 */
+.flow-group-bar {
   position: absolute;
-  top: -26px;
-  left: 3px;
+  top: -28px;
+  left: 2px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  pointer-events: auto;
+}
+.flow-group-bar:hover .flow-group-ungroup { opacity: 1; pointer-events: auto; }
+
+.flow-group-title {
   padding: 4px 9px;
   border: 1px solid var(--flow-card-border);
   border-radius: 8px;
@@ -632,11 +683,26 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   font-size: 11.5px;
   font-weight: 650;
   white-space: nowrap;
-  pointer-events: auto;
   user-select: none;
   box-shadow: 0 2px 8px -3px rgba(16, 24, 40, 0.2);
 }
 .flow-group-title:hover { background: var(--flow-well-hover); }
+
+.flow-group-ungroup {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--flow-card-border);
+  border-radius: 8px;
+  background: var(--flow-card-bg);
+  color: var(--flow-text-mid);
+  cursor: pointer;
+  font-size: 10.5px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, color 0.14s ease;
+  box-shadow: 0 2px 8px -3px rgba(16, 24, 40, 0.2);
+}
+.flow-group-ungroup:hover { color: var(--flow-fail-text); }
 
 /* ============ 下拉 pill（FlowSelect / RatioPicker 共用） ============ */
 /* 无边框文字 chip —— 参数行不再是一排带框的药丸 */
@@ -672,40 +738,8 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-pill .fs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-select-pill .fs-label { max-width: 150px; }
 
-/* ============ 快速新建菜单（拖线到空白） ============ */
-.flow-quick-add {
-  position: absolute;
-  z-index: 30;
-  min-width: 190px;
-  padding: 5px;
-  border: 1px solid var(--flow-card-border);
-  border-radius: 13px;
-  background: var(--flow-card-bg);
-  box-shadow: 0 20px 46px -14px rgba(16, 24, 40, 0.32);
-}
-.flow-quick-add-title { padding: 6px 9px 7px; color: var(--flow-text-weak); font-size: 10.5px; font-weight: 650; }
-.flow-quick-add-item {
-  display: flex;
-  width: 100%;
-  height: 34px;
-  align-items: center;
-  gap: 9px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--flow-text-strong);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12.5px;
-  text-align: left;
-}
-.flow-quick-add-item:hover { background: var(--flow-accent-soft); color: var(--flow-accent); }
-.flow-quick-add-item .qa-dot { width: 8px; height: 8px; border-radius: 50%; }
-.flow-quick-add-item .qa-dot.qa-text { background: var(--flow-tone-text); }
-.flow-quick-add-item .qa-dot.qa-image { background: var(--flow-tone-image); }
-.flow-quick-add-item .qa-dot.qa-video { background: var(--flow-tone-video); }
-.flow-quick-add-item small { margin-left: auto; color: var(--flow-text-weak); font-size: 10px; }
+/* 创建菜单的样式在 components/canvas/CreateMenu.vue 里（scoped），
+   双击空白 / 点端口 / 拖到空白三处共用同一个组件。 */
 
 /* ============ @ 引用菜单 ============ */
 .flow-mention {
@@ -819,6 +853,85 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-refpop-cut:hover { background: var(--flow-fail-soft); color: var(--flow-fail); }
 .flow-refpop-cut svg { width: 10px; height: 10px; }
 
+/* ============ 音频节点 ============ */
+.flow-audio { padding: 2px 10px 10px; }
+.flow-audio.is-empty { padding: 0; }
+
+.flow-wave {
+  display: flex;
+  height: 72px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--flow-well);
+  cursor: pointer;
+}
+.flow-node-outer.is-compact .flow-wave { height: 58px; }
+/* 柱高由真实峰值决定（见 AudioNode 的 analyzePeaks），所以用 flex 均分而不是固定宽度 */
+.flow-wave i {
+  min-width: 2px;
+  flex: 1 1 auto;
+  border-radius: 3px;
+  background: var(--flow-text-faint);
+  transition: background-color 0.12s ease;
+}
+.flow-wave i.is-past { background: var(--flow-tone-audio); }
+
+.flow-audio-controls { display: flex; align-items: center; gap: 9px; padding-top: 9px; }
+.flow-audio-play {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--flow-text-strong);
+  color: var(--flow-card-bg);
+  cursor: pointer;
+}
+.flow-audio-play svg { width: 12px; height: 12px; }
+.flow-audio-time { color: var(--flow-text-weak); font-family: var(--flow-mono, ui-monospace, monospace); font-size: 10px; }
+.flow-audio-open {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--flow-text-mid);
+  cursor: pointer;
+}
+.flow-audio-open:hover { background: var(--flow-well-hover); color: var(--flow-text-strong); }
+.flow-audio-open svg { width: 13px; height: 13px; }
+
+/* ============ AI 任务节点 ============ */
+.flow-task { padding: 2px 10px 10px; }
+.flow-task-prompt {
+  min-height: 56px;
+  color: var(--flow-text-strong);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 运行行已撤掉：生成按钮统一在底部 composer 上，卡片不放动作按钮 */
+
+/* 内容态：任务卡退成一块半透明的提示词 —— 它没有"内容"可展示，
+   但整张卡消失会让用户以为节点没了 */
+.flow-node-outer.is-compact .flow-task { padding: 0; }
+.flow-node-outer.is-compact .flow-task-prompt {
+  padding: 11px 12px;
+  border: 1px solid var(--flow-body-border);
+  border-radius: var(--flow-card-radius);
+  background: color-mix(in srgb, var(--flow-tone-task) 8%, var(--flow-card-bg));
+  font-size: 12px;
+}
+
 /* ============ 素材库选择器 ============ */
 .flow-asset-grid { display: grid; width: 252px; grid-template-columns: repeat(2, 1fr); gap: 6px; padding: 0 5px 5px; }
 .flow-asset-card {
@@ -846,8 +959,80 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .canvas-flow .vue-flow__node .flow-mchip,
 .canvas-flow .vue-flow__node .flow-card-head__title,
 .canvas-flow .vue-flow__node .flow-notice button,
-.canvas-flow .vue-flow__node .flow-refpop-cut,
-.canvas-flow .vue-flow__node .flow-port-count { cursor: pointer !important; }
+.canvas-flow .vue-flow__node .flow-refpop-cut { cursor: pointer !important; }
 
 .canvas-flow .vue-flow__node .flow-pfield,
 .canvas-flow .vue-flow__node textarea.flow-pfield-textarea { cursor: text !important; }
+
+/* ============ 缩小状态下的节点角标 ============ */
+/* 位置照参考图：在**卡片上方、卡片外面**，纯图标 + 类型名，没有底色块。
+   做成卡片内侧的白色胶囊会盖住内容，而且和节点自己的表头撞在一起。 */
+.flow-zoom-tag {
+  position: absolute;
+  left: 1px;
+  /* 间距用 padding 放在元素内部：它会跟着反向缩放一起抵消，
+     屏幕上的间距就恒定。写在外面的 bottom 偏移会随画布缩放，缩小时角标会贴到卡片上。 */
+  bottom: 100%;
+  padding-bottom: 7px;
+  z-index: 6;
+  display: flex;
+  max-width: 200px;
+  align-items: center;
+  gap: 5px;
+  color: var(--flow-text-mid);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  /* 反向缩放：画布缩到多小，角标都保持屏幕上的固定大小。
+     不这么做的话角标自己也跟着缩，小到读不出来就失去了"用来认节点"的意义。
+     上限 2 倍 —— 再小的话角标会大过节点本身。 */
+  transform: scale(calc(min(2, 1 / var(--flow-zoom, 1))));
+  /* 从左下角长出去：放大时向上/向右延伸，不会盖到卡片 */
+  transform-origin: bottom left;
+  /* 不吃鼠标事件：它在卡片外面，但也不该拦住框选和拖拽 */
+  pointer-events: none;
+}
+.flow-zoom-tag-icon {
+  display: grid;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--flow-text-weak);
+}
+.flow-zoom-tag-icon svg { width: 13px; height: 13px; }
+.flow-zoom-tag-name { overflow: hidden; text-overflow: ellipsis; }
+
+/* ============ 端口挪到卡片外面 ============ */
+/* 原来端口圆心正落在卡片边框上（Vue Flow 的基准就是 translate(±50%,-50%)），
+   一半压着卡片、一半在外面，看着像长在边框上。往外让开一个身位，
+   圆心距边框 18px —— 圆的半径 12 + 6px 间隙，整个圆都在外面。 */
+.vue-flow__handle-left.flow-port { transform: translate(calc(-50% - 18px), -50%); }
+.vue-flow__handle-right.flow-port { transform: translate(calc(50% + 18px), -50%); }
+/* hover 与拖动态要带上同样的位移，否则一悬停又跳回边框上 */
+.vue-flow__handle-left.flow-port:hover { transform: translate(calc(-50% - 18px), -50%) scale(1.08); }
+.vue-flow__handle-right.flow-port:hover { transform: translate(calc(50% + 18px), -50%) scale(1.08); }
+
+/* ============ 缩放把手 ============ */
+/* 右下角三道斜线 —— 系统里通用的"可拖动改变大小"的暗示。
+   之前用两条边线拼了个直角，看着像边框的一部分，不像个把手。 */
+.flow-resize-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 7;
+  /* 命中区就是这个三角（clip-path 会一并裁掉点击区），所以给大一点，
+     不然要精确点到斜边附近才拖得动 */
+  width: 22px;
+  height: 22px;
+  cursor: nwse-resize;
+  /* 斜线用重复渐变画；裁成右下角的三角，线条才会"由短到长"贴着角排开 */
+  background-image: repeating-linear-gradient(
+    -45deg,
+    currentColor 0 1.5px,
+    transparent 1.5px 4.5px
+  );
+  color: var(--flow-text-faint);
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+.flow-resize-grip:hover { color: var(--flow-accent); }

@@ -2,7 +2,13 @@
   <!-- Canvas page | 画布页面 -->
   <div class="canvas-page h-full w-full flex flex-col bg-[var(--bg-primary)]">
     <!-- Main canvas area | 主画布区域 -->
-    <div class="flex-1 relative overflow-hidden" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
+    <div
+      class="flex-1 relative overflow-hidden"
+      :style="{ '--flow-zoom': zoomLevel }"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop"
+    >
       <!-- Vue Flow canvas | Vue Flow 画布 -->
       <VueFlow
         :key="flowKey"
@@ -52,17 +58,17 @@
         :style="selectionOverlay.boxStyle"
       >
         <div class="selection-action-bar" @mousedown.stop @click.stop>
-          <button type="button" class="selection-action" @click="duplicateSelectedNodes">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg>
-            <span>创建副本</span>
-          </button>
-          <button type="button" class="selection-action" @click="downloadSelectedNodes">
-            <n-icon :size="16"><DownloadOutline /></n-icon>
-            <span>批量下载</span>
-          </button>
           <button type="button" class="selection-action" @click="groupSelectedNodes">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="2.4" /><circle cx="17" cy="17" r="2.4" /><path d="M9 8.5l6 6M15 8.5l-6 6" /></svg>
             <span>打组</span>
+          </button>
+          <button type="button" class="selection-action" @click="duplicateSelectedNodes">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg>
+            <span>复制</span>
+          </button>
+          <button type="button" class="selection-action is-primary" @click="createDownstreamFromSelection">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            <span>创建下游</span>
           </button>
         </div>
       </div>
@@ -149,70 +155,18 @@
         </button>
       </aside>
 
-      <!-- Node menu popup | 节点菜单弹窗 -->
-      <div 
-        v-if="showNodeMenu"
-        :style="{ left: `${nodeMenuPosition.x}px`, top: `${nodeMenuPosition.y}px` }"
-        class="node-menu absolute z-20"
-      >
-        <div class="node-menu-title">添加节点</div>
-        <button 
-          v-for="nodeType in nodeTypeOptions" 
-          :key="nodeType.id"
-          @click="handleNodeMenuSelect(nodeType)"
-          class="node-menu-item"
-        >
-          <n-icon :size="18"><component :is="nodeType.icon" /></n-icon>
-          <span>{{ nodeType.name }}</span>
-        </button>
-        <div class="node-menu-divider"></div>
-        <div class="node-menu-title node-menu-resource-title">添加资源</div>
-        <button
-          type="button"
-          @click="handleUploadResource"
-          class="node-menu-item"
-        >
-          <n-icon :size="18"><AddOutline /></n-icon>
-          <span>上传</span>
-        </button>
-        <button
-          type="button"
-          @click="handleHistoryResource"
-          class="node-menu-item"
-        >
-          <n-icon :size="18"><TimeOutline /></n-icon>
-          <span>从生成历史选择</span>
-        </button>
-        <button
-          type="button"
-          @click="openAssetPicker"
-          class="node-menu-item"
-        >
-          <n-icon :size="18"><ImagesOutline /></n-icon>
-          <span>从素材库选择</span>
-        </button>
-      </div>
-
-      <!-- 拖线到空白：快速新建并自动连线 | Quick add on connect-to-pane -->
-      <div
-        v-if="showQuickAdd"
-        class="flow-quick-add"
-        :style="{ left: `${quickAddState.screenX}px`, top: `${quickAddState.screenY}px` }"
-        @mousedown.stop
-        @click.stop
-      >
-        <div class="flow-quick-add-title">{{ quickAddTitle }}</div>
-        <button
-          v-for="opt in quickAddOptions"
-          :key="opt.type"
-          class="flow-quick-add-item nodrag"
-          @click="handleQuickAdd(opt)"
-        >
-          <span class="qa-dot" :class="`qa-${opt.type}`"></span>
-          <span>{{ opt.name }}</span>
-          <small>{{ opt.desc }}</small>
-        </button>
-      </div>
+      <!-- 创建菜单：双击空白、点端口、从端口拖到空白，三处共用 -->
+      <CreateMenu
+        :visible="menu.visible"
+        :x="menu.x"
+        :y="menu.y"
+        :title="menuTitle"
+        :options="menuOptions"
+        :show-resources="menu.mode === 'blank'"
+        @select="handleMenuSelect"
+        @upload="handleUploadResource"
+        @assets="openAssetPicker"
+      />
 
       <!-- Bottom controls | 底部控制 -->
       <div class="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-color)] p-1.5 shadow-sm z-10">
@@ -368,6 +322,12 @@
 
     <!-- 从本地素材库选图 | Pick from the local asset library -->
     <AssetPickerModal v-model:show="showAssetPicker" @select="handleAssetPick" />
+
+    <!-- 底部 composer：选中的节点自动成为上下文 -->
+    <CanvasComposer :screen-to-flow="screenToFlowCoordinate" @attach="handleComposerAttach" />
+
+    <!-- 全屏查看图片 / 视频 / 音频（全局唯一一个） -->
+    <MediaViewer />
   </div>
 </template>
 
@@ -407,11 +367,12 @@ import {
   DocumentTextOutline,
   SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, propagateStale, setNodeMedia, cutEdge, editNode } from '../stores/canvas'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, setNodeMedia, cutEdge, editNode, duplicateNode } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
-import { isContentNodeType, validateCanvasConnection, findModeAccepting, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES, PORT_CLICK_EVENT } from '../config/nodeRegistry'
+import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
+import { focusedNodeId, selectedNodeIds } from '../composables/useFocusMode'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
 let handleBeforeUnload = null
@@ -462,11 +423,22 @@ import VideoNode from '../components/nodes/VideoNode.vue'
 import GroupNode from '../components/nodes/GroupNode.vue'
 import SimpleTextNode from '../components/nodes/SimpleTextNode.vue'
 import SimpleImageNode from '../components/nodes/SimpleImageNode.vue'
+import AudioNode from '../components/nodes/AudioNode.vue'
+import TaskNode from '../components/nodes/TaskNode.vue'
 import FlowEdge from '../components/edges/FlowEdge.vue'
 import AssetPickerModal from '../components/canvas/AssetPickerModal.vue'
+import MediaViewer from '../components/canvas/MediaViewer.vue'
+import CreateMenu from '../components/canvas/CreateMenu.vue'
+import CanvasComposer from '../components/canvas/CanvasComposer.vue'
 
 const router = useRouter()
 const route = useRoute()
+
+/**
+ * 当前缩放。挂在画布容器上当 CSS 变量：缩小状态下节点左上角的角标要按它**反向缩放**，
+ * 否则角标自己也跟着缩小，小到读不出来就失去了"用来认节点"的意义。
+ */
+const zoomLevel = computed(() => viewport.value?.zoom ?? 1)
 
 // Vue Flow instance | Vue Flow 实例
 const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoordinate } = useVueFlow()
@@ -476,6 +448,8 @@ const nodeTypes = {
   text: markRaw(SimpleTextNode),
   video: markRaw(VideoNode),
   image: markRaw(SimpleImageNode),
+  audio: markRaw(AudioNode),
+  task: markRaw(TaskNode),
   group: markRaw(GroupNode)
 }
 
@@ -485,8 +459,6 @@ const edgeTypes = {
 }
 
 // UI state | UI状态
-const showNodeMenu = ref(false)
-const nodeMenuPosition = ref({ x: 80, y: 120 })
 const chatInput = ref('')
 const autoExecute = ref(false)
 const homepageGenerationSettings = ref(null)
@@ -533,7 +505,9 @@ const projectName = computed(() => {
 const nodeTypeLabels = {
   text: '文本',
   image: '图片',
-  video: '视频'
+  video: '视频',
+  audio: '音频',
+  task: 'AI 任务',
 }
 
 const getNodeTypeLabel = (type) => nodeTypeLabels[type] || '节点'
@@ -604,71 +578,35 @@ const tools = [
   { id: 'redo', name: '重做', icon: ArrowRedoOutline, action: () => redo(), disabled: () => !canRedo() }
 ]
 
-// Node type options for menu | 节点类型菜单选项
-const nodeTypeOptions = [
-  { id: 'text', type: 'text', name: '文本', icon: TextOutline, color: '#64748b' },
-  { id: 'image', type: 'image', name: '图片', icon: ImageOutline, color: '#64748b' },
-  { id: 'video', type: 'video', name: '视频', icon: VideocamOutline, color: '#64748b' },
-  { id: 'audio', type: 'audio', name: '音频', icon: VolumeMediumOutline, color: '#64748b' },
-  { id: 'script', type: 'script', name: '脚本', icon: DocumentTextOutline, color: '#64748b' }
-]
-
-// Input placeholder | 输入占位符
-const inputPlaceholder = '你可以试着说"帮我生成一个二次元的卡通角色"'
-
-// Quick suggestions | 快捷建议
-const suggestions = [
-  '像个魔法森林',
-  '三只不同的小猫',
-  '生成多角度分镜',
-  '夏日田野环绕漫步'
-]
-
-// Add new node | 添加新节点
+// Add new node | 添加新节点（视口中心）
 const addNewNode = async (type) => {
   // Calculate viewport center position | 计算视口中心位置
   const viewportCenterX = -viewport.value.x / viewport.value.zoom + (window.innerWidth / 2) / viewport.value.zoom
   const viewportCenterY = -viewport.value.y / viewport.value.zoom + (window.innerHeight / 2) / viewport.value.zoom
-  
+
   // Add node at viewport center | 在视口中心添加节点
-  const nodeId = addNode(type, { x: viewportCenterX - 100, y: viewportCenterY - 100 }, { expanded: true })
-  // 同上：新建节点只负责把自己展开、选中，不动别人的展开态
+  const nodeId = addNode(type, { x: viewportCenterX - 100, y: viewportCenterY - 100 })
+  // 只选中新节点；选中即展开（焦点态），不需要再往节点上写 expanded
   nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === nodeId }))
-  
+
   // Set highest z-index | 设置最高层级
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
   updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
-  
+
   // Force Vue Flow to recalculate node dimensions | 强制 Vue Flow 重新计算节点尺寸
   setTimeout(() => {
     updateNodeInternals(nodeId)
   }, 50)
-  
-  showNodeMenu.value = false
-}
 
-const handleNodeMenuSelect = (nodeType) => {
-  if (nodeType.type === 'audio' || nodeType.type === 'script') {
-    window.$message?.info(`${nodeType.name}节点即将支持`)
-    showNodeMenu.value = false
-    return
-  }
-  addNewNode(nodeType.type)
+  closeMenu()
 }
 
 const handleUploadResource = () => {
-  window.$message?.info('上传资源功能即将支持')
-  showNodeMenu.value = false
-}
-
-const handleHistoryResource = () => {
-  window.$message?.info('生成历史选择功能即将支持')
-  showNodeMenu.value = false
+  closeMenu()
 }
 
 // Canvas agent placeholder | 画布智能体预留入口
 const handleCanvasAgent = () => {
-  window.$message?.info('画布智能体功能正在开发中')
 }
 
 const toggleHistoryBatching = () => {
@@ -715,15 +653,15 @@ const deleteSelectedCanvasElements = () => {
 }
 
 const duplicateSelectedNodes = () => {
-  if (!selectedCanvasNodes.value.length) return
+  const sourceIds = selectedCanvasNodes.value.map(node => node.id)
+  if (!sourceIds.length) return
 
-  const newIds = addNodes(selectedCanvasNodes.value.map(node => ({
-    type: node.type,
-    position: { x: node.position.x + 40, y: node.position.y + 40 },
-    data: { ...node.data }
-  })))
+  // 走 store 的 duplicateNode：它会把入边一起克隆、并通过 edgeIdMap 把副本的
+  // refBindings 重绑到副本自己的边上。以前这里是手写 spread `{...node.data}`，
+  // 绑定值还是**原节点**的 edge id，副本里每个引用都解析成 orphan，
+  // 生成直接被 E_ORPHAN 挡住 —— 而用户看到的只是"复制了一份"。
+  const newIds = sourceIds.map(duplicateNode).filter(Boolean)
   nodes.value = nodes.value.map(node => ({ ...node, selected: newIds.includes(node.id) }))
-  window.$message?.success(`已创建 ${newIds.length} 个节点副本`)
 }
 
 const downloadSelectedNodes = () => {
@@ -734,7 +672,6 @@ const downloadSelectedNodes = () => {
   }
 
   downloadableNodes.forEach(node => openExternal(node.data.url))
-  window.$message?.success(`已打开 ${downloadableNodes.length} 个下载链接`)
 }
 
 const groupSelectedNodes = () => {
@@ -795,7 +732,6 @@ const groupSelectedNodes = () => {
     updateNodeInternals(groupId)
     refreshSelectionOverlay()
   })
-  window.$message?.success(`已将 ${selectedIds.size} 个节点打组`)
 }
 
 const layoutSelectedNodes = (layout) => {
@@ -836,7 +772,6 @@ const layoutSelectedNodes = (layout) => {
 const downloadSelectedHistoryAssets = () => {
   const selectedAssets = historyImageAssets.value.filter(asset => selectedHistoryIds.value.includes(asset.id))
   selectedAssets.forEach(asset => openExternal(asset.data.url))
-  window.$message?.success(`已打开 ${selectedAssets.length} 个图片下载链接`)
 }
 
 const deleteSelectedHistoryAssets = () => {
@@ -844,7 +779,6 @@ const deleteSelectedHistoryAssets = () => {
   if (!selectedAssets.length || !window.confirm(`确定删除选中的 ${selectedAssets.length} 张历史图片吗？对应画布节点也会一并删除。`)) return
   selectedAssets.forEach(asset => removeNode(asset.id))
   selectedHistoryIds.value = []
-  window.$message?.success('已删除选中的历史图片')
 }
 
 const focusSearchNode = async (node) => {
@@ -906,7 +840,6 @@ const handleAddWorkflow = ({ workflow, options }) => {
     })
   }, 100)
 
-  window.$message?.success(`已添加工作流: ${workflow.name}`)
 }
 
 // ===== Flow 连线系统：语义标签 + 类型校验 + 快速新建 =====
@@ -920,62 +853,90 @@ const isValidConnection = (connection) => {
   return validateCanvasConnection(connection, nodes.value, edges.value).valid
 }
 
-// 拖线到空白 / 点端口：快速新建菜单 | Quick add menu state
-const showQuickAdd = ref(false)
-const quickAddState = ref({
+/**
+ * 创建菜单的**单一状态** | Create menu state
+ *
+ * 三种入口写同一份状态，共用一个菜单：
+ * - `blank`：双击空白。落点就是鼠标处，列出全部类型 + 资源入口。
+ * - `port` ：点端口 / 从端口拖到空白。落点按方向让开一个身位，可以再选上下分支。
+ */
+const menu = ref({
+  visible: false,
+  // 画布内的屏幕坐标（菜单左上角）
+  x: 0,
+  y: 0,
+  mode: 'blank',
   direction: 'downstream',
+  /** 要连给新节点的来源节点 id；双击空白时为空数组 */
+  sources: [],
   flowX: 0,
-  flowY: 0,
-  screenX: 0,
-  screenY: 0,
-  source: null,
-  sourceHandle: null
+  flowY: 0
 })
 
-const QUICK_ADD_DESC = {
-  text: '作为提示词 / 上下文',
-  image: '作为参考图或首帧',
-  video: '作为参考视频'
-}
-
-/** 往上游建时，新节点是给锚点供料的，说法要反过来 */
-const UPSTREAM_ADD_DESC = {
-  text: '供给它当提示词 / 上下文',
-  image: '供给它当底图 / 参考',
-  video: '供给它当参考视频'
-}
+const closeMenu = () => { menu.value = { ...menu.value, visible: false } }
 
 /** 新节点落在锚点哪一侧；点击端口时没有落点，就按锚点尺寸摆 */
 const QUICK_ADD_GAP = 100
 const QUICK_ADD_FALLBACK_WIDTH = 520
 
 /**
- * 可新建的节点类型。
- * 下游：只列「存在能接收锚点产出的模式」的类型，选中后新节点直接落在那个模式上，
- *       避免建出来才发现连不上。
- * 上游：不筛选，全部内容节点都列（用户要的是自由度，连不上时再提示）。
+ * 该类型能不能收下某种上游。
+ *
+ * auto 节点用 `getAcceptLimit` 的最大容量口径 —— 模式已经不由用户选，就不能再拿
+ * 某个具体模式（用户看不见）的容量去过滤菜单项。
  */
-const buildQuickAddOptions = (anchor, direction) => {
+const canAcceptKind = (type, kind) =>
+  getAcceptLimit({ type, data: { mode: AUTO_MODE } }, kind) > 0
+
+/**
+ * 创建菜单里能建的类型 | Types offered by the create menu
+ *
+ * 只留文本 / 图片 / 视频 —— 这三个是实际会用到的内容载体。音频与 AI 任务仍保留在底层
+ * （composer 建任务节点走的是 addNode，不经过这个菜单），只是不再从这里出现。
+ * 数组顺序就是菜单里的排列顺序。
+ */
+const MENU_NODE_TYPES = Object.freeze(['text', 'image', 'video'])
+
+/**
+ * 可新建的节点类型 | Options for the create menu
+ *
+ * 来源可能不止一个（框选之后「创建下游」是把整个选区接给新节点），
+ * 所以下游要**每个来源都能连**才列出这个类型，避免建出来只连上一半。
+ *
+ * 不再预选 mode：新节点一律 auto，连上之后由上游构成推断。
+ */
+const buildQuickAddOptions = (sources, direction) => {
   const upstream = direction === 'upstream'
-  return CONTENT_NODE_TYPES
-    .map(type => ({ type, mode: upstream ? null : findModeAccepting(type, anchor.type) }))
-    .filter(item => upstream || item.mode)
-    .map(item => ({
-      type: item.type,
-      mode: item.mode,
-      name: nodeTypeLabels[item.type] || item.type,
-      desc: (upstream ? UPSTREAM_ADD_DESC : QUICK_ADD_DESC)[item.type]
+  if (!sources.length) return []
+  return MENU_NODE_TYPES
+    .filter(type => upstream || sources.every(node => canAcceptKind(type, node.type)))
+    .map(type => ({
+      type,
+      name: nodeTypeLabels[type] || type
     }))
 }
 
-const quickAddOptions = computed(() => {
-  const anchor = nodes.value.find(n => n.id === quickAddState.value.source)
-  return anchor ? buildQuickAddOptions(anchor, quickAddState.value.direction) : []
+const menuSources = computed(() => {
+  const ids = menu.value.sources || []
+  return nodes.value.filter(node => ids.includes(node.id))
 })
 
-const quickAddTitle = computed(() => (
-  quickAddState.value.direction === 'upstream' ? '在上游新建节点并自动连线' : '在下游新建节点并自动连线'
-))
+const menuOptions = computed(() => {
+  if (menu.value.mode === 'blank') {
+    return MENU_NODE_TYPES.map(type => ({
+      type,
+      name: nodeTypeLabels[type] || type
+    }))
+  }
+  return buildQuickAddOptions(menuSources.value, menu.value.direction)
+})
+
+const menuTitle = computed(() => {
+  if (menu.value.mode === 'blank') return '创建节点'
+  const count = menuSources.value.length
+  const side = menu.value.direction === 'upstream' ? '左侧创建上游节点' : '右侧创建下游节点'
+  return count > 1 ? `从 ${count} 个节点在${side}` : `在${side}`
+})
 
 /** 端口 id → 方向：左口(in) 往上游，右口(out) 往下游 */
 const resolveDirection = handleId => (handleId === INPUT_HANDLE ? 'upstream' : 'downstream')
@@ -990,6 +951,9 @@ const anchorSidePosition = (anchor, direction) => {
     : { x: anchor.position.x + width + QUICK_ADD_GAP, y }
 }
 
+/** 松手处离按下处有多远；端口点击判定用它，见 onConnectEnd */
+const PORT_CLICK_MAX_DRIFT = 8
+
 const onConnectEnd = (params) => {
   // Vue Flow 1.48 的 connectEnd 直接传原生事件；兼容部分版本 { event, connection } 结构
   const event = params?.event || params
@@ -999,154 +963,238 @@ const onConnectEnd = (params) => {
   // 连接已成功建立（边数比拖动开始多）则不弹新建菜单 | Skip when a connection was created
   if (edges.value.length > (connectStartEdgeCount.value ?? edges.value.length)) return
 
-  // 松手落在节点 / 端口上（非法连接被拒绝的场景）也不弹 | Skip when dropped on a node/handle
-  const target = mouseEvent?.target
-  if (target?.closest?.('.vue-flow__handle, .vue-flow__node, .flow-select-menu')) return
-
   // 拖线起点信息：connectStart 记录优先，其次 connection 结构
   const sourceNodeId = connection?.source || connectStartNodeId.value
   const sourceHandleId = connection?.sourceHandle || connectStartHandleId.value
   const sourceNode = nodes.value.find(n => n.id === sourceNodeId)
-  if (!sourceNode || !isContentNodeType(sourceNode.type)) {
-    return
-  }
-  // 从哪个口拖出来决定新节点建在哪一侧
-  const direction = resolveDirection(sourceHandleId)
-  if (!buildQuickAddOptions(sourceNode, direction).length) return
+  if (!sourceNode || !isContentNodeType(sourceNode.type)) return
 
+  /**
+   * 几乎没动 = **点端口**，不是拖线。
+   *
+   * 这个判定原来挂在 NodePort 自己往 handle DOM 上挂的 pointerup 监听里，但 handle 是
+   * Vue Flow 渲染的、随节点重渲染会被换掉，监听器跟着失效 —— 实测就是 pointerdown
+   * 压根到不了 handle 上，于是"点端口出菜单"偶发失灵。改成在 connectEnd 里按位移判断：
+   * Vue Flow 自己的手势永远会走到这里，不依赖任何外部 DOM 节点。
+   */
+  const drift = (mouseEvent && connectStartPoint.value)
+    ? Math.hypot(mouseEvent.clientX - connectStartPoint.value.x, mouseEvent.clientY - connectStartPoint.value.y)
+    : Infinity
+  const isPortClick = drift < PORT_CLICK_MAX_DRIFT
+
+  // 拖线时松手落在节点 / 端口上（非法连接被拒绝的场景）不弹菜单。
+  // 点端口时落点必然就在端口自己身上，不能照这个规则排除。
+  const target = mouseEvent?.target
+  if (!isPortClick && target?.closest?.('.vue-flow__handle, .vue-flow__node, .flow-select-menu')) return
+
+  // 从哪个口出来决定新节点建在哪一侧。
+  // 锚点若在多选里，就把整个选区一起接给新节点（v25 的「从选区创建下游」）。
+  const direction = resolveDirection(sourceHandleId)
+  const sources = selectedNodeIds.value.includes(String(sourceNodeId)) && selectedNodeIds.value.length > 1
+    ? [...selectedNodeIds.value]
+    : [String(sourceNodeId)]
+  const sourceNodes = nodes.value.filter(node => sources.includes(String(node.id)))
+  if (!buildQuickAddOptions(sourceNodes, direction).length) return
   if (!mouseEvent) return
-  const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
-  const flowPos = screenToFlowCoordinate({ x: mouseEvent.clientX, y: mouseEvent.clientY })
-  quickAddState.value = {
-    direction,
-    // 落点换算成新节点左上角（松手处大致落在卡片中心）
-    flowX: flowPos.x - 196,
-    flowY: flowPos.y - 120,
-    screenX: canvasBounds ? mouseEvent.clientX - canvasBounds.left : mouseEvent.clientX,
-    screenY: canvasBounds ? mouseEvent.clientY - canvasBounds.top : mouseEvent.clientY,
-    source: sourceNodeId,
-    sourceHandle: sourceHandleId
+
+  // 把选中还原回点之前：点 `+` 的语义是"从这里建节点"，不该顺手改选中。
+  // 不还原的话卡片会当场从内容态展开，而且多选会被收缩成一个，
+  // "一次给多个节点建下游"就没了。
+  const keep = new Set(selectionBeforePortClick)
+  if (nodes.value.some(node => node.selected !== keep.has(String(node.id)))) {
+    nodes.value = nodes.value.map(node => ({ ...node, selected: keep.has(String(node.id)) }))
   }
-  showQuickAdd.value = true
+
+  const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
+  // 点端口时没有"落点"，按锚点尺寸往对应方向让开一个身位；拖到空白则用松手处
+  const dropPos = isPortClick
+    ? anchorSidePosition(sourceNode, direction)
+    : (() => {
+        const at = screenToFlowCoordinate({ x: mouseEvent.clientX, y: mouseEvent.clientY })
+        return { x: at.x - 196, y: at.y - 120 }
+      })()
+
+  menu.value = {
+    visible: true,
+    direction,
+    sources,
+    flowX: dropPos.x,
+    flowY: dropPos.y,
+    x: canvasBounds ? mouseEvent.clientX - canvasBounds.left : mouseEvent.clientX,
+    y: canvasBounds ? mouseEvent.clientY - canvasBounds.top : mouseEvent.clientY,
+    mode: 'port'
+  }
 }
 
 /**
- * 点端口 → 在鼠标处弹新建菜单 | Open quick add from a port click
- * 左口往上游建（新节点落在锚点左边），右口往下游建（落在右边）。
+ * 点端口 → 在鼠标处弹新建菜单，由 onConnectEnd 判定（见那里的说明）。
  *
  * 模板上把 Vue Flow 自带的 connect-on-click 关掉了：那是「点端口进入待连状态、
  * 再点目标完成连线」，与本菜单抢同一个手势 —— 菜单还没选完，Vue Flow 那边
  * 已经挂着半个待连边。拖拽连线不受影响。
  */
-const onPortClick = (event) => {
-  const { nodeId, handleId, handleType, clientX, clientY } = event.detail || {}
-  const anchor = nodes.value.find(n => n.id === nodeId)
-  if (!anchor || !isContentNodeType(anchor.type)) return
 
-  const direction = resolveDirection(handleId || (handleType === 'target' ? INPUT_HANDLE : OUTPUT_HANDLE))
-  if (!buildQuickAddOptions(anchor, direction).length) return
-
-  const flowPos = anchorSidePosition(anchor, direction)
-  const canvasBounds = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
-  quickAddState.value = {
-    direction,
-    flowX: flowPos.x,
-    flowY: flowPos.y,
-    screenX: canvasBounds ? clientX - canvasBounds.left : clientX,
-    screenY: canvasBounds ? clientY - canvasBounds.top : clientY,
-    source: anchor.id,
-    sourceHandle: handleId || (direction === 'upstream' ? INPUT_HANDLE : OUTPUT_HANDLE)
-  }
-  showQuickAdd.value = true
-}
-
-// 记录拖动开始时的源端口与边数，用于区分"连上了"还是"拖到空白" | Connect start state
+// 记录拖动开始时的源端口、按下位置与边数，用于区分"连上了"/"点端口"/"拖到空白"
 const connectStartEdgeCount = ref(null)
 const connectStartNodeId = ref(null)
 const connectStartHandleId = ref(null)
+const connectStartPoint = ref(null)
+
+/** 点端口前的选中状态：点端口（`+`）不该改变选中，见 onConnectEnd */
+let selectionBeforePortClick = []
+
+/**
+ * 必须在 **pointerdown 的捕获阶段**记，不能等 connectStart。
+ * Vue Flow 自己的 mousedown 处理器会先把选中改掉（落在这个节点上就把它选上、把别的取消），
+ * 等 connectStart 再记已经是被改过的了 —— 之前的版本就是记晚了，多选一进去就被清空。
+ */
+const rememberSelectionOnPort = (event) => {
+  if (event.target?.closest?.('.vue-flow__handle')) {
+    selectionBeforePortClick = [...selectedNodeIds.value]
+  }
+}
 
 const onConnectStart = (params) => {
   connectStartEdgeCount.value = edges.value.length
   connectStartNodeId.value = params?.nodeId || null
   connectStartHandleId.value = params?.handleId || null
-  showQuickAdd.value = false
+  const event = params?.event
+  connectStartPoint.value = event && event.clientX !== undefined
+    ? { x: event.clientX, y: event.clientY }
+    : null
+  closeMenu()
 }
 
-// 快速新建节点并自动连线 | Quick create node and auto-wire
-const handleQuickAdd = (opt) => {
-  const state = quickAddState.value
-  const anchor = nodes.value.find(n => n.id === state.source)
-  if (!anchor) {
-    showQuickAdd.value = false
+/** 菜单里选中一个类型：建节点，端口来的还要顺手连上 */
+const handleMenuSelect = (option) => {
+  const state = menu.value
+  const sources = state.mode === 'port' ? menuSources.value : []
+  if (state.mode === 'port' && !sources.length) {
+    closeMenu()
     return
   }
+
+  // 上下分支只挪纵向：两个卡高左右，保证不叠在一起
+  /**
+   * 从同一个端口连建第二个、第三个节点时，落点要往下错开。
+   * 落点坐标是按锚点算的固定值，不错开的话每建一个都叠在同一个位置上 ——
+   * 以前靠"向上/向下分支"手动选，现在没有那个了，就得自己让开。
+   */
+  const siblings = state.mode === 'port'
+    ? (state.direction === 'upstream'
+        ? edges.value.filter(edge => edge.target === state.sources[0]).length
+        : edges.value.filter(edge => edge.source === state.sources[0]).length)
+    : 0
+  const position = { x: state.flowX, y: state.flowY + siblings * 320 }
+
+  // 双击空白建节点：不连线，建完就完事
+  if (state.mode === 'blank') {
+    const blankId = addNode(option.type, position)
+    nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === blankId }))
+    const blankZ = Math.max(0, ...nodes.value.map(node => node.zIndex || 0))
+    updateNodeMeta(blankId, { zIndex: blankZ + 1 })
+    setTimeout(() => updateNodeInternals(blankId), 50)
+    closeMenu()
+    return
+  }
+
   const upstream = state.direction === 'upstream'
 
-  // 下游：新节点落在「能接收锚点产出」的模式上。
-  // 上游：新节点自己不吃上游，但锚点的模式得能收下它 —— 先按锚点当前模式试，
-  //       不行就找一个能收的模式换过去（换模式要重排引用编号，和手动切换一致）。
+  // 旧存档里显式选了模式的节点，如果收不下这类上游就替它换一个能收的模式。
+  // auto 节点不做这件事：模式由上游推断，钉死成"能收第一条边"的那个，后面第二条就对不上了。
+  // 多来源时也不做 —— 几个来源互相换模式会打架。
   let anchorMode = null
-  if (upstream) {
-    const accepts = (NODE_MODES[anchor.type]?.[anchor.data?.mode]?.accepts?.[opt.type] || 0) > 0
+  const anchor = sources.length === 1 ? sources[0] : null
+  if (upstream && anchor && anchor.data?.mode !== AUTO_MODE) {
+    const accepts = (NODE_MODES[anchor.type]?.[anchor.data?.mode]?.accepts?.[option.type] || 0) > 0
     if (!accepts) {
-      anchorMode = findModeAccepting(anchor.type, opt.type)
+      anchorMode = findModeAccepting(anchor.type, option.type)
       if (!anchorMode) {
-        showQuickAdd.value = false
-        window.$message?.warning(`「${anchor.data?.label || anchor.type}」没有能接收${opt.name}的模式`)
+        closeMenu()
+        window.$message?.warning(`「${anchor.data?.label || anchor.type}」没有能接收${option.name}的模式`)
         return
       }
     }
   }
 
-  // flowX/flowY 存的已经是新节点的左上角（拖到空白时在 onConnectEnd 里换算过）
-  const nodeId = addNode(opt.type, { x: state.flowX, y: state.flowY },
-    { expanded: true, ...(opt.mode ? { mode: opt.mode } : {}) })
-  // 只选中新节点。展开态不要在这里碰：新建节点跟原有节点的展开/收起无关，
-  // 这里一旦写 expanded 就会把锚点（还有画布上所有别的节点）一起收起来。
+  const nodeId = addNode(option.type, position)
+  // 只选中新节点。展开态不再往节点上写：现在展开与否是选中状态的派生物
+  // （useFocusMode），写 expanded 只会留下一份没人读的旧字段。
   nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === nodeId }))
 
-  const source = upstream ? nodeId : anchor.id
-  const target = upstream ? anchor.id : nodeId
-
-  // 校验读的是节点当前模式，所以「切模式」必须发生在校验之前，否则上游那条永远判不合法
-  const originalMode = anchor.data?.mode
-  let switched = false
+  // 校验读的是节点当前模式，所以「切模式」必须发生在校验之前
+  const originalMode = anchor?.data?.mode
   if (anchorMode) {
     editNode(anchor.id, { mode: anchorMode })
     renumberNodeRefs(anchor.id)
-    switched = true
   }
-  const validation = validateCanvasConnection({ source, target }, nodes.value, edges.value)
-  if (!validation.valid) {
+
+  // 逐个来源试连连；能连上的都连上，一个都连不上才算失败
+  let connected = 0
+  let firstReason = ''
+  sources.forEach((sourceNode) => {
+    const source = upstream ? nodeId : sourceNode.id
+    const target = upstream ? sourceNode.id : nodeId
+    const validation = validateCanvasConnection({ source, target }, nodes.value, edges.value)
+    if (!validation.valid) {
+      if (!firstReason) firstReason = validation.reason
+      return
+    }
+    // 引用顺序接着已有的排下去，别把新边插到别人前面
+    const nextOrder = Math.max(0, ...inEdges(target).map(edge => Number(edge.data?.order) || 0)) + 1
+    addEdge({
+      source,
+      target,
+      sourceHandle: OUTPUT_HANDLE,
+      targetHandle: INPUT_HANDLE,
+      type: 'flowEdge',
+      data: { order: nextOrder }
+    })
+    connected += 1
+  })
+
+  if (!connected) {
     removeNode(nodeId)
-    // 没接上就别把锚点的模式留在改过的状态
-    if (switched) {
+    // 没接上就别把来源的模式留在改过的状态
+    if (anchorMode && anchor) {
       editNode(anchor.id, { mode: originalMode })
       renumberNodeRefs(anchor.id)
     }
-    showQuickAdd.value = false
-    window.$message?.warning(validation.reason)
+    closeMenu()
+    window.$message?.warning(firstReason || `这个${option.name}节点接不上选中的上游`)
     return
   }
-
-  // 引用顺序接着已有的排下去，别把新边插到别人前面
-  const nextOrder = Math.max(0, ...inEdges(target).map(edge => Number(edge.data?.order) || 0)) + 1
-  addEdge({
-    source,
-    target,
-    sourceHandle: OUTPUT_HANDLE,
-    targetHandle: INPUT_HANDLE,
-    type: 'flowEdge',
-    data: { order: nextOrder }
-  })
 
   const maxZIndex = Math.max(0, ...nodes.value.map(n => n.zIndex || 0))
   updateNodeMeta(nodeId, { zIndex: maxZIndex + 1 })
   setTimeout(() => updateNodeInternals(nodeId), 50)
-  showQuickAdd.value = false
-  // 上游接进来了 → 锚点及其下游该重跑
-  if (upstream) propagateStale(anchor.id)
-  window.$message?.success(`已创建${opt.name}节点并自动连线`)
+  closeMenu()
+}
+
+/** 从整个选区在右侧创建下游：多选工具条上那个「创建下游」 */
+const createDownstreamFromSelection = () => {
+  const selected = selectedCanvasNodes.value
+  if (!selected.length) return
+  const right = Math.max(...selected.map(node => node.position.x + (node.measured?.width || 320)))
+  const centerY = selected.reduce((sum, node) => (
+    sum + node.position.y + (node.measured?.height || 200) / 2
+  ), 0) / selected.length
+
+  // flow → 画布内的屏幕坐标（菜单是绝对定位在画布上的）
+  const zoom = viewport.value?.zoom || 1
+  const screenX = right * zoom + (viewport.value?.x || 0) + 24
+  const screenY = centerY * zoom + (viewport.value?.y || 0)
+
+  menu.value = {
+    visible: true,
+    mode: 'port',
+    direction: 'downstream',
+    sources: selected.map(node => node.id),
+    flowX: right + 120,
+    flowY: centerY - 160,
+    x: Math.max(16, screenX),
+    y: Math.max(16, screenY)
+  }
 }
 
 // Handle connection | 处理连接
@@ -1167,27 +1215,80 @@ const onConnect = (params) => {
     type: 'flowEdge',
     data: { order: nextOrder }
   })
-  // 目标节点的入边变了 → 它和它的下游都该重跑
-  propagateStale(params.target)
 }
 const onNodeClick = (event) => {
+  // 点端口（`+`）只是"从这里建节点"，不该改变选中。
+  // 否则卡片会从内容态展开、位置补偿一动，端口就跑掉了 —— 菜单看着像在跳，也很难点。
+  // 光在 connectEnd 里还原还不够：随后的 click 事件会再选一次，这里必须也挡住。
+  if (event.event?.target?.closest?.('.vue-flow__handle')) return
+
   const clickedId = event.node.id
-  // 点击节点：展开并选中自己，不影响其他节点的展开状态（连线需要多节点同时展开）
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    selected: node.id === clickedId,
-    data: {
-      ...node.data,
-      expanded: node.id === clickedId ? true : node.data.expanded
+  // Shift+点击 = 加选/取消（与框选同一种"多选"语义）；否则只选中它自己
+  const additive = Boolean(event.event?.shiftKey)
+  nodes.value = nodes.value.map(node => {
+    if (additive) {
+      return node.id === clickedId ? { ...node, selected: !node.selected } : node
     }
-  }))
-  // 展开/收缩后刷新节点几何，保证端口与边位置正确 | Refresh bounds after expand/collapse
-  nextTick(() => {
-    nodes.value.forEach(node => {
-      if (isContentNodeType(node.type)) updateNodeInternals(node.id)
-    })
+    return { ...node, selected: node.id === clickedId }
   })
 }
+
+/**
+ * 展开/收起的尺寸补偿 | Keep the visual center put
+ *
+ * 卡片一换尺寸，节点坐标（左上角）不动就会朝右下角"长出去"，看起来像卡片自己滑走了。
+ * 这里记下换尺寸前的视觉中心，等 DOM 换完再按新尺寸把左上角挪回去。
+ *
+ * 一次选中变化最多影响两个节点：上一个焦点（收起）和新的焦点（展开）。
+ * 多选（0 个或 ≥2 个选中）时 focusedNodeId 为 null，两边都不展开，所以不用补偿。
+ */
+watch(focusedNodeId, async (next, prev) => {
+  const sizeOf = node => ({
+    width: node.measured?.width || node.dimensions?.width || 0,
+    height: node.measured?.height || node.dimensions?.height || 0
+  })
+
+  const affected = [prev, next]
+    .filter(Boolean)
+    .map(id => nodes.value.find(node => String(node.id) === id))
+    // 没量过尺寸的节点跳过：刚建出来的节点 measured 还是 0，拿它当"旧尺寸"算出来的
+    // 中心就是左上角本身，补偿反而会把新节点平白推走半个卡宽。
+    .filter(node => node && sizeOf(node).width > 0 && sizeOf(node).height > 0)
+  if (!affected.length) return
+
+  // 此刻 DOM 还是旧尺寸，`measured` 也还是旧值 —— 正是要的中心
+  const centers = affected.map((node) => {
+    const { width, height } = sizeOf(node)
+    return {
+      id: node.id,
+      cx: node.position.x + width / 2,
+      cy: node.position.y + height / 2
+    }
+  })
+
+  await nextTick()
+
+  // 注意：offsetWidth / offsetHeight 是**布局尺寸，不受 CSS transform 影响**。
+  // 画布的缩放是靠 transformationpane 上的 scale 做的，所以这两个值本来就是 flow
+  // 坐标，不能再除 zoom —— 除一次会让补偿量偏大 1/zoom 倍，卡片反而越纠越偏。
+  const placements = []
+  centers.forEach(({ id, cx, cy }) => {
+    const el = document.querySelector(`.vue-flow__node[data-id="${id}"]`)
+    if (!el) return
+    const width = el.offsetWidth
+    const height = el.offsetHeight
+    if (!width || !height) return
+    placements.push({ id, position: { x: cx - width / 2, y: cy - height / 2 } })
+  })
+  if (!placements.length) return
+
+  const byId = new Map(placements.map(item => [String(item.id), item.position]))
+  nodes.value = nodes.value.map(node => (
+    byId.has(String(node.id)) ? { ...node, position: byId.get(String(node.id)) } : node
+  ))
+  // 尺寸变了，端口几何要重算（边端点取自 handle 的 DOM 矩形）
+  nextTick(() => placements.forEach(item => updateNodeInternals(item.id)))
+}, { flush: 'pre' })
 
 // Handle viewport change | 处理视口变化
 const handleViewportChange = (newViewport) => {
@@ -1216,18 +1317,15 @@ const onEdgesChange = (changes) => {
     affected.forEach((targetId) => {
       if (!nodes.value.some(node => node.id === targetId)) return
       renumberNodeRefs(targetId)
-      propagateStale(targetId)
     })
     manualSaveHistory()
   })
 }
 
 // Handle pane click | 处理画布点击
-// 只取消选中，**不再折叠所有节点** —— 收起之后端口虽然还能连，
-// 但每次点空白都把所有卡片收掉会让人没法工作。收起只由卡片按钮或顶栏命令触发。
+// 取消选中即收起（焦点态是选中状态的派生物），这正是"点空白回到内容态"的行为。
 const onPaneClick = () => {
-  showNodeMenu.value = false
-  showQuickAdd.value = false
+  closeMenu()
   if (nodes.value.some(node => node.selected)) {
     nodes.value = nodes.value.map(node => ({ ...node, selected: false }))
   }
@@ -1254,13 +1352,19 @@ const onCanvasDoubleClick = (event) => {
 
     const canvas = event.target.closest('.vue-flow')
     const bounds = canvas?.getBoundingClientRect?.()
-    if (bounds) {
-      nodeMenuPosition.value = {
-        x: Math.max(16, Math.min(event.clientX - bounds.left + 12, bounds.width - 220)),
-        y: Math.max(16, Math.min(event.clientY - bounds.top + 12, bounds.height - 340))
-      }
+    if (!bounds) return
+    const flowPos = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+    menu.value = {
+      visible: true,
+      mode: 'blank',
+      direction: 'downstream',
+      sources: [],
+      // 新节点左上角：让鼠标大致落在卡片上半部，而不是压住标题
+      flowX: flowPos.x - 100,
+      flowY: flowPos.y - 60,
+      x: Math.max(16, Math.min(event.clientX - bounds.left + 12, bounds.width - 300)),
+      y: Math.max(16, Math.min(event.clientY - bounds.top + 12, bounds.height - 420))
     }
-    showNodeMenu.value = true
   }
 }
 
@@ -1269,8 +1373,8 @@ const handleCanvasShortcut = (event) => {
   const target = event.target
 
   // Esc 关掉新建菜单：放在输入框判断之前，因为光标多半还在提示词框里
-  if (event.key === 'Escape' && showQuickAdd.value) {
-    showQuickAdd.value = false
+  if (event.key === 'Escape' && menu.value.visible) {
+    closeMenu()
     return
   }
 
@@ -1320,7 +1424,6 @@ const saveInlineRename = () => {
   const newName = titleEditValue.value.trim()
   if (newName && newName !== projectName.value) {
     renameProject(projectId, newName)
-    window.$message?.success('已重命名')
   }
   isTitleEditing.value = false
 }
@@ -1334,7 +1437,6 @@ const confirmDelete = () => {
   const projectId = route.params.id
   deleteProject(projectId)
   showDeleteModal.value = false
-  window.$message?.success('项目已删除')
   router.push('/')
 }
 
@@ -1365,7 +1467,6 @@ const handlePolish = async () => {
     
     if (result) {
       chatInput.value = result
-      window.$message?.success('提示词已润色')
     }
   } catch (err) {
     chatInput.value = originalInput
@@ -1403,8 +1504,6 @@ const sendMessage = async () => {
 
     if (autoExecute.value && input) {
       // Auto-execute mode: analyze intent and execute workflow | 自动执行模式：分析意图并执行工作流
-      window.$message?.info('正在分析工作流...')
-      
       try {
         // Analyze user intent | 分析用户意图
         const result = await analyzeIntent(content)
@@ -1420,12 +1519,9 @@ const sendMessage = async () => {
           picture_book: result?.picture_book
         }
         
-        window.$message?.info(`执行工作流: ${result?.description || '文生图'}`)
-        
         // Execute the workflow | 执行工作流
         await executeWorkflow(workflowParams, { x: baseX, y: baseY })
         
-        window.$message?.success('工作流已启动')
       } catch (err) {
         console.error('Workflow error:', err)
         window.$message?.error(err.message || '工作流执行失败')
@@ -1525,8 +1621,8 @@ onMounted(async () => {
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
   window.addEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
-  window.addEventListener(PORT_CLICK_EVENT, onPortClick)
   document.addEventListener('dblclick', onCanvasDoubleClick, true)
+  document.addEventListener('pointerdown', rememberSelectionOnPort, true)
 
   // Save before window/tab close | 窗口/标签页关闭前保存
   handleBeforeUnload = (e) => {
@@ -1627,7 +1723,7 @@ const addDroppedImageNode = ({ dataUrl, fileName, position }) => stampImageNode(
 const showAssetPicker = ref(false)
 
 const openAssetPicker = () => {
-  showNodeMenu.value = false
+  closeMenu()
   assetTargetNodeId.value = ''
   showAssetPicker.value = true
 }
@@ -1671,7 +1767,6 @@ const handleAssetPick = (items) => {
   if (targetId && fillNodeWithAsset(targetId, items[0])) {
     saveProject()
     showAssetPicker.value = false
-    window.$message?.success(`已把素材插入「${nodes.value.find(n => n.id === targetId)?.data?.label || '图片'}」`)
     return
   }
 
@@ -1690,7 +1785,6 @@ const handleAssetPick = (items) => {
   // 与 handleTauriDragDrop 一致：节点建完显式落盘
   saveProject()
   showAssetPicker.value = false
-  window.$message?.success(`已插入 ${items.length} 张素材`)
 }
 
 const handleTauriDragDrop = async (event) => {
@@ -1809,11 +1903,33 @@ const fillNodeWithFile = (nodeId, file, dataUrl) => {
 
 /** 拖到空白处：按文件类型新建节点 */
 const addMediaNode = ({ file, dataUrl, position }) => {
-  const isVideo = file.type.startsWith('video/')
-  const name = file.name.replace(/\.[^.]+$/, '') || (isVideo ? '拖入视频' : '拖入图片')
-  const nodeId = stampImageNode(addNode(isVideo ? 'video' : 'image', position, { label: name }))
+  const type = file.type.startsWith('video/') ? 'video'
+    : file.type.startsWith('audio/') ? 'audio'
+      : 'image'
+  const fallback = type === 'video' ? '拖入视频' : type === 'audio' ? '拖入音频' : '拖入图片'
+  const name = file.name.replace(/\.[^.]+$/, '') || fallback
+  const nodeId = stampImageNode(addNode(type, position, { label: name }))
   setNodeMedia(nodeId, { url: dataUrl, base64: dataUrl, fileName: name })
   return nodeId
+}
+
+/** composer 的 ＋：选文件 → 落在视口中心 */
+const handleComposerAttach = () => {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*,video/*,audio/*'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    const rect = document.querySelector('.canvas-flow')?.getBoundingClientRect?.()
+    const center = rect
+      ? screenToFlowCoordinate({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+      : { x: 0, y: 0 }
+    const dataUrl = await fileToDataUrl(file)
+    addMediaNode({ file, dataUrl, position: { x: center.x - 160, y: center.y - 160 } })
+    saveProject()
+  }
+  input.click()
 }
 
 const onDrop = async (event) => {
@@ -1852,8 +1968,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
   window.removeEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
-  window.removeEventListener(PORT_CLICK_EVENT, onPortClick)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
+  document.removeEventListener('pointerdown', rememberSelectionOnPort, true)
 
   // Clean up beforeunload listener | 清理窗口关闭前保存监听器
   if (handleBeforeUnload) {
@@ -1899,57 +2015,6 @@ onUnmounted(() => {
   background-color: var(--bg-primary);
 }
 
-.node-menu {
-  width: 208px;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  background: var(--bg-secondary);
-  box-shadow: 0 18px 42px rgb(0 0 0 / 18%);
-}
-
-.dark .node-menu {
-  background: #202020;
-  border-color: #343434;
-  box-shadow: 0 18px 42px rgb(0 0 0 / 45%);
-}
-
-.node-menu-title {
-  padding: 6px 8px 8px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.node-menu-resource-title {
-  padding-top: 10px;
-}
-
-.node-menu-item {
-  display: flex;
-  width: 100%;
-  min-height: 36px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 8px;
-  border-radius: 9px;
-  color: var(--text-primary);
-  font-size: 14px;
-  text-align: left;
-  transition: background-color .15s ease, color .15s ease;
-}
-
-.node-menu-item:hover {
-  background: var(--bg-tertiary);
-  color: var(--accent-color);
-}
-
-.node-menu-divider {
-  height: 1px;
-  margin: 8px 4px 0;
-  background: var(--border-color);
-}
-
 .canvas-search-modal, .canvas-search-modal.n-card { width: min(640px, 92vw); max-width: 92vw; }
 .canvas-search-modal .n-card, .canvas-search-modal.n-card { height: min(560px, 72vh); overflow: hidden; border: 1px solid var(--border-color); border-radius: 16px; background: var(--bg-secondary); box-shadow: 0 24px 60px rgb(0 0 0 / 28%); }
 .canvas-search-modal .n-card__content, .canvas-search-modal.n-card .n-card__content { height: 100%; padding: 0; }
@@ -1974,6 +2039,8 @@ onUnmounted(() => {
 
 .selection-group-outline { position: absolute; z-index: 15; pointer-events: none; border: 1px dashed var(--accent-color); border-radius: 10px; background: color-mix(in srgb, var(--accent-color) 4%, transparent); }
 .selection-action-bar { position: absolute; left: 50%; top: -12px; display: flex; align-items: center; gap: 4px; min-height: 42px; transform: translate(-50%, -100%); border: 1px solid var(--border-color); border-radius: 11px; background: var(--bg-secondary); padding: 5px 7px; box-shadow: 0 12px 30px rgb(0 0 0 / 16%); pointer-events: auto; white-space: nowrap; }
+.selection-action.is-primary { background: #17191c; color: #fff; }
+.selection-action.is-primary:hover { background: #000; }
 .dark .selection-action-bar { border-color: #383838; background: #252527; box-shadow: 0 12px 30px rgb(0 0 0 / 46%); }
 .selection-action-bar button { border-radius: 7px; color: var(--text-primary); font-size: 13px; transition: background .15s ease; }
 .selection-action { display: inline-flex; min-height: 32px; align-items: center; gap: 7px; padding: 7px 10px; }

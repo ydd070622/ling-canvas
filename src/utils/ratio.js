@@ -14,6 +14,22 @@ export const COMMON_RATIOS = [
 const gcd = (a, b) => (b ? gcd(b, a % b) : a)
 
 /**
+ * 按素材比例给卡片一个合适的宽度 | Card width by media ratio
+ *
+ * 全景给满宽，竖图收窄 —— 不然一张 9:21 的图在满宽卡片里会撑成一根 860px 高的长条，
+ * 明显高过一屏。档位取自原型 infinite_canvas_node_system_v23/25 的 adaptImageNodeToRatio。
+ */
+export const cardWidthForRatio = (ratio, base = 392) => {
+  if (!ratio) return base
+  if (ratio >= 1.9) return base
+  if (ratio >= 1.45) return Math.round(base * 0.91)
+  if (ratio >= 1.15) return Math.round(base * 0.84)
+  if (ratio >= 0.88) return Math.round(base * 0.75)
+  if (ratio >= 0.68) return Math.round(base * 0.66)
+  return Math.round(base * 0.59)
+}
+
+/**
  * 尺寸 key 归一化为比例字符串 | Normalize a size key into 'a:b'
  * '1x1'→'1:1'；'2560x1440'→'16:9'（近似匹配常见比例）
  */

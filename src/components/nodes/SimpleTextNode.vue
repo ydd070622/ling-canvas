@@ -1,44 +1,33 @@
 <template>
-  <!-- 文本节点：内容区 + 改写指令（指令里可用 @ 引用上游） -->
+  <!-- 文本节点：正文就是这段文字（内容态退成一段普通文本，见 flow-nodes.css）。
+       改写指令在底部 composer 里写，卡片上不放第二个输入框。 -->
   <NodeFrame
     :node-id="id"
     tone="text"
     :title="data.label || '文本'"
-    :expanded="isExpanded"
-    :prompt="data.prompt || ''"
-    :refs="refs"
-    :candidates="candidates"
-    :inbound-count="inboundCount"
-    placeholder="给这段文字一个改写要求…  输入 @ 引用上游"
+    :focused="focused"
+    :multi="multi"
+    :card-width="boxWidth"
+    resizable
+    @resize="handleResize"
     :status-text="statusText"
     :status-class="statusClass"
     :notices="notices"
-    :footer-note="footerNote"
-    :busy="loading"
-    :stale="isStale"
     :failed="!!data.error"
-    @send="handleSend"
-    @cancel="cancelGeneration"
+    :fail-text="data.error || ''"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
-    @toggle-collapse="toggleCollapse"
-    @update-prompt="handlePromptInput"
-    @insert-ref="handleInsertRef"
     @notice-action="handleNoticeAction"
   >
     <template #body>
       <textarea
         ref="contentRef"
         class="flow-pfield flow-pfield-textarea nodrag nowheel"
+        :style="boxHeight ? { height: `${boxHeight}px` } : null"
         :value="data.content || ''"
-        :placeholder="isExpanded ? '写点什么…' : '点击展开编辑'"
+        placeholder="写点什么…"
         @input="handleContentInput"
       />
-    </template>
-
-    <template #peek>
-      <span v-if="(data.content || '').trim()" class="flow-peek-line">{{ data.content }}</span>
-      <div v-else class="flow-peek-empty">还没有内容</div>
     </template>
   </NodeFrame>
 </template>
@@ -46,16 +35,17 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { NodeFrame } from './base'
-import { FlowSelect } from './base'
 import { useNodeRefs } from '../../composables/useNodeRefs'
+import { useFocusExpanded, useMultiSelected } from '../../composables/useFocusMode'
+import { useNodeRunBridge } from '../../composables/useNodeRunBridge'
 import { useChat } from '../../hooks/useApi'
 import { useModelStore } from '../../stores/pinia'
 import {
-  updateNode, editNode, editField, clearStale, dropOrphanRefs,
-  duplicateNode, removeNode, propagateStale, renumberNodeRefs
+  updateNode, editNode, editField, dropOrphanRefs,
+  duplicateNode, removeNode
 } from '../../stores/canvas'
-import { KIND_TITLE } from '../../config/nodeRegistry'
-import { makeToken } from '../../utils/promptRefs'
+import { makeToken, refKey } from '../../utils/promptRefs'
+import { buildNodeNotices } from '../../utils/nodeNotices'
 
 const props = defineProps({
   id: String,
@@ -65,11 +55,20 @@ const props = defineProps({
 
 const { refs, candidates, buildPrompt, check, inboundCount } = useNodeRefs(props.id)
 
+const focused = useFocusExpanded(props.id)
+
+/**
+ * 文本节点的尺寸由用户拖出来（数据里存着），其它节点是按素材比例算的。
+ */
+const boxWidth = computed(() => Number(props.data?.boxWidth) || 0)
+/** 这是**内容框**的高度，不是卡片高度 —— 卡片自然包住它，不去算"减去表头多少" */
+const boxHeight = computed(() => Number(props.data?.boxHeight) || 0)
+const handleResize = ({ width, height }) => editNode(props.id, { boxWidth: width, boxHeight: height })
+const multi = useMultiSelected(props.id)
+
 const contentRef = ref(null)
 const modelStore = useModelStore()
 
-const isExpanded = computed(() => props.data?.expanded === true)
-const isStale = computed(() => !!props.data?.stale?.is)
 
 /* ------------------------------------------------------------ 模型与渠道 */
 const modelSelectOptions = computed(() => modelStore.groupedChatModelOptions || [])
@@ -81,7 +80,6 @@ const selectedModel = computed(() => {
   return options[0]?.value || ''
 })
 const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value))
-const selectedModelLabel = computed(() => selectedModelOption.value?.label || '请先配置文本模型')
 const providerId = computed(() => (
   modelStore.resolveModelSourceProvider(selectedModel.value, 'CHAT')
   || selectedModelOption.value?.sourceProvider
@@ -111,57 +109,23 @@ const statusClass = computed(() => {
   return (props.data?.content || '').trim() ? 'is-ok' : ''
 })
 
-const notices = computed(() => {
-  const list = []
-  if (isStale.value) {
-    list.push({
-      kind: 'stale',
-      text: props.data.stale.reason === 'indirect' ? '间接上游已变更，建议重新生成。' : '上游数据已变更，建议重新生成。',
-      actions: [{ act: 'update-run', label: '更新生成' }, { act: 'dismiss-stale', label: '关闭提示', ghost: true }]
-    })
-  }
-  if (props.data?.error) {
-    list.push({ kind: 'error', text: props.data.error, actions: [{ act: 'drop-orphans', label: '移除失效引用' }] })
-  }
-  if (props.data?.warn) {
-    list.push({ kind: 'warn', text: props.data.warn.message, actions: props.data.warn.actions || [] })
-  }
-  return list
-})
+const notices = computed(() => buildNodeNotices(props.data))
 
-const footerNote = computed(() => {
-  const used = refs.value.filter(r => r.status === 'ok').length
-  return inboundCount.value ? `已连入 <b>${inboundCount.value}</b> 个上游 · 引用 <b>${used}</b> 个` : '未连接上游'
+/** 底部中间那格显示字数，比"已连入 N 个上游"有用 */
+const contentSummary = computed(() => {
+  const length = String(props.data?.content || '').trim().length
+  return length ? `${length} 字` : ''
 })
 
 /* ------------------------------------------------------------------ 编辑 */
 const handleContentInput = (event) => editField(props.id, 'content', event.target.value)
-const handlePromptInput = (value) => editField(props.id, 'prompt', value)
-const handleInsertRef = ({ key, edgeId }) => {
-  editNode(props.id, { refBindings: { ...(props.data.refBindings || {}), [key]: edgeId }, warn: null })
-}
-const toggleCollapse = () => updateNode(props.id, { expanded: !isExpanded.value })
 
 const handleNoticeAction = (act) => {
   if (act === 'update-run') handleSend()
-  else if (act === 'dismiss-stale') clearStale(props.id)
   else if (act === 'drop-orphans') dropOrphanRefs(props.id)
   else if (act === 'run-anyway') handleSend(true)
-  else if (act === 'insert-ref') insertAllRefs()
 }
 
-const insertAllRefs = () => {
-  const list = candidates.value
-  if (!list.length) return
-  const tokens = list.map(c => makeToken(c.kind, c.index))
-  const bindings = { ...(props.data.refBindings || {}) }
-  list.forEach((c) => { bindings[`${KIND_TITLE[c.kind]} ${c.index}`] = c.edgeId })
-  editNode(props.id, {
-    prompt: `${String(props.data.prompt || '').trim()} ${tokens.join(' ')}`.trim(),
-    refBindings: bindings,
-    warn: null
-  })
-}
 
 /* ------------------------------------------------------------------ 生成 */
 const cancelGeneration = () => updateNode(props.id, { loading: false, error: '' })
@@ -171,12 +135,8 @@ const handleSend = async (force = false) => {
 
   const result = check()
   if (!result.ok) {
-    updateNode(props.id, { error: result.message })
+    updateNode(props.id, { error: result.message, errorKind: 'preflight', errorCode: result.code || '' })
     window.$message?.error(result.message)
-    return
-  }
-  if (result.warn === 'W_UNREF' && !force) {
-    updateNode(props.id, { warn: { message: result.message, actions: result.actions } })
     return
   }
   updateNode(props.id, { warn: null })
@@ -203,25 +163,20 @@ const handleSend = async (force = false) => {
     const answer = await send(request, true, { providerId: providerId.value })
     if (answer) {
       updateNode(props.id, {
-        content: answer, loading: false,
-        stale: { is: false, reason: null, since: null }, updatedAt: Date.now()
+        content: answer, loading: false, updatedAt: Date.now()
       })
-      propagateStale(props.id)
     }
-    window.$message?.success('文本生成完成')
   } catch (err) {
     updateNode(props.id, { error: err.message || '文本生成失败', loading: false })
     window.$message?.error(err.message || '文本生成失败')
   }
 }
 
-const duplicateAndRefresh = () => { if (duplicateNode(props.id)) window.$message?.success('节点已复制') }
-const remove = () => { removeNode(props.id); window.$message?.success('节点已删除') }
+// 生成按钮在底部 composer 上，通过窗口事件桥驱动本节点的生成 / 取消
+useNodeRunBridge(props.id, { run: () => handleSend(), cancel: cancelGeneration })
 
-watch(
-  () => props.data?.mode,
-  (value) => { if (value) renumberNodeRefs(props.id) }
-)
+const duplicateAndRefresh = () => { duplicateNode(props.id) }
+const remove = () => { removeNode(props.id)}
 
 defineExpose({ focusContent: () => contentRef.value?.focus() })
 </script>
