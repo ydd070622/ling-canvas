@@ -20,7 +20,7 @@
     tone="render"
     :title="data.label || '室内渲染'"
     :focused="focused"
-    always-expanded
+    :always-expanded="renderFormOpen"
     :multi="multi"
     :status-text="statusText"
     :status-class="statusClass"
@@ -31,7 +31,15 @@
     @duplicate="duplicateAndRefresh"
   >
     <template #body>
-      <div class="flow-render">
+      <div v-if="!renderFormOpen" class="flow-render-compact">
+        <img v-if="views[0]?.url" :src="views[0].url" alt="室内渲染视角预览">
+        <div class="flow-render-compact-info">
+          <span>{{ views.length ? `${views.length} 个视角` : '连接图片后配置室内渲染' }}</span>
+          <button class="nodrag" type="button" @click.stop="renderFormOpen = true">编辑参数</button>
+        </div>
+      </div>
+      <div v-else class="flow-render">
+        <button class="flow-render-collapse nodrag" type="button" @click.stop="renderFormOpen = false">收起参数</button>
         <div class="flow-render-scroll nodrag">
           <div class="flow-render-mode">
             <button
@@ -120,12 +128,12 @@
 
           <RenderForm
             :params="params"
-            :model-value="selectedModel"
+            :model-value="selectedModelOption?.optionId || ''"
             :model-options="modelOptions"
             :resolution-options="resolutionOptions"
             :resolution-hint="imageTier.note"
             @set="setField"
-            @update:model="setField('model', $event)"
+            @update:model="setModelOption"
             @upload="onUpload"
           />
         </div>
@@ -178,6 +186,7 @@ const props = defineProps({
 const { slots } = useNodeRefs(props.id)
 const focused = useFocusExpanded(props.id)
 const multi = useMultiSelected(props.id)
+const renderFormOpen = ref(false)
 const { open: openViewer } = useMediaViewer()
 const { updateNodeInternals } = useVueFlow()
 
@@ -268,9 +277,14 @@ const selectedModel = computed(() => {
   if (configured.has(fallback)) return fallback
   return modelOptions.value[0]?.value || ''
 })
-const selectedModelOption = computed(() => modelOptions.value.find(o => o.value === selectedModel.value))
+const selectedModelOption = computed(() => modelOptions.value.find(o => o.value === selectedModel.value
+  && o.sourceProvider === props.data?.sourceProvider) || modelOptions.value.find(o => o.value === selectedModel.value))
+const setModelOption = (optionId) => {
+  const option = modelOptions.value.find(item => item.optionId === optionId)
+  if (option) updateNode(props.id, { model: option.value, sourceProvider: option.sourceProvider })
+}
 const providerId = computed(() => (
-  modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE')
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE', props.data?.sourceProvider)
   || selectedModelOption.value?.sourceProvider
   || ''
 ))
@@ -278,7 +292,7 @@ const providerLabel = computed(() => (
   providerId.value ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value) : ''
 ))
 const hasProviderKey = computed(() => Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value)))
-const currentModel = computed(() => modelStore.getImageModel?.(selectedModel.value))
+const currentModel = computed(() => modelStore.getImageModel?.(selectedModel.value, providerId.value))
 
 const imageTier = computed(() => {
   const upstream = modelStore.resolveUpstreamContext(providerId.value)

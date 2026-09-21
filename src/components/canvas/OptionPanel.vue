@@ -14,21 +14,23 @@
             {{ clearLabel }}
           </button>
 
-          <button
-            v-for="option in filtered"
-            :key="option.value"
-            class="option-row"
-            :class="{ 'is-active': option.value === modelValue }"
-            type="button"
-            @click="pick(option.value)"
-          >
-            <span class="option-mark">{{ (option.label || '?').trim().slice(0, 1).toUpperCase() }}</span>
-            <span class="option-copy">
-              <b>{{ option.label }}</b>
-              <span v-if="option.tips">{{ option.tips }}</span>
-            </span>
-            <span v-if="showBadge && option.badge" class="option-badge">{{ option.badge }}</span>
-          </button>
+          <template v-for="group in groupedFiltered" :key="group.key">
+            <div v-if="group.label" class="option-group">{{ group.label }}</div>
+            <button
+              v-for="option in group.options"
+              :key="option.value"
+              class="option-row"
+              :class="{ 'is-active': option.value === modelValue }"
+              type="button"
+              @click="pick(option.value)"
+            >
+              <span class="option-mark">{{ (option.label || '?').trim().slice(0, 1).toUpperCase() }}</span>
+              <span class="option-copy">
+                <b>{{ option.label }}</b>
+                <span v-if="option.tips">{{ option.tips }}</span>
+              </span>
+            </button>
+          </template>
 
           <div v-if="!filtered.length" class="option-empty">{{ emptyText }}</div>
         </div>
@@ -47,8 +49,6 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   /** [{ value, label, tips, badge }] */
   options: { type: Array, default: () => [] },
-  /** 只在多个渠道/多种来源时才显示右侧角标，否则每行都一样就成了噪音 */
-  showBadge: { type: Boolean, default: false },
   /** 传了才出现筛选框 */
   searchPlaceholder: { type: String, default: '' },
   emptyText: { type: String, default: '没有可选项' },
@@ -67,8 +67,17 @@ const searchable = computed(() => Boolean(props.searchPlaceholder) && props.opti
 const filtered = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   if (!keyword) return props.options
-  return props.options.filter(option => `${option.label} ${option.badge} ${option.tips}`
+  return props.options.filter(option => `${option.label} ${option.group} ${option.tips}`
     .toLowerCase().includes(keyword))
+})
+const groupedFiltered = computed(() => {
+  const groups = new Map()
+  filtered.value.forEach(option => {
+    const key = option.sourceProvider || option.group || ''
+    if (!groups.has(key)) groups.set(key, { key, label: option.group || '', options: [] })
+    groups.get(key).options.push(option)
+  })
+  return [...groups.values()]
 })
 
 /** 贴在锚点上方；右边越界就收回来；高度按锚点上方真正剩多少空间给，不够就内部滚动 */
@@ -147,6 +156,8 @@ onBeforeUnmount(() => {
 }
 
 .option-list { min-height: 0; overflow: auto; }
+.option-group { padding: 12px 11px 5px; color: var(--text-tertiary, #94a3b8); font-size: 11px; font-weight: 700; letter-spacing: .025em; }
+.option-group:first-child { padding-top: 5px; }
 
 .option-row {
   display: flex;

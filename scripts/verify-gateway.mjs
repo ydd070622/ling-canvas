@@ -37,6 +37,8 @@ globalThis.localStorage = {
 // ---------------------------------------------------------------------------
 const received = []
 let videoPollCount = 0
+// 只用来复现「扇出时部分请求失败」：第一次拒，之后都成功
+let flakyImageCount = 0
 const REFERENCE_BYTES = Buffer.from('ling-canvas-reference-image-bytes')
 
 const server = createServer(async (req, res) => {
@@ -94,6 +96,14 @@ const server = createServer(async (req, res) => {
   // 其他 5xx：不应触发协议改道
   if (path === '/v1/ratelimited/images/generations') {
     return sendJson(500, { error: { message: 'rate limit exceeded' } })
+  }
+  // 偶发失败：第一次拒，之后成功 —— 复现「要 2 张只回来 1 张」
+  if (path === '/v1/flaky/images/generations') {
+    flakyImageCount += 1
+    if (flakyImageCount === 1) {
+      return sendJson(500, { error: { message: 'upstream hiccup' } })
+    }
+    return sendJson(200, { created: 1, data: [{ url: `${base}/assets/out.png` }] })
   }
   // 原生 Gemini 路由：模型名在 URL 里，图以**裸 base64** 放在 inlineData.data
   // （没有 `data:image` 前缀，所以末尾那条「整包文本里捞 data URL」的兜底捞不到它）
@@ -286,11 +296,12 @@ await test('readReferenceImageBytes：外链走 fetch 分支并保持字节一�
 // ---------------------------------------------------------------------------
 // 4. 文生图 / 图生图 端到端（经网关 fetch 分支）
 // ---------------------------------------------------------------------------
-await test('文生图：JSON 协议打到 /v1/images/generations，count 归一为 n', async () => {
+await test('文生图：JSON 协议打到 /v1/images/generations，n 只发 1', async () => {
   const images = await generateImage(
-    { model: 'mock-t2i', prompt: 'a cat', size: '1024x1024', count: 3 },
+    { model: 'mock-t2i', prompt: 'a cat', size: '1024x1024' },
     { upstream }
   )
+  assert.equal(images.length, 1)
   assert.equal(images[0].url, `${base}/assets/out.png`)
 
   const request = lastRequest('/v1/images/generations')
@@ -300,8 +311,74 @@ await test('文生图：JSON 协议打到 /v1/images/generations，count 归一�
 
   const payload = JSON.parse(request.body.toString('utf8'))
   assert.equal(payload.model, 'mock-t2i')
-  assert.equal(payload.n, 3)
+  assert.equal(payload.n, 1)
   assert.equal(payload.count, undefined)
+})
+
+await test('文生图：要 3 张就并发发 3 次请求，每次都只要 1 张', async () => {
+  const genPath = '/v1/images/generations'
+  const before = received.filter(item => item.path === genPath).length
+  const progress = []
+
+  const images = await generateImage(
+    { model: 'mock-t2i', prompt: 'a cat', size: '1024x1024', n: 3 },
+    { upstream, onProgress: (done, total) => progress.push(`${done}/${total}`) }
+  )
+
+  // 上游的 n 不可信（聚合站的 chat 端点连这个字段都没有），张数只能客户端自己发够
+  const sent = received.filter(item => item.path === genPath).slice(before)
+  assert.equal(sent.length, 3, '要 3 张就该发 3 次请求')
+  sent.forEach(item => assert.equal(JSON.parse(item.body.toString('utf8')).n, 1))
+  assert.equal(images.length, 3)
+  assert.equal(progress[0], '0/3')
+  assert.equal(progress[progress.length - 1], '3/3')
+})
+
+await test('文生图：全部请求失败才抛错，失败的那次也要算进进度', async () => {
+  const limitedKey = modelStore.addCustomProvider('FanoutLimitedRelay')
+  modelStore.updateCustomProvider(limitedKey, {
+    defaultBaseUrl: base,
+    endpoints: { chat: '/v1/chat/completions', image: '/v1/ratelimited/images/generations' }
+  })
+  modelStore.setApiKeyByProvider(limitedKey, 'k')
+  const progress = []
+
+  await assert.rejects(
+    () => generateImage(
+      { model: 'mock-t2i', prompt: 'a cat', size: '1024x1024', n: 2 },
+      {
+        upstream: modelStore.resolveUpstreamContext(limitedKey),
+        onProgress: (done, total) => progress.push(`${done}/${total}`)
+      }
+    ),
+    /rate limit exceeded/
+  )
+  // 两次都失败，进度也得走完 —— 否则界面会永远停在「生成中 0/2」
+  assert.equal(progress[progress.length - 1], '2/2')
+})
+
+await test('文生图：扇出时部分失败 —— 保住成功的，且把失败原因交出来', async () => {
+  const flakyKey = modelStore.addCustomProvider('FlakyRelay')
+  modelStore.updateCustomProvider(flakyKey, {
+    defaultBaseUrl: base,
+    endpoints: { chat: '/v1/chat/completions', image: '/v1/flaky/images/generations' }
+  })
+  modelStore.setApiKeyByProvider(flakyKey, 'k')
+
+  const reported = []
+  const images = await generateImage(
+    { model: 'mock-t2i', prompt: 'a cat', size: '1024x1024', n: 2 },
+    {
+      upstream: modelStore.resolveUpstreamContext(flakyKey),
+      onPartialFailure: errors => reported.push(...errors)
+    }
+  )
+
+  // 一次成功一次失败：保住的照收，不因为少一张就把整次生成判死
+  assert.equal(images.length, 1)
+  // 但原因必须交出来 —— 只说「少了一张」等于没说
+  assert.equal(reported.length, 1)
+  assert.match(String(reported[0]?.message), /upstream hiccup/)
 })
 
 await test('图生图：multipart 协议打到 /v1/images/edits，且能解析双层包装响应', async () => {
@@ -538,7 +615,7 @@ await test('Tauri 通道：文生图 invoke 载荷（args 包装 / camelCase / �
   installTauriStub()
   try {
     const images = await generateImage(
-      { model: 'mock-t2i', prompt: 'cat', size: '1024x1024', count: 2 },
+      { model: 'mock-t2i', prompt: 'cat', size: '1024x1024' },
       { upstream }
     )
     assert.equal(images[0].url, 'https://cdn.example/t2i.png')
@@ -551,9 +628,25 @@ await test('Tauri 通道：文生图 invoke 载荷（args 包装 / camelCase / �
     assert.equal(args.args.timeoutMs, 300000) // IMAGE_TIMEOUT_MS
     assert.equal(args.args.headers.Authorization, 'Bearer test-key-123')
     assert.equal(args.args.json.model, 'mock-t2i')
-    assert.equal(args.args.json.n, 2)
+    assert.equal(args.args.json.n, 1)
     assert.deepEqual(args.args.fields, [])
     assert.deepEqual(args.args.files, [])
+  } finally {
+    removeTauriStub()
+  }
+})
+
+await test('Tauri 通道：要 2 张就并发走 2 次 http_request', async () => {
+  installTauriStub()
+  try {
+    const images = await generateImage(
+      { model: 'mock-t2i', prompt: 'cat', size: '1024x1024', n: 2 },
+      { upstream }
+    )
+    // 扇出发生在客户端，桌面端看到的是一次请求一条 invoke
+    assert.equal(tauriCalls.length, 2)
+    tauriCalls.forEach(call => assert.equal(call.args.args.json.n, 1))
+    assert.equal(images.length, 2)
   } finally {
     removeTauriStub()
   }

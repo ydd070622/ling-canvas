@@ -64,6 +64,7 @@
               @click="emit('update:count', option)"
             >{{ option }} 张</button>
           </div>
+          <p v-if="countHint" class="param-note">{{ countHint }}</p>
         </section>
       </div>
     </div>
@@ -86,6 +87,8 @@ const props = defineProps({
   ratioOptions: { type: Array, default: () => [] },
   count: { type: Number, default: 1 },
   countOptions: { type: Array, default: () => [] },
+  /** 张数不是一次请求出 N 张，而是要发 N 次 —— 得先跟用户说清费用 */
+  countHint: { type: String, default: '' },
   videoPreset: { type: String, default: '' },
   videoPresetOptions: { type: Array, default: () => [] }
 })

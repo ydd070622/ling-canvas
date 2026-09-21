@@ -64,7 +64,7 @@ const focused = useFocusExpanded(props.id)
 const multi = useMultiSelected(props.id)
 
 const modelStore = useModelStore()
-const { loading: imageLoading, generate: generateImage, stop: stopImage } = useImageGeneration()
+const { loading: imageLoading, progress: imageProgress, generate: generateImage, stop: stopImage } = useImageGeneration()
 const { loading: videoLoading, generate: generateVideo } = useVideoGeneration()
 const { loading: chatLoading, send: sendChat } = useChat()
 
@@ -92,9 +92,10 @@ const selectedModel = computed(() => {
   if (configuredKeys.has(fallback)) return fallback
   return options[0]?.value || ''
 })
-const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value))
+const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value
+  && o.sourceProvider === props.data?.sourceProvider) || modelSelectOptions.value.find(o => o.value === selectedModel.value))
 const providerId = computed(() => (
-  modelStore.resolveModelSourceProvider(selectedModel.value, modelKind.value)
+  modelStore.resolveModelSourceProvider(selectedModel.value, modelKind.value, props.data?.sourceProvider)
   || selectedModelOption.value?.sourceProvider
   || ''
 ))
@@ -102,7 +103,9 @@ const providerLabel = computed(() => (
   providerId.value ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value) : ''
 ))
 const hasProviderKey = computed(() => Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value)))
-const currentModel = computed(() => modelStore.getImageModel?.(selectedModel.value) || modelStore.getVideoModel?.(selectedModel.value))
+const currentModel = computed(() => targetType.value === 'video'
+  ? modelStore.getVideoModel?.(selectedModel.value, providerId.value)
+  : modelStore.getImageModel?.(selectedModel.value, providerId.value))
 
 watch(selectedModel, (value) => {
   if (value && (props.data?.model || '') !== value) updateNode(props.id, { model: value })
@@ -136,7 +139,10 @@ const selectedRatioLabel = computed(() => (
   selectedRatio.value === 'auto' ? '自适应' : ratioDisplay(selectedRatio.value, { keepColon: true })))
 /* ------------------------------------------------------------ 状态与提示 */
 const statusText = computed(() => {
-  if (busy.value) return '生成中…'
+  if (busy.value) {
+    // 图片任务要多张时是并发 N 次请求，进度比「生成中…」有意义
+    return imageProgress.total > 1 ? `生成中 ${imageProgress.done}/${imageProgress.total}` : '生成中…'
+  }
   if (props.data?.error) return '失败'
   return inboundCount.value ? '已就绪' : '未接入'
 })
@@ -175,7 +181,7 @@ const outputTargets = () => edges.value
   .map(edge => nodes.value.find(node => node.id === edge.target))
   .filter(node => node && node.type === targetType.value)
 
-/** 没有下游就自己建：与 composer「一句话出一组图」是同一套行为 */
+/** 没有下游就自己建：与 composer「一句话出一组图」是同一套行为（图片只要 1 个出口，见 handleSend） */
 const ensureOutputs = (count) => {
   let existing = outputTargets()
   if (existing.length) return existing
@@ -208,8 +214,13 @@ const cancelGeneration = () => {
   updateNode(props.id, { loading: false, error: '' })
 }
 
-/** 把产出逐个写进下游输出节点；结果比落点多时只提示，不静默丢弃 */
-const writeResults = (outputs, results) => {
+/** 把产出逐个写进下游输出节点；结果数与落点数对不上时明确提示，不静默丢弃 */
+const writeResults = (outputs, results, partialFailure = '') => {
+  if (targetType.value === 'image') {
+    writeImageResults(outputs, results, partialFailure)
+    return
+  }
+
   startBatchOperation()
   results.forEach((item, index) => {
     const target = outputs[index]
@@ -223,6 +234,52 @@ const writeResults = (outputs, results) => {
     }
   })
   endBatchOperation()
+
+  // 一个输出节点只接一个结果，多了没地方放 —— 但必须让用户知道，而不是悄悄扔掉
+  if (results.length > outputs.length) {
+    window.$message?.warning(`回来 ${results.length} 个结果，只有 ${outputs.length} 个输出节点，多出的没写入`)
+  } else if (results.length < outputs.length && results.length) {
+    window.$message?.warning(`回来 ${results.length} 个结果，有 ${outputs.length - results.length} 个输出节点没拿到内容`)
+  }
+}
+
+/**
+ * 图片落点。
+ *
+ * 一次出多张时**全进同一张卡的画廊**（一张卡装 N 张，与在画布上直接生成图片一致），
+ * 所以图片默认只有一个下游。只有当用户自己连了多个图片节点时才退回「一个对一个」——
+ * 那是他显式表达的「这几张要分开」，不该被一张卡吞掉。
+ */
+const writeImageResults = (outputs, results, partialFailure) => {
+  const urls = results.map(item => item.url).filter(Boolean)
+  startBatchOperation()
+  if (outputs.length <= 1) {
+    const target = outputs[0]
+    if (target) {
+      // galleryUrls 一并覆盖：上次多、这次少时旧的残余必须清掉，否则画廊里会留着上一批
+      updateNode(target.id, {
+        url: urls[0], galleryUrls: urls, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+      })
+    }
+  } else {
+    outputs.forEach((target, index) => {
+      const item = results[index]
+      if (!target || !item) return
+      updateNode(target.id, {
+        url: item.url, galleryUrls: [], mainImageIndex: 0, loading: false, updatedAt: Date.now()
+      })
+    })
+  }
+  endBatchOperation()
+
+  // 少回来几张必须说清原因 —— 只说「少了一张」等于没说
+  const requested = Number(props.data?.count || 1)
+  if (outputs.length <= 1 && requested > 1 && urls.length < requested) {
+    window.$message?.warning(
+      `要了 ${requested} 张，成功回来 ${urls.length} 张`
+      + (partialFailure ? `。失败原因：${partialFailure}` : '')
+    )
+  }
 }
 
 const requireProvider = () => {
@@ -259,7 +316,9 @@ const handleSend = async (force = false) => {
   if (!requireProvider()) return
 
   const count = Number(props.data?.count || 1)
-  const targets = ensureOutputs(count)
+  // 图片：一次出的多张全进同一张卡的画廊，所以只要一个下游输出节点。
+  // 文本/视频一次就一个结果，本来就按张数建。
+  const targets = ensureOutputs(targetType.value === 'image' ? 1 : count)
   const outputs = targets.length ? targets : [null]
 
   generating.value = true
@@ -285,6 +344,8 @@ const handleSend = async (force = false) => {
       if (!output?.url) throw new Error('接口未返回视频地址')
       writeResults(outputs, [{ url: output.url }])
     } else {
+      // 扇出时部分请求失败，原因得留到最后那条提示里一起说 —— 只说「少了一张」等于没说
+      let partialFailure = ''
       const generated = await generateImage({
         model: selectedModel.value,
         prompt,
@@ -294,10 +355,15 @@ const handleSend = async (force = false) => {
         resolution: selectedResolution.value,
         n: Math.max(count, outputs.length),
         image: referenceImages.value
-      }, { providerId: providerId.value })
+      }, {
+        providerId: providerId.value,
+        onPartialFailure: (errors) => {
+          partialFailure = errors.map(error => error?.message || String(error)).join('；')
+        }
+      })
       const results = (Array.isArray(generated) ? generated : []).filter(item => item?.url)
       if (!results.length) throw new Error('接口未返回图片地址')
-      writeResults(outputs, results)
+      writeResults(outputs, results, partialFailure)
     }
 
     updateNode(props.id, { loading: false, updatedAt: Date.now() })

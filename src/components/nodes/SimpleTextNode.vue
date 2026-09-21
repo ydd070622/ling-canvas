@@ -79,9 +79,10 @@ const selectedModel = computed(() => {
   if (configuredKeys.has(modelStore.selectedChatModel)) return modelStore.selectedChatModel
   return options[0]?.value || ''
 })
-const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value))
+const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value
+  && o.sourceProvider === props.data?.sourceProvider) || modelSelectOptions.value.find(o => o.value === selectedModel.value))
 const providerId = computed(() => (
-  modelStore.resolveModelSourceProvider(selectedModel.value, 'CHAT')
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'CHAT', props.data?.sourceProvider)
   || selectedModelOption.value?.sourceProvider
   || ''
 ))

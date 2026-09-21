@@ -444,21 +444,21 @@ export const useModelStore = defineStore('model', () => {
   // ============ Computed: Available Models (filtered by provider) ============
 
   // Only switched-on models are exposed to selectors. Models are collected
-  // across providers; the current provider wins if the same model ID exists in
-  // more than one provider.
+  // across providers. The same API model ID can belong to several providers;
+  // keep every provider/model pair so the UI can select the actual route.
   const buildEnabledModels = (modelsByProvider, builtIns, globalCustom = [], defaults = {}) => {
     const baseModels = new Map([
       ...builtIns.map(model => [model.key, model]),
       ...globalCustom.map(model => [model.key, model])
     ])
-    const providers = Object.keys(modelsByProvider || {}).sort((a, b) =>
-      Number(b === currentProvider.value) - Number(a === currentProvider.value)
-    )
-    const enabled = new Map()
+    const providerOrder = new Map(providerList.value.map((item, index) => [item.key, index]))
+    const providers = Object.keys(modelsByProvider || {})
+      .filter(provider => providerOrder.has(provider))
+      .sort((a, b) => providerOrder.get(a) - providerOrder.get(b))
+    const enabled = []
     providers.forEach(provider => {
       ;(modelsByProvider[provider] || []).forEach(model => {
-        if (enabled.has(model.key)) return
-        enabled.set(model.key, {
+        enabled.push({
           ...defaults,
           ...(baseModels.get(model.key) || {}),
           key: model.key,
@@ -469,72 +469,21 @@ export const useModelStore = defineStore('model', () => {
         })
       })
     })
-    return [...enabled.values()]
+    return enabled
   }
 
-  // 已配置 Key 的渠道集合
-  const providersWithKey = computed(() => new Set(
-    Object.entries(apiKeysByProvider.value)
-      .filter(([, key]) => String(key || '').trim())
-      .map(([key]) => key)
+  // 画布只显示设置里对每个供应商明确启用的模型。配置了 Key 也不会自动加模型。
+  const availableChatModels = computed(() => buildEnabledModels(
+    customChatModelsByProvider.value, CHAT_MODELS, customChatModels.value
   ))
 
-  /**
-   * 兜底：设置里一个模型都没启用、但某渠道已配好 Key 时，让该渠道的内置模型
-   * 自动进入可选列表。
-   *
-   * 为什么需要：`available*Models` 原本只收录「用户手动启用过」的模型，于是
-   * 全新安装的画布下拉恒为空，节点里点发送只会看到「请先前往设置配置模型」，
-   * 生图链路根本走不到发请求那一步。
-   *
-   * 一旦用户手动启用过任何模型，设置页结果即为准，本兜底自动失效。
-   */
-  const withAutoFallback = (enabled, builtIns, defaults = {}) => {
-    if (enabled.length) return enabled
-    const keys = providersWithKey.value
-    if (!keys.size) return enabled
-    return builtIns
-      .filter(model => (model.provider || []).some(provider => keys.has(provider)))
-      .map(model => ({
-        ...defaults,
-        ...model,
-        isCustom: false,
-        sourceProvider: (model.provider || []).find(provider => keys.has(provider))
-      }))
-  }
-
-  const availableChatModels = computed(() => withAutoFallback(
-    buildEnabledModels(
-      customChatModelsByProvider.value,
-      CHAT_MODELS,
-      customChatModels.value
-    ),
-    CHAT_MODELS
-  ))
-
-  const availableImageModels = computed(() => withAutoFallback(
-    buildEnabledModels(
-      customImageModelsByProvider.value,
-      IMAGE_MODELS,
-      customImageModels.value,
-      { sizes: [], defaultParams: { quality: 'standard', style: 'vivid' } }
-    ),
-    IMAGE_MODELS,
+  const availableImageModels = computed(() => buildEnabledModels(
+    customImageModelsByProvider.value, IMAGE_MODELS, customImageModels.value,
     { sizes: [], defaultParams: { quality: 'standard', style: 'vivid' } }
   ))
 
-  const availableVideoModels = computed(() => withAutoFallback(
-    buildEnabledModels(
-      customVideoModelsByProvider.value,
-      VIDEO_MODELS,
-      customVideoModels.value,
-      {
-        ratios: ['16x9', '9:16', '1:1'],
-        durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
-        defaultParams: { ratio: '16:9', duration: 5 }
-      }
-    ),
-    VIDEO_MODELS,
+  const availableVideoModels = computed(() => buildEnabledModels(
+    customVideoModelsByProvider.value, VIDEO_MODELS, customVideoModels.value,
     {
       ratios: ['16x9', '9:16', '1:1'],
       durs: [{ label: '5秒', key: 5 }, { label: '10秒', key: 10 }],
@@ -584,6 +533,7 @@ export const useModelStore = defineStore('model', () => {
   // 只把它用来算 group 会让节点拿不到渠道，从而误报「该模型未绑定供应商」。
   const toGroupedOptions = (items) => items.map(m => ({
     value: m.key,
+    optionId: `${m.sourceProvider || ''}::${m.key}`,
     label: m.label,
     group: (m.sourceProvider && (providerLabelMap.value[m.sourceProvider] || m.sourceProvider)) || '',
     sourceProvider: m.sourceProvider || ''
@@ -604,13 +554,16 @@ export const useModelStore = defineStore('model', () => {
    * @param {string} modelKey
    * @param {'IMAGE'|'VIDEO'|'CHAT'} [category]
    */
-  const resolveModelSourceProvider = (modelKey, category = 'IMAGE') => {
+  const resolveModelSourceProvider = (modelKey, category = 'IMAGE', preferredProvider = '') => {
     const key = String(modelKey || '').trim()
     if (!key) return ''
+    // 节点已经记录的渠道不能因为另一个渠道也有同名模型而被改道。
+    if (preferredProvider) return preferredProvider
     const pool = category === 'VIDEO'
       ? availableVideoModels.value
       : (category === 'CHAT' ? availableChatModels.value : availableImageModels.value)
-    return pool.find(model => model.key === key)?.sourceProvider || ''
+    return pool.find(model => model.key === key && model.sourceProvider === currentProvider.value)?.sourceProvider
+      || pool.find(model => model.key === key)?.sourceProvider || ''
   }
 
   // ============ Computed: Model Options for UI (filtered by provider - deprecated, use all* instead) ============
@@ -695,9 +648,15 @@ export const useModelStore = defineStore('model', () => {
 
   // ============ Methods: Get Model Config ============
 
-  const getChatModel = (key) => allChatModels.value.find(m => m.key === key)
-  const getImageModel = (key) => allImageModels.value.find(m => m.key === key)
-  const getVideoModel = (key) => allVideoModels.value.find(m => m.key === key)
+  const getChatModel = (key, provider = '') =>
+    (provider ? availableChatModels.value.find(m => m.key === key && m.sourceProvider === provider) : null)
+    || allChatModels.value.find(m => m.key === key)
+  const getImageModel = (key, provider = '') =>
+    (provider ? availableImageModels.value.find(m => m.key === key && m.sourceProvider === provider) : null)
+    || allImageModels.value.find(m => m.key === key)
+  const getVideoModel = (key, provider = '') =>
+    (provider ? availableVideoModels.value.find(m => m.key === key && m.sourceProvider === provider) : null)
+    || allVideoModels.value.find(m => m.key === key)
 
   // ============ Methods: Get API Endpoints ============
 

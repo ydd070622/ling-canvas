@@ -18,6 +18,7 @@
     viewable
     media-kind="image"
     :media-url="data.url || ''"
+    :media-details="mediaDetails"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"
@@ -26,17 +27,48 @@
     @notice-action="handleNoticeAction"
   >
     <template #body>
-      <NodeMedia
-        tone="image"
-        :url="data.url"
-        :loading="data.loading"
-        :alt="data.label"
-        @upload="triggerFileInput"
-        @pick-asset="openAssetPicker"
-        @preview="openPreview"
-        :ratio="configuredRatio"
-        @ratio="onMediaRatio"
-      />
+      <!-- 一次生成的多张都留在这张卡里（画廊），主图排第一。
+           展开是整齐网格，收起只剩主图 + 角标。
+           格子按图片自身比例成形 —— 写死 4:3 会让 3:4 的竖图两边挂黑边。 -->
+      <div v-if="galleryOpen && galleryItems.length > 1" class="flow-image-gallery" :style="galleryStyle">
+        <div v-for="(item, index) in galleryItems" :key="item.url" class="flow-image-gallery-item">
+          <img v-if="!brokenUrls[item.url]" :src="item.url" :alt="`${data.label || '图片'} ${index + 1}`"
+            @dblclick.stop="openPreviewAt(item.url)" @error="markBroken(item.url)" />
+          <!-- 失效的图（旧存档里的临时链接重启就死）给个说明，不留一个问号般的空框 -->
+          <span v-else class="flow-image-gallery-dead">图片已失效</span>
+          <div class="flow-image-gallery-actions nodrag">
+            <button v-if="!brokenUrls[item.url]" type="button" @click.stop="downloadAt(item.url, index)">
+              <n-icon :size="13"><DownloadOutline /></n-icon>下载
+            </button>
+            <button v-if="index === 0" type="button" @click.stop="galleryOpen = false">
+              <n-icon :size="13"><ChevronUpOutline /></n-icon>收起
+            </button>
+            <button v-else type="button" @click.stop="setMainImage(item.index)">
+              <n-icon :size="13"><StarOutline /></n-icon>设为主图
+            </button>
+          </div>
+        </div>
+      </div>
+      <div v-else class="flow-image-stack">
+        <NodeMedia
+          tone="image"
+          :url="data.url"
+          :loading="data.loading"
+          :alt="data.label"
+          @upload="triggerFileInput"
+          @pick-asset="openAssetPicker"
+          @preview="openPreview"
+          :ratio="configuredRatio"
+          @ratio="onMediaRatio"
+          @dimensions="dimensions = $event"
+        />
+        <!-- 角标用图标而不是 ↗ 这类文本箭头：文本箭头在 Windows 的兜底字体里会带一截
+             箭杆，看着像双向箭头。叠纸图标正对应「卡里还有几张」。 -->
+        <button v-if="galleryItems.length > 1" class="flow-gallery-count nodrag" type="button"
+          :aria-label="`展开 ${galleryItems.length} 张图片`" @click.stop="galleryOpen = true">
+          <n-icon :size="15"><ImagesOutline /></n-icon>{{ galleryItems.length }}张
+        </button>
+      </div>
     </template>
   </NodeFrame>
 
@@ -45,8 +77,12 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { NIcon } from 'naive-ui'
+import { DownloadOutline, ChevronUpOutline, StarOutline, ImagesOutline } from '@vicons/ionicons5'
 import { NodeFrame } from './base'
 import NodeMedia from './base/NodeMedia.vue'
+import { formatMediaDetails } from '../../utils/mediaDetails'
+import { downloadMedia } from '../../utils/downloadMedia'
 import { useNodeRefs } from '../../composables/useNodeRefs'
 import { useFocusExpanded, useMultiSelected } from '../../composables/useFocusMode'
 import { useNodeRunBridge } from '../../composables/useNodeRunBridge'
@@ -84,18 +120,52 @@ const multi = useMultiSelected(props.id)
  * 不用等生成出来才看到形状。
  */
 const mediaRatio = ref(0)
+const dimensions = ref(null)
+const mediaDetails = computed(() => formatMediaDetails(dimensions.value))
+
+/* ------------------------------------------------------------ 画廊（多图）*/
+const galleryOpen = ref(false)
+/**
+ * 画廊里的图，主图排第一。
+ * 只有一张时不存在画廊这回事，直接回落到 `url`（上传、单张生成都走这里）。
+ * `index` 是它在 `galleryUrls` 里的原始下标 —— 「设为主图」要靠它写回去。
+ */
+const galleryItems = computed(() => {
+  const urls = Array.isArray(props.data?.galleryUrls) ? props.data.galleryUrls : []
+  if (urls.length > 1) {
+    const main = Math.min(Math.max(Number(props.data?.mainImageIndex) || 0, 0), urls.length - 1)
+    const order = [main, ...urls.map((_, index) => index).filter(index => index !== main)]
+    return order.filter(index => urls[index]).map(index => ({ url: urls[index], index }))
+  }
+  return props.data?.url ? [{ url: props.data.url, index: -1 }] : []
+})
+/** 加载失败的图：死链接（旧存档的 blob: 重启即失效）不给它留一个空框 */
+const brokenUrls = ref({})
+const markBroken = (url) => { brokenUrls.value = { ...brokenUrls.value, [url]: true } }
+const openPreviewAt = url => openMediaViewer({ url, kind: 'image', alt: props.data.label })
+const downloadAt = (url, index) => downloadMedia({ url, kind: 'image', label: `${props.data.label || '图片'}-${index + 1}` })
+const setMainImage = (index) => {
+  const url = props.data?.galleryUrls?.[index]
+  if (url) updateNode(props.id, { url, mainImageIndex: index, updatedAt: Date.now() })
+}
+
 const configuredRatio = computed(() => {
   if (props.data?.size) return ratioValue(normalizeRatioKey(props.data.size))
   if (props.data?.ratio) return ratioValue(String(props.data.ratio))
   return 0
 })
 const effectiveRatio = computed(() => mediaRatio.value || configuredRatio.value)
-const cardWidth = computed(() => cardWidthForRatio(effectiveRatio.value))
+const cardWidth = computed(() => {
+  const single = cardWidthForRatio(effectiveRatio.value)
+  return galleryOpen.value && galleryItems.value.length > 1 ? single * 2 + 10 : single
+})
+/** 格子跟着图片比例走，别让它写死 4:3 */
+const galleryStyle = computed(() => ({ '--flow-gallery-aspect': String(effectiveRatio.value || 4 / 3) }))
 const onMediaRatio = (value) => { mediaRatio.value = value }
 
 const fileInputRef = ref(null)
 const modelStore = useModelStore()
-const { loading: generating, generate, stop: stopGeneration } = useImageGeneration()
+const { loading: generating, progress: genProgress, generate, stop: stopGeneration } = useImageGeneration()
 
 const isGenerating = computed(() => generating.value || props.data?.loading === true)
 
@@ -108,10 +178,11 @@ const selectedModel = computed(() => {
   if (configuredKeys.has(modelStore.selectedImageModel)) return modelStore.selectedImageModel
   return options[0]?.value || ''
 })
-const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value))
+const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value
+  && o.sourceProvider === props.data?.sourceProvider) || modelSelectOptions.value.find(o => o.value === selectedModel.value))
 /** 本节点模型所属渠道：请求按该 provider 解析 Key / 端点 */
 const providerId = computed(() => (
-  modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE')
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE', props.data?.sourceProvider)
   || selectedModelOption.value?.sourceProvider
   || ''
 ))
@@ -119,10 +190,9 @@ const providerLabel = computed(() => (
   providerId.value ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value) : ''
 ))
 const hasProviderKey = computed(() => Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value)))
-const currentModel = computed(() =>
-  modelStore.availableImageModels.find(m => m.key === selectedModel.value) || modelStore.getImageModel(selectedModel.value))
+const currentModel = computed(() => modelStore.getImageModel(selectedModel.value, providerId.value))
 const effectiveModel = computed(() => selectedModel.value)
-const effectiveModelConfig = computed(() => modelStore.getImageModel(effectiveModel.value))
+const effectiveModelConfig = computed(() => modelStore.getImageModel(effectiveModel.value, providerId.value))
 const selectedModelLabel = computed(() => selectedModelOption.value?.label || currentModel.value?.label || '请先配置图片模型')
 
 // 模型写回：卡片的模型/比例/张数控件已经撤掉（参数统一在底部 composer），
@@ -165,7 +235,11 @@ const selectedRatioLabel = computed(() => (
   selectedRatio.value === 'auto' ? '自适应' : ratioDisplay(selectedRatio.value, { keepColon: true })))
 /* ------------------------------------------------------------ 状态与提示 */
 const statusText = computed(() => {
-  if (isGenerating.value) return props.data?.loading ? '生成中…' : '排队中…'
+  // 要多张时是并发 N 次请求，进度比「生成中…」有意义
+  if (isGenerating.value) {
+    if (!props.data?.loading) return '排队中…'
+    return genProgress.total > 1 ? `生成中 ${genProgress.done}/${genProgress.total}` : '生成中…'
+  }
   if (props.data?.error) return '失败'
   return props.data?.url ? '已就绪' : '待生成'
 })
@@ -260,6 +334,8 @@ const handleSend = async (force = false) => {
   }
 
   const seq = ++sendSeq
+  // 扇出时部分请求失败，原因得留到最后那条提示里一起说 —— 只说「少了一张」等于没说
+  let partialFailure = ''
   try {
     const model = effectiveModel.value
     // 拦截对话模型误用（服务端只支持 imagen/banana/seedream 等）
@@ -273,13 +349,32 @@ const handleSend = async (force = false) => {
 
     updateNode(props.id, { loading: true, error: '', model, size: selectedSize.value || null, resolution: selectedResolution.value })
     // 正文里 @文本1 换成上游正文，@图片1 换成可读标记；参考图另走素材字段
-    const generated = await generate(buildRequest(), { providerId: providerId.value })
+    const generated = await generate(buildRequest(), {
+      providerId: providerId.value,
+      onPartialFailure: (errors) => {
+        partialFailure = errors.map(error => error?.message || String(error)).join('；')
+      }
+    })
 
     const results = Array.isArray(generated) ? generated : []
-    const url = results[0]?.url
+    const urls = results.map(item => item?.url).filter(Boolean)
+    const url = urls[0]
     if (!url) throw new Error('接口未返回图片地址')
-    // 卡片只展示单图；多张 base64 不进节点 data，否则会撑爆 localStorage 配额
-    updateNode(props.id, { url, loading: false, updatedAt: Date.now() })
+
+    // 一次生成的多张全留在这张卡里：第 1 张当主图，其余进画廊（角标展开看）
+    galleryOpen.value = false
+    updateNode(props.id, {
+      url, galleryUrls: urls, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+    })
+
+    // 部分请求失败时结果照收（保住的比丢掉好），但要让用户知道少了几张、为什么少
+    const requested = Number(props.data?.count || 1)
+    if (requested > 1 && urls.length < requested) {
+      window.$message?.warning(
+        `要了 ${requested} 张，成功回来 ${urls.length} 张`
+        + (partialFailure ? `。失败原因：${partialFailure}` : '')
+      )
+    }
     // 产出变了 → 下游失效
   } catch (err) {
     // 已经被更新的一次生成（或取消）接手，这次的结果无权改状态

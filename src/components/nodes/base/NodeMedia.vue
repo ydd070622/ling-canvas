@@ -69,7 +69,7 @@ const props = defineProps({
    */
   ratio: { type: Number, default: 0 }
 })
-const emit = defineEmits(['upload', 'pick-asset', 'preview', 'ratio'])
+const emit = defineEmits(['upload', 'pick-asset', 'preview', 'ratio', 'dimensions'])
 
 /**
  * 素材的真实宽高比。
@@ -79,12 +79,14 @@ const ratio = ref(0)
 const measure = (width, height) => {
   if (!width || !height) return
   ratio.value = width / height
+  emit('dimensions', { width, height })
   // 卡片宽度也跟着素材比例走，由外层节点决定（NodeMedia 只管内容）
   emit('ratio', ratio.value)
 }
 watch(() => props.url, () => {
   ratio.value = 0
   emit('ratio', 0)
+  emit('dimensions', null)
 })
 
 const mediaStyle = computed(() => {

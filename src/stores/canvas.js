@@ -395,7 +395,7 @@ export const dropOrphanRefs = (id) => {
 
 /** 写入本地素材（上传 / 拖入） */
 export const setNodeMedia = (id, { url, base64, fileName }) => {
-  const patch = { url, loading: false, error: '', updatedAt: Date.now() }
+  const patch = { url, galleryUrls: [], mainImageIndex: 0, loading: false, error: '', updatedAt: Date.now() }
   if (base64 !== undefined) patch.base64 = base64
   if (fileName !== undefined) patch.fileName = fileName
   editNode(id, patch)
@@ -710,6 +710,17 @@ const persistProjectImages = (projectId) => {
       .then(() => savedImageKeys.set(key, fingerprint))
       .catch(() => {})
   })
+  nodes.value.forEach((node) => {
+    node.data?.galleryUrls?.forEach((url, index) => {
+      if (!url?.startsWith?.('data:')) return
+      const key = `${projectId}:${node.id}:gallery:${index}`
+      const fingerprint = `${url.length}:${url.slice(0, 64)}:${url.slice(-64)}`
+      if (savedImageKeys.get(key) === fingerprint) return
+      saveImage(key, url)
+        .then(() => savedImageKeys.set(key, fingerprint))
+        .catch(() => {})
+    })
+  })
 }
 
 /**
@@ -733,6 +744,19 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
 
     for (const key of keys) {
       const storedNodeId = String(key).slice(prefix.length)
+      const galleryMatch = storedNodeId.match(/^(.*):gallery:(\d+)$/)
+      if (galleryMatch) {
+        const galleryNode = nodesById.get(galleryMatch[1])
+        if (galleryNode?.type === 'image' && Array.isArray(galleryNode.data?.galleryUrls)) {
+          const index = Number(galleryMatch[2])
+          if (index >= galleryNode.data.galleryUrls.length) continue
+          const blob = await loadImage(key)
+          if (blob) {
+            if (!galleryNode.data.galleryUrls[index]) galleryNode.data.galleryUrls[index] = URL.createObjectURL(blob)
+          }
+        }
+        continue
+      }
       const aliasedNodeId = imageNodeAliases?.[storedNodeId]
       let node = nodesById.get(String(aliasedNodeId ?? storedNodeId))
 
@@ -772,6 +796,11 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
         }
       }
     }
+    nodes.value.forEach(node => {
+      if (node.type !== 'image' || !Array.isArray(node.data?.galleryUrls)) return
+      const mainUrl = node.data.galleryUrls[Number(node.data.mainImageIndex) || 0]
+      if (mainUrl) node.data.url = mainUrl
+    })
   } catch (error) {
     console.warn('Failed to restore persisted project images:', error)
   }

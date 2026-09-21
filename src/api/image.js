@@ -96,9 +96,12 @@ export const buildChatImageRequest = ({ model, prompt, images, size, resolution,
 }
 
 /**
- * 生成图片。
+ * 发一次请求，要 1 张图。
  *
- * @param {Object} payload { model, prompt, size, quality, n|count, image }
+ * 张数一律只发 1：上游对 n 的态度太不一致 —— 生图端点认，chat 端点连字段都没有，
+ * 模型自己回几张全看心情。所以「要几张」这件事不交给上游，由 generateImage 扇出。
+ *
+ * @param {Object} payload { model, prompt, size, quality, image }
  * @param {Object} options
  * @param {Object} options.upstream      渠道上下文（modelStore.resolveUpstreamContext 的返回值）
  * @param {string} [options.capability]  强制指定 image | image-edit
@@ -106,7 +109,7 @@ export const buildChatImageRequest = ({ model, prompt, images, size, resolution,
  * @param {number} [options.timeoutMs]
  * @returns {Promise<Array<{url:string, revisedPrompt:string}>>}
  */
-export const generateImage = async (payload = {}, options = {}) => {
+const requestImagesOnce = async (payload = {}, options = {}) => {
   const { upstream, signal, timeoutMs = IMAGE_TIMEOUT_MS, capability } = options
   if (!upstream?.providerConfig) throw new Error('缺少渠道配置，请先到设置中配置供应商')
 
@@ -160,7 +163,7 @@ export const generateImage = async (payload = {}, options = {}) => {
         size: payload.size,
         quality: payload.quality,
         resolution: payload.resolution,
-        count: payload.n ?? payload.count,
+        count: 1,
         referenceImages,
         fileNamePrefix: 'ling-canvas-reference',
         // 少数厂商只认 image[] 字段名，可通过渠道配置覆盖
@@ -198,6 +201,8 @@ export const generateImage = async (payload = {}, options = {}) => {
     const requestBody = normalizeImageGenerationRequestBody({
       requestBody: {
         ...payload,
+        n: 1,
+        count: 1,
         image: referenceImages.length
           ? await toTransportableImages(referenceImages)
           : undefined
@@ -241,4 +246,59 @@ export const generateImage = async (payload = {}, options = {}) => {
   }
 
   return images
+}
+
+/**
+ * 生成图片。
+ *
+ * 要几张由客户端保证：张数 > 1 时并发发同样多次请求（每次都只要 1 张），
+ * 再按完成顺序汇报进度、汇总结果。上游的 n 不可信 —— 聚合站的 chat 端点
+ * 连 n 字段都没有，实测发 n=4 也只回 2 张，所以这里不指望它。
+ *
+ * @param {Object} payload { model, prompt, size, quality, n|count, image }
+ * @param {Object} options
+ * @param {Object} options.upstream      渠道上下文（modelStore.resolveUpstreamContext 的返回值）
+ * @param {string} [options.capability]  强制指定 image | image-edit
+ * @param {AbortSignal} [options.signal]
+ * @param {number} [options.timeoutMs]
+ * @param {(done:number, total:number) => void} [options.onProgress]
+ * @param {(errors:Error[]) => void} [options.onPartialFailure] 有成功也有失败时回调，
+ *   把失败原因交给调用方 —— 结果保留，但「为什么少了几张」不能没人说
+ * @returns {Promise<Array<{url:string, revisedPrompt:string}>>}
+ */
+export const generateImage = async (payload = {}, options = {}) => {
+  const desired = Math.max(1, Math.floor(Number(payload.n ?? payload.count ?? 1) || 1))
+  if (desired <= 1) return requestImagesOnce(payload, options)
+
+  const { onProgress } = options
+  let done = 0
+  onProgress?.(0, desired)
+
+  // 全部同时发，不做并发上限：用户明确要的是「快」，代价是瞬时并发等于张数。
+  // finally 而不是 then —— 失败的那次也要算进度，否则界面会永远停在 2/4。
+  const settled = await Promise.allSettled(
+    Array.from({ length: desired }, () => requestImagesOnce(payload, options)
+      .finally(() => { done += 1; onProgress?.(done, desired) }))
+  )
+
+  const results = []
+  const failures = []
+  settled.forEach(item => (item.status === 'fulfilled'
+    ? results.push(...item.value)
+    : failures.push(item.reason)))
+
+  // 一次请求也可能回多张（chat 协议的模型自己决定张数），多出来的按用户选的数量截断
+  const trimmed = results.slice(0, desired)
+  if (trimmed.length) {
+    // 部分失败：结果照收，但原因绝不能吞 —— 用户看到「少了一张」必须知道为什么，
+    // 否则只会以为功能坏了。顺带打到控制台，省得下次还要靠猜。
+    if (failures.length) {
+      console.warn(`[generateImage] ${failures.length}/${desired} 次请求失败：`, failures)
+      options.onPartialFailure?.(failures)
+    }
+    return trimmed
+  }
+
+  // 全失败才算失败。取消要原样抛出去，上层靠 name === 'AbortError' 判断是不是用户取消
+  throw failures.find(err => err?.name === 'AbortError') || failures[0] || new Error('图片生成失败')
 }

@@ -155,12 +155,14 @@ export const useImageGeneration = () => {
 
   const images = ref([])
   const currentImage = ref(null)
+  // 扇出出图的进度：要 4 张就是 4 次请求，节点上得让用户看见还差几张
+  const progress = reactive({ done: 0, total: 0 })
   let abortController = null
   let generationVersion = 0
 
   /**
    * @param {Object} params { model, prompt, size, n|count, image }
-   * @param {Object} [requestOptions] { providerId, capability, signal }
+   * @param {Object} [requestOptions] { providerId, capability, signal, onProgress }
    * @returns {Promise<Array<{url:string, revisedPrompt:string}>>}
    */
   const generate = async (params = {}, requestOptions = {}) => {
@@ -168,6 +170,8 @@ export const useImageGeneration = () => {
     setLoading(true)
     images.value = []
     currentImage.value = null
+    progress.done = 0
+    progress.total = Math.max(1, Math.floor(Number(params.n || params.count || 1) || 1))
     abortController = requestOptions.signal ? null : new AbortController()
 
     try {
@@ -185,7 +189,7 @@ export const useImageGeneration = () => {
         prompt: params.prompt,
         size: params.size !== undefined ? params.size : (modelConfig?.defaultParams?.size || ''),
         resolution: params.resolution || modelConfig?.defaultParams?.resolution || '',
-        n: Number(params.n || params.count || 1)
+        n: progress.total
       }
       if (referenceImages.length) requestData.image = referenceImages
 
@@ -198,7 +202,14 @@ export const useImageGeneration = () => {
       const result = await generateImage(adapted, {
         upstream,
         capability,
-        signal: requestOptions.signal || abortController?.signal
+        signal: requestOptions.signal || abortController?.signal,
+        onProgress: (done, total) => {
+          progress.done = done
+          progress.total = total
+          requestOptions.onProgress?.(done, total)
+        },
+        // 扇出时部分请求失败：结果照收，失败原因交给节点去说
+        onPartialFailure: errors => requestOptions.onPartialFailure?.(errors)
       })
 
       if (runVersion !== generationVersion) {
@@ -229,10 +240,12 @@ export const useImageGeneration = () => {
       abortController.abort()
       abortController = null
     }
+    progress.done = 0
+    progress.total = 0
     reset()
   }
 
-  return { loading, error, status, images, currentImage, generate, stop, reset }
+  return { loading, error, status, images, currentImage, progress, generate, stop, reset }
 }
 
 /**

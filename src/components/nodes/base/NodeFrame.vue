@@ -14,8 +14,8 @@
     class="flow-node-outer"
     :class="[
       `flow-node-${tone}`,
-      expanded ? 'is-focused' : 'is-compact',
-      { 'is-multi': multi, 'is-dropzone': dragOver }
+      expanded ? 'is-expanded' : 'is-compact',
+      { 'is-focused': focused, 'is-multi': multi, 'is-dropzone': dragOver }
     ]"
     :style="cardStyle"
     @dragover="onDragOver"
@@ -70,6 +70,7 @@
         <span class="flow-zoom-tag-icon" v-html="NODE_ICONS[tone]"></span>
         <span class="flow-zoom-tag-name">{{ typeLabel }}</span>
       </span>
+      <span v-if="!expanded && mediaDetails" class="flow-media-details">{{ mediaDetails }}</span>
 
       <div v-if="expanded" class="flow-card-head">
         <span class="flow-head-left">
@@ -119,7 +120,7 @@
       <!-- 右下角缩放把手：只有可缩放的节点（文本）才有。
             挂在卡片右下角外面一点，不吃框选（nodrag/nopan）。 -->
       <span
-        v-if="expanded && resizable"
+        v-if="focused && resizable"
         class="flow-resize-grip nodrag nopan"
         title="拖动改变大小"
         @mousedown.stop.prevent="startResize"
@@ -188,6 +189,8 @@ const props = defineProps({
   mediaUrl: { type: String, default: '' },
   /** 素材类型，用于取不到响应头时兜底扩展名；空值则按 tone 推断 */
   mediaKind: { type: String, default: '' },
+  /** 素材真实像素与比例，在紧凑态右上角显示 */
+  mediaDetails: { type: String, default: '' },
   /** 多一个「编辑提示词」按钮（AI 任务节点） */
   editable: { type: Boolean, default: false }
 })
@@ -204,7 +207,7 @@ const emit = defineEmits([
 const typeLabel = computed(() => NODE_DEFINITIONS[props.tone]?.label || '')
 
 /** 正文 chrome 是否铺开。常驻展开的节点与选中状态无关，但工具条仍只在选中时出现 */
-const expanded = computed(() => props.focused || props.alwaysExpanded)
+const expanded = computed(() => props.alwaysExpanded)
 
 const cardStyle = computed(() => (
   props.cardWidth ? { '--flow-card-width': `${props.cardWidth}px` } : null

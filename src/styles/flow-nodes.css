@@ -479,6 +479,10 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   background: transparent;
   pointer-events: none;
 }
+.flow-node-outer.is-focused.is-compact .flow-pfield-textarea {
+  pointer-events: auto;
+  user-select: text;
+}
 
 /* 悬停时给一点"这是可以抓的"的暗示 —— 没有描边的话内容态太像一张静态图 */
 .flow-node-outer.is-compact .flow-card::after {
@@ -1010,6 +1014,68 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-zoom-tag-icon svg { width: 13px; height: 13px; }
 .flow-zoom-tag-name { overflow: hidden; text-overflow: ellipsis; }
 
+.flow-media-details {
+  position: absolute;
+  right: 1px;
+  bottom: 100%;
+  z-index: 6;
+  padding-bottom: 7px;
+  color: var(--flow-text-mid);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: scale(calc(min(2, 1 / var(--flow-zoom, 1))));
+  transform-origin: bottom right;
+}
+
+/* ============ 图片节点的画廊（一张卡多图）============ */
+/* 卡边不再往后垫一层"纸片"：原来那层 inset 偏移的底色看着像有张图从卡后面滑出来，
+   而它其实只是个装饰。角标已经足够说明"里面还有几张"。 */
+.flow-image-stack { position: relative; }
+.flow-gallery-count,
+.flow-image-gallery-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(29, 29, 29, 0.83);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  backdrop-filter: blur(8px);
+}
+.flow-gallery-count { position: absolute; z-index: 3; top: 12px; right: 12px; padding: 8px 11px; }
+.flow-gallery-count:hover,
+.flow-image-gallery-actions button:hover { background: rgba(10, 10, 10, 0.94); }
+.flow-image-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+/* 格子按图片自身比例（组件用 --flow-gallery-aspect 传进来）成形。
+   以前写死 4:3 再配 object-fit: contain，3:4 的竖图上下各挂一大条黑边。 */
+.flow-image-gallery-item {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--flow-card-radius);
+  background: var(--flow-well-solid);
+  aspect-ratio: var(--flow-gallery-aspect, 4 / 3);
+}
+.flow-image-gallery-item img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.flow-image-gallery-dead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--flow-text-mid);
+  font-size: 11px;
+}
+.flow-image-gallery-actions { position: absolute; z-index: 2; top: 9px; right: 9px; display: flex; gap: 5px; }
+.flow-image-gallery-actions button { padding: 6px 9px; font-size: 11px; }
+
 /* ============ 端口挪到卡片外面 ============ */
 /* 原来端口圆心正落在卡片边框上（Vue Flow 的基准就是 translate(±50%,-50%)），
    一半压着卡片、一半在外面，看着像长在边框上。往外让开一个身位，
@@ -1063,6 +1129,13 @@ textarea.flow-pfield-textarea:focus { outline: none; }
    ========================================================================== */
 
 .flow-node-outer.flow-node-render .flow-card { width: var(--flow-card-width, 400px); }
+
+.flow-render-compact { position: relative; display: grid; min-height: 225px; place-items: center; background: var(--flow-well-solid); }
+.flow-render-compact > img { display: block; width: 100%; height: 225px; object-fit: cover; }
+.flow-render-compact-info { position: absolute; right: 12px; bottom: 12px; left: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 9px; background: rgba(20, 20, 22, 0.8); color: #fff; font-size: 11px; }
+.flow-render-compact-info button,
+.flow-render-collapse { border: 0; border-radius: 7px; padding: 6px 9px; background: #fff; color: #242529; cursor: pointer; font: inherit; font-weight: 650; white-space: nowrap; }
+.flow-render-collapse { align-self: flex-end; margin: 9px 10px 0; background: var(--flow-well-solid); color: var(--flow-text-mid); font-size: 11px; }
 
 .flow-render { display: flex; flex-direction: column; }
 

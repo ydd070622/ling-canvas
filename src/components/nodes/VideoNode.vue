@@ -17,6 +17,7 @@
     viewable
     media-kind="video"
     :media-url="data.url || ''"
+    :media-details="mediaDetails"
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"
@@ -35,6 +36,7 @@
         @preview="openPreview"
         :ratio="configuredRatio"
         @ratio="onMediaRatio"
+        @dimensions="dimensions = $event"
       />
     </template>
   </NodeFrame>
@@ -45,6 +47,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NodeFrame } from './base'
+import { formatMediaDetails } from '../../utils/mediaDetails'
 import NodeMedia from './base/NodeMedia.vue'
 import { useNodeRefs } from '../../composables/useNodeRefs'
 import { useFocusExpanded, useMultiSelected } from '../../composables/useFocusMode'
@@ -76,6 +79,8 @@ const multi = useMultiSelected(props.id)
 
 /** 同图片节点：有素材按素材，没素材按配置的出图比例 */
 const mediaRatio = ref(0)
+const dimensions = ref(null)
+const mediaDetails = computed(() => formatMediaDetails(dimensions.value))
 const configuredRatio = computed(() => (props.data?.ratio ? ratioValue(String(props.data.ratio)) : 0))
 const effectiveRatio = computed(() => mediaRatio.value || configuredRatio.value)
 const cardWidth = computed(() => cardWidthForRatio(effectiveRatio.value))
@@ -95,9 +100,10 @@ const selectedModel = computed(() => {
   if (configuredKeys.has(modelStore.selectedVideoModel)) return modelStore.selectedVideoModel
   return options[0]?.value || ''
 })
-const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value))
+const selectedModelOption = computed(() => modelSelectOptions.value.find(o => o.value === selectedModel.value
+  && o.sourceProvider === props.data?.sourceProvider) || modelSelectOptions.value.find(o => o.value === selectedModel.value))
 const providerId = computed(() => (
-  modelStore.resolveModelSourceProvider(selectedModel.value, 'VIDEO')
+  modelStore.resolveModelSourceProvider(selectedModel.value, 'VIDEO', props.data?.sourceProvider)
   || selectedModelOption.value?.sourceProvider
   || ''
 ))
@@ -105,8 +111,7 @@ const providerLabel = computed(() => (
   providerId.value ? (modelStore.getProviderConfigById(providerId.value)?.label || providerId.value) : ''
 ))
 const hasProviderKey = computed(() => Boolean(providerId.value) && Boolean(modelStore.getApiKeyByProvider(providerId.value)))
-const currentModel = computed(() =>
-  modelStore.availableVideoModels.find(m => m.key === selectedModel.value) || modelStore.getVideoModel(selectedModel.value))
+const currentModel = computed(() => modelStore.getVideoModel(selectedModel.value, providerId.value))
 const effectiveModel = computed(() => selectedModel.value)
 // 模型写回：卡片的模型/清晰度控件已经撤掉（参数统一在底部 composer），
 // 节点仍要记住自己该用哪个模型

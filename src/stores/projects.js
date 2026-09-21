@@ -96,6 +96,11 @@ const cleanNodeForStorage = (node) => {
   if (cleanedData.url?.startsWith?.('data:') || cleanedData.url?.startsWith?.('blob:')) {
     delete cleanedData.url
   }
+  if (Array.isArray(cleanedData.galleryUrls)) {
+    cleanedData.galleryUrls = cleanedData.galleryUrls.map(url =>
+      url?.startsWith?.('data:') || url?.startsWith?.('blob:') ? null : url
+    )
+  }
   
   // Remove mask data | 移除蒙版数据
   if (cleanedData.maskData) {

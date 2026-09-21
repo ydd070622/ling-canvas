@@ -113,12 +113,11 @@
     <OptionPanel
       :visible="modelOpen"
       :anchor="modelTriggerRef"
-      :model-value="selectedModel"
+      :model-value="selectedOptionId"
       :options="modelPanelOptions"
-      :show-badge="showProviderBadge"
       search-placeholder="筛选模型…"
       empty-text="没有可用模型"
-      @update:model-value="selectedModel = $event"
+      @update:model-value="pickModel"
       @close="modelOpen = false"
     />
 
@@ -140,6 +139,7 @@
       :ratio-options="ratioOptions"
       :count="count"
       :count-options="effectiveTarget === 'image' ? COUNTS : []"
+      :count-hint="countHint"
       :video-preset="videoPreset"
       :video-preset-options="effectiveTarget === 'video' ? videoPresetOptions : []"
       @update:resolution="resolution = $event"
@@ -220,6 +220,15 @@ const ratio = ref('auto')
 const count = ref(1)
 const preset = ref(null)
 
+/**
+ * 张数是客户端并发发 N 次请求，不是一次请求出 N 张 ——
+ * 上游普遍不认 n（聚合站的 chat 端点连这个字段都没有），
+ * 所以选了 4 张就是 4 次调用、4 份费用。这事必须先说清。
+ */
+const countHint = computed(() => (
+  count.value > 1 ? `每张都是一次独立请求，共 ${count.value} 次调用、约 ${count.value} 倍费用` : ''
+))
+
 /* ------------------------------------------------------------------ 选中上下文 */
 const selectedNodes = computed(() => nodes.value.filter(node => selectedNodeIds.value.includes(String(node.id))))
 /** 恰好选中一个内容节点 = 编辑它的提示词 */
@@ -272,6 +281,8 @@ const modelOptions = computed(() => modelsFor(
   effectiveTarget.value === 'image' ? 'IMAGE' : effectiveTarget.value === 'video' ? 'VIDEO' : 'CHAT'
 ))
 const selectedModel = ref('')
+const selectedProvider = ref('')
+const selectedOptionId = computed(() => `${selectedProvider.value}::${selectedModel.value}`)
 const videoPreset = ref('')
 const resolution = ref('')
 const paramOpen = ref(false)
@@ -283,23 +294,28 @@ const presetOpen = ref(false)
 /**
  * 面板里的行比下拉选项多两样东西：
  * - `tips` 当副标题（部分模型声明了用法提示，比如"尺寸写在提示词中"）
- * - 渠道名当右侧角标，但只在配了多个渠道时才显示（单渠道时每行都一样，纯噪音）
+ * - 供应商按真实的模型来源分组，同名模型保留各自的选项。
  */
 const modelPanelOptions = computed(() => modelOptions.value.map(option => {
   const detail = effectiveTarget.value === 'video'
-    ? modelStore.getVideoModel?.(option.value)
+    ? modelStore.getVideoModel?.(option.value, option.sourceProvider)
     : effectiveTarget.value === 'text'
-      ? modelStore.getChatModel?.(option.value)
-      : modelStore.getImageModel?.(option.value)
-  return { ...option, tips: detail?.tips || '', provider: option.group || '' }
+      ? modelStore.getChatModel?.(option.value, option.sourceProvider)
+      : modelStore.getImageModel?.(option.value, option.sourceProvider)
+  return { ...option, value: option.optionId, modelKey: option.value, tips: detail?.tips || '' }
 }))
-const showProviderBadge = computed(() => (
-  new Set(modelPanelOptions.value.map(option => option.provider).filter(Boolean)).size > 1
-))
+const pickModel = (optionId) => {
+  const option = modelOptions.value.find(item => item.optionId === optionId)
+  if (!option) return
+  selectedProvider.value = option.sourceProvider
+  selectedModel.value = option.value
+}
 
 const modelButtonLabel = computed(() => {
-  const hit = modelOptions.value.find(option => option.value === selectedModel.value)
-  return hit?.label || (modelOptions.value.length ? '选择模型' : '未配置模型')
+  const hit = modelOptions.value.find(option => option.value === selectedModel.value && option.sourceProvider === selectedProvider.value)
+  if (!hit) return modelOptions.value.length ? '选择模型' : '未配置模型'
+  const duplicated = modelOptions.value.filter(option => option.value === hit.value).length > 1
+  return duplicated ? `${hit.group} · ${hit.label}` : hit.label
 })
 
 /**
@@ -308,10 +324,10 @@ const modelButtonLabel = computed(() => {
  */
 const imageTier = computed(() => {
   const upstream = modelStore.resolveUpstreamContext(
-    modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE') || ''
+    selectedProvider.value || modelStore.resolveModelSourceProvider(selectedModel.value, 'IMAGE') || ''
   )
   const args = {
-    model: modelStore.getImageModel?.(selectedModel.value),
+    model: modelStore.getImageModel?.(selectedModel.value, selectedProvider.value),
     modelKey: selectedModel.value,
     providerConfig: upstream.providerConfig,
     baseUrl: upstream.baseUrl
@@ -329,7 +345,7 @@ watch([selectedModel, resolutionOptions], () => {
 
 /** 视频的「清晰度 · 时长」，按模型能力列 */
 const videoPresetOptions = computed(() => {
-  const model = modelStore.getVideoModel?.(selectedModel.value)
+  const model = modelStore.getVideoModel?.(selectedModel.value, selectedProvider.value)
   const resolutions = model?.resolutions?.length ? model.resolutions : [model?.defaultResolution || '1080p']
   const durations = model?.durs?.length ? model.durs.map(item => item.key) : [model?.defaultParams?.duration || 5]
   return resolutions.flatMap(resolution => durations.map(duration => ({
@@ -357,8 +373,8 @@ const ratioOptions = computed(() => {
   const target = effectiveTarget.value
   if (target === 'text') return []
   const model = target === 'video'
-    ? modelStore.getVideoModel?.(selectedModel.value)
-    : modelStore.getImageModel?.(selectedModel.value)
+    ? modelStore.getVideoModel?.(selectedModel.value, selectedProvider.value)
+    : modelStore.getImageModel?.(selectedModel.value, selectedProvider.value)
   const declared = target === 'video'
     ? model?.ratios
     : (model?.sizes || []).map(ratioFromSize)
@@ -369,8 +385,11 @@ const ratioOptions = computed(() => {
 })
 
 watch(modelOptions, (options) => {
-  const keys = new Set(options.map(option => option.value))
-  if (!keys.has(selectedModel.value)) selectedModel.value = options[0]?.value || ''
+  const match = options.find(option => option.value === selectedModel.value && option.sourceProvider === selectedProvider.value)
+  if (match) return
+  const fallback = options.find(option => option.value === selectedModel.value) || options[0]
+  selectedProvider.value = fallback?.sourceProvider || ''
+  selectedModel.value = fallback?.value || ''
 }, { immediate: true })
 
 // 编辑模式下选项要反映那个节点自己的设置
@@ -385,8 +404,17 @@ watch(editingNode, (node) => {
     ? normalizeRatioKey(node.data.size)
     : (node.data?.ratio || 'auto')
   count.value = Number(node.data?.count || 1)
-  if (node.data?.model) selectedModel.value = node.data.model
-  const model = modelStore.getVideoModel?.(selectedModel.value)
+  if (node.data?.model) {
+    const category = targetOf(node) === 'video' ? 'VIDEO' : targetOf(node) === 'text' ? 'CHAT' : 'IMAGE'
+    const preferred = node.data.sourceProvider
+      || modelStore.resolveModelSourceProvider(node.data.model, category)
+    const match = modelOptions.value.find(option => option.value === node.data.model
+      && option.sourceProvider === preferred)
+      || modelOptions.value.find(option => option.value === node.data.model)
+    selectedProvider.value = match?.sourceProvider || preferred || ''
+    selectedModel.value = match?.value || node.data.model
+  }
+  const model = modelStore.getVideoModel?.(selectedModel.value, selectedProvider.value)
   videoPreset.value = `${node.data?.resolution || model?.defaultResolution || '1080p'}:${node.data?.duration || model?.defaultParams?.duration || 5}`
   const saved = String(node.data?.resolution || '').toUpperCase()
   if (saved) resolution.value = saved
@@ -400,6 +428,7 @@ const desiredParams = () => {
   const target = effectiveTarget.value
   const patch = {}
   if (selectedModel.value) patch.model = selectedModel.value
+  if (selectedProvider.value) patch.sourceProvider = selectedProvider.value
   if (target === 'text') return patch
 
   if (ratio.value === 'auto') {
@@ -407,7 +436,7 @@ const desiredParams = () => {
     patch.ratio = null
   } else {
     const matched = target === 'image'
-      ? findSizeByRatio(modelStore.getImageModel?.(selectedModel.value)?.sizes || [], ratio.value)
+      ? findSizeByRatio(modelStore.getImageModel?.(selectedModel.value, selectedProvider.value)?.sizes || [], ratio.value)
       : null
     patch.size = matched || null
     patch.ratio = matched ? null : ratio.value
@@ -441,7 +470,7 @@ const applyOptionsToNode = () => {
   if (!changed) return
   editNode(node.id, patch)
 }
-watch([selectedModel, ratio, count, videoPreset, resolution, editingNode], applyOptionsToNode)
+watch([selectedModel, selectedProvider, ratio, count, videoPreset, resolution, editingNode], applyOptionsToNode)
 
 /** 换产出类型：模型与参数整套换掉，否则会拿着图片参数去调视频模型 */
 const changeTargetType = (value) => {
@@ -451,6 +480,7 @@ const changeTargetType = (value) => {
   editNode(node.id, {
     targetType: value,
     model: '',
+    sourceProvider: '',
     size: null,
     ratio: null,
     count: 1,
@@ -751,27 +781,26 @@ const send = async () => {
   const { prompt, refBindings } = resolveTokens(taskId, text.value)
   updateNode(taskId, { prompt, refBindings })
 
-  // 4) 输出节点。只有图片按张数出多个，视频/文本一次就一个
+  // 4) 输出节点。一次只出一个：图片要 4 张也是全进同一张卡的画廊（与节点上直接生成一致），
+  //    铺开成 4 个节点会让「要一组图」在画布上炸成一片
   const outputs = []
-  const outputCount = targetType.value === 'image' ? count.value : 1
-  const columns = Math.min(outputCount, 2)
-  for (let index = 0; index < outputCount; index += 1) {
-    const column = index % columns
-    const row = Math.floor(index / columns)
-    const outputId = addNode(targetType.value, {
-      x: center.x + 220 + column * 360,
-      y: center.y - 40 + row * 300
-    }, { label: KIND_TITLE[targetType.value] || '结果' })
-    addEdge({
-      source: taskId,
-      target: outputId,
-      sourceHandle: OUTPUT_HANDLE,
-      targetHandle: INPUT_HANDLE,
-      type: 'flowEdge',
-      data: { order: index + 1 }
-    })
-    outputs.push(outputId)
-  }
+  const outputId = addNode(targetType.value, {
+    x: center.x + 220,
+    y: center.y - 40
+  }, {
+    label: KIND_TITLE[targetType.value] || '结果',
+    model: selectedModel.value,
+    sourceProvider: selectedProvider.value
+  })
+  addEdge({
+    source: taskId,
+    target: outputId,
+    sourceHandle: OUTPUT_HANDLE,
+    targetHandle: INPUT_HANDLE,
+    type: 'flowEdge',
+    data: { order: 1 }
+  })
+  outputs.push(outputId)
   endBatchOperation()
 
   nodes.value = nodes.value.map(node => ({ ...node, selected: outputs.includes(node.id) }))

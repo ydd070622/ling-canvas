@@ -221,11 +221,9 @@
     <div class="flow-render-grid is-model">
       <FieldShell label="渲染模型" hint="整组共用">
         <select class="flow-render-select nodrag" :value="modelValue" @change="emit('update:model', $event.target.value)">
-          <option
-            v-for="option in modelOptions"
-            :key="option.value"
-            :value="option.value"
-          >{{ option.label }}</option>
+          <optgroup v-for="group in modelGroups" :key="group.label" :label="group.label">
+            <option v-for="option in group.options" :key="option.optionId" :value="option.optionId">{{ option.label }}</option>
+          </optgroup>
         </select>
       </FieldShell>
       <FieldShell label="输出清晰度" :hint="resolutionHint">
@@ -257,6 +255,15 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['set', 'update:model', 'upload'])
+const modelGroups = computed(() => {
+  const groups = new Map()
+  props.modelOptions.forEach(option => {
+    const label = option.group || '其他供应商'
+    if (!groups.has(label)) groups.set(label, [])
+    groups.get(label).push(option)
+  })
+  return [...groups].map(([label, options]) => ({ label, options }))
+})
 
 const set = (key, next) => emit('set', key, next)
 
