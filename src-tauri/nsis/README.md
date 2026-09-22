@@ -72,16 +72,20 @@ git diff --no-index src-tauri/nsis/installer.nsi new.nsi
 
 ## 数据在哪（覆盖安装/卸载会不会丢）
 
-画布项目数据在 **WebView2 的 user-data 目录**：
-`%LOCALAPPDATA%\com.lingcanvas.app\EBWebView`（localStorage + IndexedDB）。
+画布项目与图片在 **`%APPDATA%\com.lingcanvas.app`**：`projects\<projectId>.json`
+一项目一文件，`media\<projectId>\<key>.media` 一张一文件（v1.9.0 起）。素材库根目录
+如果设过，路径也记在这一层。
 
-素材库根目录如果设过，路径记在 `%APPDATA%\com.lingcanvas.app`（`app_config_dir()`）。
+> v1.9.0 之前数据在 WebView2 的 user-data 目录
+> （`%LOCALAPPDATA%\com.lingcanvas.app\EBWebView` 里的 localStorage + IndexedDB）。
+> v1.9.0 首次启动会把旧 localStorage 快照迁进 `projects\`，逐个 id 核对能读回来之后
+> 才删旧键；旧 IndexedDB 里的图片保持可读，读到时会顺手回写成文件。
 
-两者都在安装目录之外，**覆盖安装只动安装目录，数据不受影响**。
+都在安装目录之外，**覆盖安装只动安装目录，数据不受影响**。
 
 ⚠ 唯一会删数据的是**卸载程序**里那个「删除应用程序数据」勾选框
-（模板里的 `$DeleteAppDataCheckboxState`）—— 它会 `RmDir /r` 掉上面两个目录，
-连画布项目一起清空。卸载时别勾。
+（模板里的 `$DeleteAppDataCheckboxState`）—— 它 `RmDir /r` 掉 `$APPDATA\${BUNDLEID}`
+与 `$LOCALAPPDATA\${BUNDLEID}`（模板 942/943 行），连画布项目一起清空。卸载时别勾。
 
 ## 打包与验证
 
