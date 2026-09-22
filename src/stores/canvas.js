@@ -399,6 +399,13 @@ export const setNodeMedia = (id, { url, base64, fileName }) => {
   if (base64 !== undefined) patch.base64 = base64
   if (fileName !== undefined) patch.fileName = fileName
   editNode(id, patch)
+
+  // Start persisting large uploads immediately. Waiting for the debounced
+  // project save leaves a window where refresh/close can discard the bytes.
+  const dataUrl = base64 || (url?.startsWith?.('data:') ? url : '')
+  if (currentProjectId.value && dataUrl) {
+    queueImageSave(`${currentProjectId.value}:${id}`, dataUrl)
+  }
 }
 
 /**
@@ -678,7 +685,7 @@ export const saveProject = () => {
   // Never put Vue Flow's live reactive objects into the project store. Vue Flow
   // enriches nodes during mount (dimensions, dragging state, handle bounds, ...).
   // Sharing those objects with persistence can turn one internal layout update
-  // into a cascade of project/localStorage updates.
+  // into a cascade of project persistence writes.
   const snapshot = JSON.parse(JSON.stringify({
     schemaVersion: CANVAS_SCHEMA_VERSION,
     nodes: nodes.value,
@@ -693,10 +700,46 @@ export const saveProject = () => {
 
 // Already-persisted asset fingerprints, avoids rewriting unchanged binary payloads.
 const savedImageKeys = new Map()
+const pendingImageFingerprints = new Map()
+let imageSaveQueue = Promise.resolve()
+let lastImageSaveError = null
+
+const imageFingerprint = dataUrl => `${dataUrl.length}:${dataUrl.slice(0, 64)}:${dataUrl.slice(-64)}`
+
+/** Serialize IndexedDB writes and coalesce duplicate snapshots per node. */
+const queueImageSave = (key, dataUrl) => {
+  const fingerprint = imageFingerprint(dataUrl)
+  if (savedImageKeys.get(key) === fingerprint || pendingImageFingerprints.get(key) === fingerprint) {
+    return imageSaveQueue
+  }
+  pendingImageFingerprints.set(key, fingerprint)
+  imageSaveQueue = imageSaveQueue
+    .then(async () => {
+      await saveImage(key, dataUrl)
+      savedImageKeys.set(key, fingerprint)
+      lastImageSaveError = null
+    })
+    .catch(error => {
+      lastImageSaveError = error
+      console.error('Failed to persist canvas media:', error)
+      window.$message?.error('图片尚未保存完成，请勿刷新或关闭应用')
+    })
+    .finally(() => {
+      if (pendingImageFingerprints.get(key) === fingerprint) {
+        pendingImageFingerprints.delete(key)
+      }
+    })
+  return imageSaveQueue
+}
+
+export const flushCanvasMediaSaves = async () => {
+  await imageSaveQueue
+  return !lastImageSaveError
+}
 
 /**
  * Persist node data-URL media to IndexedDB | 把节点里的 base64 图片/视频写入 IndexedDB
- * (localStorage copies are stripped by cleanNodeForStorage)
+ * (project-document copies are stripped by cleanNodeForStorage)
  */
 const persistProjectImages = (projectId) => {
   nodes.value.forEach((node) => {
@@ -704,21 +747,13 @@ const persistProjectImages = (projectId) => {
     const dataUrl = base64 || (node.data?.url?.startsWith?.('data:') ? node.data.url : '')
     if (!dataUrl) return
     const key = `${projectId}:${node.id}`
-    const fingerprint = `${dataUrl.length}:${dataUrl.slice(0, 64)}:${dataUrl.slice(-64)}`
-    if (savedImageKeys.get(key) === fingerprint) return
-    saveImage(key, dataUrl)
-      .then(() => savedImageKeys.set(key, fingerprint))
-      .catch(() => {})
+    queueImageSave(key, dataUrl)
   })
   nodes.value.forEach((node) => {
     node.data?.galleryUrls?.forEach((url, index) => {
       if (!url?.startsWith?.('data:')) return
       const key = `${projectId}:${node.id}:gallery:${index}`
-      const fingerprint = `${url.length}:${url.slice(0, 64)}:${url.slice(-64)}`
-      if (savedImageKeys.get(key) === fingerprint) return
-      saveImage(key, url)
-        .then(() => savedImageKeys.set(key, fingerprint))
-        .catch(() => {})
+      queueImageSave(key, url)
     })
   })
 }
@@ -750,9 +785,11 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
         if (galleryNode?.type === 'image' && Array.isArray(galleryNode.data?.galleryUrls)) {
           const index = Number(galleryMatch[2])
           if (index >= galleryNode.data.galleryUrls.length) continue
-          const blob = await loadImage(key)
-          if (blob) {
-            if (!galleryNode.data.galleryUrls[index]) galleryNode.data.galleryUrls[index] = URL.createObjectURL(blob)
+          const media = await loadImage(key)
+          if (media) {
+            if (!galleryNode.data.galleryUrls[index]) {
+              galleryNode.data.galleryUrls[index] = typeof media === 'string' ? media : URL.createObjectURL(media)
+            }
           }
         }
         continue
@@ -782,10 +819,10 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
       // manual recovery pass may still be able to reconnect the binary.
       if (!node || !isMediaNodeType(node.type)) continue
 
-      const blob = await loadImage(key)
+      const media = await loadImage(key)
       const hasTemporaryBlobUrl = node.data?.url?.startsWith?.('blob:')
-      if (blob && node.data && (!node.data.url || hasTemporaryBlobUrl)) {
-        node.data.url = URL.createObjectURL(blob)
+      if (media && node.data && (!node.data.url || hasTemporaryBlobUrl)) {
+        node.data.url = typeof media === 'string' ? media : URL.createObjectURL(media)
         const restoredNodeId = String(node.id)
         claimedNodeIds.add(restoredNodeId)
 
@@ -821,11 +858,14 @@ const findNodeById = (nodeId) => nodes.value.find(node => String(node.id) === St
 
 /** 把素材的渲染状态写回**当前**节点；不走 updateNode，避免污染撤销栈与触发保存 */
 const applyAssetState = (nodeId, { url, error }) => {
-  const node = findNodeById(nodeId)
-  if (!node?.data) return
-  node.data.url = url
-  if (error) node.data.error = error
-  else delete node.data.error
+  const id = String(nodeId)
+  nodes.value = nodes.value.map(node => {
+    if (String(node.id) !== id || !node.data) return node
+    const data = { ...node.data, url }
+    if (error) data.error = error
+    else delete data.error
+    return { ...node, data }
+  })
 }
 
 /**
@@ -836,7 +876,7 @@ const applyAssetState = (nodeId, { url, error }) => {
  *
  * **直接改 `node.data` 而不走 `updateNode`**：updateNode 会调 scheduleHistorySave()
  * 和 debouncedSave()，那样打开一个含 20 张素材的画布会往撤销栈塞 20 条记录、
- * 并触发 20 次 localStorage 写入。项目规则见
+ * 并触发 20 次项目文档写入。项目规则见
  * `.qoder/feedback-no-auto-save-on-node-change.md`。
  */
 export const hydrateAssetRefs = async (projectId) => {

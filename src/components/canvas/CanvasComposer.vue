@@ -39,7 +39,7 @@
           ref="inputRef"
           v-model="text"
           class="compose-input"
-          :placeholder="placeholder"
+          placeholder=""
           title="Enter 发送 · Shift+Enter 换行"
           @input="onInput"
           @keydown="onKeydown"
@@ -561,14 +561,6 @@ const sendTitle = computed(() => {
   // 是**停止**不是暂停：cancelNode 会中断本次生成，没有"续上"的机制
   return editingBusy.value ? '停止生成' : '生成'
 })
-
-/* ------------------------------------------------------------------ 提示词 */
-// 占位文案别写小作文：上下文已经由上方的 chip 表达了，这里只说"该输入什么"
-const placeholder = computed(() => (
-  isEditing.value
-    ? `编辑这个${KIND_TITLE[editingNode.value.type] || '节点'}的提示词…`
-    : '描述下一步，或用 @ 引用上游'
-))
 
 watch(editingNode, (node) => {
   text.value = node ? String(node.data?.prompt || '') : ''

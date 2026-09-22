@@ -22,6 +22,7 @@
         :max-zoom="2"
         :zoom-on-double-click="false"
         :selection-key-code="true"
+        :multi-selection-key-code="['Control', 'Meta', 'Shift']"
         :selection-mode="'partial'"
         :pan-on-drag="[1, 2]"
         :pan-activation-key-code="'Space'"
@@ -58,15 +59,16 @@
         :style="selectionOverlay.boxStyle"
       >
         <div class="selection-action-bar" @mousedown.stop @click.stop>
-          <button type="button" class="selection-action" @click="groupSelectedNodes">
+          <button type="button" class="selection-action" title="将所选节点编为一组" @click="groupSelectedNodes">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="2.4" /><circle cx="17" cy="17" r="2.4" /><path d="M9 8.5l6 6M15 8.5l-6 6" /></svg>
             <span>打组</span>
           </button>
-          <button type="button" class="selection-action" @click="duplicateSelectedNodes">
+          <button type="button" class="selection-action" title="复制所选节点" @click="duplicateSelectedNodes">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg>
             <span>复制</span>
           </button>
-          <button type="button" class="selection-action is-primary" @click="createDownstreamFromSelection">
+          <span class="selection-action-divider" aria-hidden="true"></span>
+          <button type="button" class="selection-action is-primary" title="基于所选内容创建下游" @click="createDownstreamFromSelection">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             <span>创建下游</span>
           </button>
@@ -266,6 +268,7 @@
           </section>
           <section>
             <h4>其他</h4>
+            <div class="shortcut-row"><span>多选节点</span><kbd>Ctrl/Shift</kbd><i>+</i><span>点击</span></div>
             <div class="shortcut-row"><span>撤销</span><kbd>Ctrl</kbd><i>+</i><kbd>Z</kbd></div>
             <div class="shortcut-row"><span>重做</span><kbd>Ctrl</kbd><i>+</i><kbd>Shift</kbd><i>+</i><kbd>Z</kbd></div>
             <div class="shortcut-row"><span>删除</span><kbd>⌫</kbd></div>
@@ -367,16 +370,18 @@ import {
   DocumentTextOutline,
   SparklesOutline
 } from '@vicons/ionicons5'
-import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, setNodeMedia, cutEdge, editNode, duplicateNode } from '../stores/canvas'
+import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEdges, updateNode, updateNodeMeta, removeNode, removeEdge, normalizeEdgeOrders, loadProject, saveProject, flushCanvasMediaSaves, clearCanvas, canvasViewport, updateViewport, undo, redo, canUndo, canRedo, manualSaveHistory, startBatchOperation, endBatchOperation, hydrateSingleAssetNode, inEdges, renumberNodeRefs, setNodeMedia, cutEdge, editNode, duplicateNode } from '../stores/canvas'
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
-import { projects, initProjectsStore, renameProject, deleteProject } from '../stores/projects'
+import { projects, initProjectsStore, renameProject, deleteProject, flushProjectSaves } from '../stores/projects'
 import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
 import { focusedNodeId, selectedNodeIds } from '../composables/useFocusMode'
 import { activeEdgeId, clearEdgeFocus } from '../composables/useEdgeFocus'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
 let handleBeforeUnload = null
+let closeRequestUnlisten = null
+let isDestroyingWindow = false
 
 // API Settings component | API 设置组件
 import ApiSettings from '../components/ApiSettings.vue'
@@ -1242,15 +1247,8 @@ const onNodeClick = (event) => {
   // 点节点＝注意力换到节点上，钉住的剪刀收起来
   clearEdgeFocus()
 
-  const clickedId = event.node.id
-  // Shift+点击 = 加选/取消（与框选同一种"多选"语义）；否则只选中它自己
-  const additive = Boolean(event.event?.shiftKey)
-  nodes.value = nodes.value.map(node => {
-    if (additive) {
-      return node.id === clickedId ? { ...node, selected: !node.selected } : node
-    }
-    return { ...node, selected: node.id === clickedId }
-  })
+  // Selection itself is handled by Vue Flow. Rewriting `selected` here used
+  // to run after Vue Flow and collapse Ctrl-selection (or toggle Shift twice).
 }
 
 /**
@@ -1648,12 +1646,48 @@ onMounted(async () => {
 
   // Save before window/tab close | 窗口/标签页关闭前保存
   handleBeforeUnload = (e) => {
+    if (isDestroyingWindow) return
     saveProject()
   }
   window.addEventListener('beforeunload', handleBeforeUnload)
 
+  // Tauri can actually await the queued atomic file write before destroying
+  // the window. Browser beforeunload cannot await IndexedDB and remains only a
+  // best-effort fallback for web development.
+  if ('__TAURI_INTERNALS__' in window) {
+    try {
+      const appWindow = getCurrentWindow()
+      closeRequestUnlisten = await appWindow.onCloseRequested(async event => {
+        if (isDestroyingWindow) return
+        event.preventDefault()
+        saveProject()
+        const [projectSaved, mediaSaved] = await Promise.all([
+          flushProjectSaves(),
+          flushCanvasMediaSaves()
+        ])
+        if (!projectSaved || !mediaSaved) {
+          window.$message?.error('项目或图片尚未保存成功，已取消关闭窗口')
+          return
+        }
+        isDestroyingWindow = true
+        try {
+          // Destroy only after both persistence queues have drained. The
+          // explicit capability keeps ACL enforcement from rejecting this
+          // final, non-recursive shutdown step.
+          await appWindow.destroy()
+        } catch (error) {
+          isDestroyingWindow = false
+          console.error('[ProjectStorage] window destroy failed:', error)
+          window.$message?.error('关闭窗口失败，请重试')
+        }
+      })
+    } catch (err) {
+      console.warn('[ProjectStorage] close-save hook unavailable:', err)
+    }
+  }
+
   // Initialize projects store | 初始化项目存储
-  initProjectsStore()
+  await initProjectsStore()
 
   // Load project data | 加载项目数据
   loadProjectById(route.params.id)
@@ -2008,6 +2042,10 @@ onUnmounted(() => {
     window.removeEventListener('beforeunload', handleBeforeUnload)
     handleBeforeUnload = null
   }
+  if (closeRequestUnlisten) {
+    closeRequestUnlisten()
+    closeRequestUnlisten = null
+  }
 
   // Clean up Tauri native drag-drop listener | 清理 Tauri 原生拖拽监听器
   if (canvasDragDropUnlisten) {
@@ -2016,8 +2054,10 @@ onUnmounted(() => {
   }
   window.removeEventListener('dragover', preventWindowDrop)
   window.removeEventListener('drop', preventWindowDrop)
-  // Save project before leaving | 离开前保存项目
-  saveProject()
+  // Route changes still need a final save. Native window close already saved
+  // and flushed before destroy; queuing another IPC write while the WebView is
+  // disappearing can surface as an unhandled error in the fatal overlay.
+  if (!isDestroyingWindow) saveProject()
 })
 </script>
 
@@ -2069,15 +2109,19 @@ onUnmounted(() => {
 .search-result-item small { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 .search-empty { padding: 36px 0; color: var(--text-secondary); font-size: 14px; text-align: center; }
 
-.selection-group-outline { position: absolute; z-index: 15; pointer-events: none; border: 1px dashed var(--accent-color); border-radius: 10px; background: color-mix(in srgb, var(--accent-color) 4%, transparent); }
-.selection-action-bar { position: absolute; left: 50%; top: -12px; display: flex; align-items: center; gap: 4px; min-height: 42px; transform: translate(-50%, -100%); border: 1px solid var(--border-color); border-radius: 11px; background: var(--bg-secondary); padding: 5px 7px; box-shadow: 0 12px 30px rgb(0 0 0 / 16%); pointer-events: auto; white-space: nowrap; }
-.selection-action.is-primary { background: #17191c; color: #fff; }
-.selection-action.is-primary:hover { background: #000; }
-.dark .selection-action-bar { border-color: #383838; background: #252527; box-shadow: 0 12px 30px rgb(0 0 0 / 46%); }
-.selection-action-bar button { border-radius: 7px; color: var(--text-primary); font-size: 13px; transition: background .15s ease; }
-.selection-action { display: inline-flex; min-height: 32px; align-items: center; gap: 7px; padding: 7px 10px; }
-.selection-action:hover { background: var(--bg-tertiary); }
-.selection-action svg, .selection-layout-popover svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.selection-group-outline { position: absolute; z-index: 15; pointer-events: none; border: 1px solid color-mix(in srgb, var(--accent-color) 58%, transparent); border-radius: 12px; background: transparent; }
+.selection-action-bar { position: absolute; left: 50%; top: -10px; display: flex; align-items: center; gap: 2px; min-height: 38px; transform: translate(-50%, -100%); border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--bg-secondary) 94%, transparent); padding: 4px; box-shadow: 0 8px 22px rgb(15 23 42 / 10%), 0 1px 2px rgb(15 23 42 / 6%); backdrop-filter: blur(14px); pointer-events: auto; white-space: nowrap; }
+.selection-action-bar button { border: 1px solid transparent; border-radius: 8px; color: var(--text-secondary); font-size: 12.5px; font-weight: 500; line-height: 1; transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease; }
+.selection-action { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 6px 9px; }
+.selection-action:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); color: var(--text-primary); }
+.selection-action:active { transform: translateY(1px); }
+.selection-action-divider { width: 1px; height: 18px; margin: 0 3px; background: color-mix(in srgb, var(--border-color) 78%, transparent); }
+.selection-action.is-primary { border-color: color-mix(in srgb, var(--accent-color) 22%, transparent); background: color-mix(in srgb, var(--accent-color) 10%, transparent); color: color-mix(in srgb, var(--accent-color) 78%, #064e3b); }
+.selection-action.is-primary:hover { border-color: color-mix(in srgb, var(--accent-color) 34%, transparent); background: color-mix(in srgb, var(--accent-color) 16%, transparent); color: color-mix(in srgb, var(--accent-color) 90%, #064e3b); }
+.dark .selection-action-bar { border-color: rgb(255 255 255 / 9%); background: rgb(37 37 39 / 88%); box-shadow: 0 10px 28px rgb(0 0 0 / 34%); }
+.dark .selection-action-divider { background: rgb(255 255 255 / 10%); }
+.dark .selection-action.is-primary { color: #86efac; }
+.selection-action svg, .selection-layout-popover svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .selection-caret { margin-left: -3px; color: var(--text-secondary); font-size: 13px; }
 .selection-layout-menu { position: relative; }
 .selection-layout-popover { position: absolute; bottom: calc(100% + 8px); left: 0; display: grid; min-width: 128px; gap: 2px; border: 1px solid var(--border-color); border-radius: 11px; background: var(--bg-secondary); padding: 5px; box-shadow: 0 12px 30px rgb(0 0 0 / 18%); }

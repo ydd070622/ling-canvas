@@ -1,11 +1,22 @@
 /**
  * Projects store | 项目状态管理
- * Manages projects with localStorage persistence
+ * Manages projects with Tauri-file / IndexedDB persistence
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
+import {
+  deleteProjectDocuments,
+  loadProjectDocuments,
+  writeProjectDocuments
+} from '../services/projectStorage'
 
 // Storage key | 存储键
 const STORAGE_KEY = 'ai-canvas-projects'
+const MIGRATION_MARKER_KEY = 'ai-canvas-project-storage-v2'
+
+let initializationPromise = null
+let saveQueue = Promise.resolve()
+let storageLoadSucceeded = false
+let lastSaveError = null
 
 // Generate unique ID | 生成唯一ID
 const generateId = () => `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
@@ -54,26 +65,66 @@ export const currentProject = computed(() => {
   return projects.value.find(p => p.id === currentProjectId.value) || null
 })
 
-/**
- * Load projects from localStorage | 从 localStorage 加载项目
- */
-export const loadProjects = () => {
+const deserializeProjects = (value) => {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(project => project && typeof project === 'object' && project.id)
+    .map(project => migrateProject({
+      ...project,
+      createdAt: new Date(project.createdAt),
+      updatedAt: new Date(project.updatedAt),
+      deletedAt: project.deletedAt ? new Date(project.deletedAt) : null
+    }))
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+}
+
+const readLegacyProjects = () => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      // Convert date strings back to Date objects & migrate | 将日期字符串转换回 Date 对象并迁移数据
-      projects.value = parsed.map(p => migrateProject({
-        ...p,
-        createdAt: new Date(p.createdAt),
-        updatedAt: new Date(p.updatedAt),
-        deletedAt: p.deletedAt ? new Date(p.deletedAt) : null
-      }))
-    }
+    return stored ? JSON.parse(stored) : []
   } catch (err) {
-    console.error('Failed to load projects:', err)
-    projects.value = []
+    console.error('Failed to read legacy projects:', err)
+    return []
   }
+}
+
+/**
+ * Load project documents and migrate the old localStorage snapshot once.
+ * The legacy snapshot is removed only after every migrated project can be read
+ * back from the new backend.
+ */
+export const loadProjects = async () => {
+  const legacyProjects = readLegacyProjects()
+  try {
+    let storedProjects = await loadProjectDocuments()
+    const migrationCompleted = localStorage.getItem(MIGRATION_MARKER_KEY) === '1'
+
+    if (!migrationCompleted && legacyProjects.length) {
+      const merged = new Map(legacyProjects.map(project => [String(project.id), project]))
+      storedProjects.forEach(project => merged.set(String(project.id), project))
+      const migrationSnapshot = [...merged.values()].map(cleanProjectForStorage)
+      await writeProjectDocuments(migrationSnapshot)
+
+      const verifiedProjects = await loadProjectDocuments()
+      const verifiedIds = new Set(verifiedProjects.map(project => String(project.id)))
+      if (!migrationSnapshot.every(project => verifiedIds.has(String(project.id)))) {
+        throw new Error('迁移校验失败，部分项目未写入新存储')
+      }
+      storedProjects = verifiedProjects
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.setItem(MIGRATION_MARKER_KEY, '1')
+    }
+
+    projects.value = deserializeProjects(storedProjects)
+    storageLoadSucceeded = true
+  } catch (err) {
+    storageLoadSucceeded = false
+    console.error('Failed to load project documents:', err)
+    // Migration/read failure must never hide the user's existing canvases.
+    projects.value = deserializeProjects(legacyProjects)
+    window.$message?.error('项目存储加载失败，已保留并使用旧数据；请勿清理应用数据')
+  }
+  return projects.value
 }
 
 /**
@@ -134,30 +185,44 @@ const cleanProjectForStorage = (project) => {
     } : project.canvasData,
     // Remove base64 thumbnails | 移除 base64 缩略图
     // blob: 只在创建它的 WebView 会话里有效，asset: 依赖 asset 协议；两者写进
-    // localStorage 都只会在下次启动变成碎图。素材库节点的 url 在内存里恒为 blob:，
-    // 不在这里一并剥掉的话，每个含素材的项目都会往 localStorage 写一个死链接。
+    // 项目文档都只会在下次启动变成碎图。素材库节点的 url 在内存里恒为 blob:，
+    // 不在这里一并剥掉的话，每个含素材的项目都会往存储层写一个死链接。
     thumbnail: /^(data|blob|asset):/.test(String(project.thumbnail || '')) ? '' : project.thumbnail
   }
 }
 
 /**
- * Save projects to localStorage | 保存项目到 localStorage
- * Handles QuotaExceededError by compressing data | 通过压缩数据处理配额超限错误
+ * Queue document writes so an older asynchronous save can never overwrite a
+ * newer canvas snapshot.
  */
-export const saveProjects = () => {
-  // Always clean data before saving | 保存前始终清理数据
-  const cleanedProjects = projects.value.map(cleanProjectForStorage)
-  
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cleanedProjects))
-  } catch (err) {
-    if (err.name === 'QuotaExceededError') {
-      console.error('Project storage quota exceeded; existing projects were left untouched.', err)
-      window.$message?.error('本地存储空间不足，本次修改尚未保存；系统没有删除任何旧项目')
-    } else {
-      console.error('Failed to save projects:', err)
-    }
-  }
+const enqueueStorageOperation = (operation) => {
+  saveQueue = saveQueue
+    .then(async () => {
+      await operation()
+      lastSaveError = null
+    })
+    .catch(err => {
+      lastSaveError = err
+      console.error('Failed to persist project documents:', err)
+      const detail = typeof err === 'string' ? err : err?.message
+      window.$message?.error(`项目保存失败，本次修改尚未写入磁盘，请勿关闭应用${detail ? `：${detail}` : ''}`)
+    })
+  return saveQueue
+}
+
+export const saveProjects = (projectIds = null) => {
+  const ids = projectIds ? new Set(projectIds.map(String)) : null
+  // Clone now, not when the queued operation starts: Vue may mutate the live
+  // node objects again while an earlier disk write is still in progress.
+  const snapshots = projects.value
+    .filter(project => !ids || ids.has(String(project.id)))
+    .map(project => JSON.parse(JSON.stringify(cleanProjectForStorage(project))))
+  return enqueueStorageOperation(() => writeProjectDocuments(snapshots))
+}
+
+export const flushProjectSaves = async () => {
+  await saveQueue
+  return !lastSaveError
 }
 
 /**
@@ -190,7 +255,7 @@ export const createProject = (name = '未命名项目', folder = null) => {
   }
   
   projects.value = [newProject, ...projects.value]
-  saveProjects()
+  saveProjects([id])
   
   return id
 }
@@ -214,7 +279,7 @@ export const updateProject = (id, data) => {
   const [updated] = projects.value.splice(index, 1)
   projects.value = [updated, ...projects.value]
   
-  saveProjects()
+  saveProjects([id])
   return true
 }
 
@@ -262,7 +327,7 @@ export const updateProjectCanvas = (id, canvasData) => {
     }
   }
   
-  saveProjects()
+  saveProjects([id])
   return true
 }
 
@@ -284,7 +349,7 @@ export const deleteProject = (id) => {
   const project = projects.value.find(p => p.id === id)
   if (project) {
     project.deletedAt = new Date()
-    saveProjects()
+    saveProjects([id])
   }
 }
 
@@ -297,7 +362,7 @@ export const restoreProject = (id) => {
   if (project && project.deletedAt) {
     delete project.deletedAt
     project.updatedAt = new Date()
-    saveProjects()
+    saveProjects([id])
     return true
   }
   return false
@@ -309,15 +374,16 @@ export const restoreProject = (id) => {
  */
 export const permanentlyDeleteProject = (id) => {
   projects.value = projects.value.filter(p => p.id !== id)
-  saveProjects()
+  enqueueStorageOperation(() => deleteProjectDocuments([String(id)]))
 }
 
 /**
  * Empty the trash (permanently delete all trashed projects) | 清空回收站
  */
 export const emptyProjectTrash = () => {
+  const deletedIds = projects.value.filter(p => p.deletedAt).map(p => String(p.id))
   projects.value = projects.value.filter(p => !p.deletedAt)
-  saveProjects()
+  enqueueStorageOperation(() => deleteProjectDocuments(deletedIds))
 }
 
 /**
@@ -341,7 +407,7 @@ export const duplicateProject = (id) => {
   })
   
   projects.value = [newProject, ...projects.value]
-  saveProjects()
+  saveProjects([newId])
   
   return newId
 }
@@ -400,54 +466,62 @@ export const getSortedProjects = (sortBy = 'updatedAt', order = 'desc') => {
  * Initialize projects store | 初始化项目存储
  */
 export const initProjectsStore = () => {
-  loadProjects()
-  
-  // Create sample project if empty | 如果为空则创建示例项目
-  if (projects.value.length === 0) {
-    const id = createProject('示例项目')
-    const project = projects.value.find(p => p.id === id)
-    if (project) {
-      project.canvasData = {
-        nodes: [
-          {
-            id: 'node_0',
-            type: 'text',
-            position: { x: 150, y: 150 },
-            data: {
-              content: '一只金毛寻回犬在草地上奔跑，摇着尾巴，脸上带着快乐的表情。它的毛发在阳光下闪耀，眼神充满了对自由的渴望，全身散发着阳光、友善的气息。',
-              label: '文本输入'
+  if (initializationPromise) return initializationPromise
+  initializationPromise = (async () => {
+    await loadProjects()
+
+    // Create sample project if empty | 如果为空则创建示例项目
+    // A failed disk read must never be interpreted as a genuinely empty
+    // library, otherwise creating the sample could mask an existing library.
+    if (storageLoadSucceeded && projects.value.length === 0) {
+      const id = createProject('示例项目')
+      const project = projects.value.find(p => p.id === id)
+      if (project) {
+        project.canvasData = {
+          nodes: [
+            {
+              id: 'node_0',
+              type: 'text',
+              position: { x: 150, y: 150 },
+              data: {
+                content: '一只金毛寻回犬在草地上奔跑，摇着尾巴，脸上带着快乐的表情。它的毛发在阳光下闪耀，眼神充满了对自由的渴望，全身散发着阳光、友善的气息。',
+                label: '文本输入'
+              }
+            },
+            {
+              id: 'node_1',
+              type: 'image',
+              position: { x: 500, y: 150 },
+              data: {
+                prompt: '',
+                model: '',
+                size: '512x512',
+                label: '图片',
+                expanded: true
+              }
             }
-          },
-          {
-            id: 'node_1',
-            type: 'image',
-            position: { x: 500, y: 150 },
-            data: {
-              prompt: '',
-              model: '',
-              size: '512x512',
-              label: '图片',
-              expanded: true
+          ],
+          edges: [
+            {
+              id: 'edge_node_0_node_1',
+              source: 'node_0',
+              target: 'node_1',
+              sourceHandle: 'right',
+              targetHandle: 'left',
+              type: 'flowEdge',
+              data: { label: '提示词', color: '#e8912e', order: 1 }
             }
-          }
-        ],
-        edges: [
-          {
-            id: 'edge_node_0_node_1',
-            source: 'node_0',
-            target: 'node_1',
-            sourceHandle: 'right',
-            targetHandle: 'left',
-            type: 'flowEdge',
-            data: { label: '提示词', color: '#e8912e', order: 1 }
-          }
-        ],
-        viewport: { x: 100, y: 50, zoom: 0.8 }
+          ],
+          viewport: { x: 100, y: 50, zoom: 0.8 }
+        }
+        project.cardCount = 2
+        saveProjects([id])
       }
-      project.cardCount = 2
-      saveProjects()
     }
-  }
+    await flushProjectSaves()
+    return projects.value
+  })()
+  return initializationPromise
 }
 
 // Export for debugging | 导出用于调试

@@ -1,4 +1,7 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -18,6 +21,12 @@ const MAX_MULTIPART_FILE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_HTTP_TIMEOUT_MS: u64 = 300_000;
 const MAX_HTTP_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_USER_AGENT: &str = "LingCanvas/1.0 (+tauri)";
+/// Project documents are deliberately kept separate so one large or damaged
+/// canvas cannot prevent the rest of the project list from loading.
+const PROJECT_STORAGE_DIR: &str = "projects";
+const MEDIA_STORAGE_DIR: &str = "media";
+const MAX_PROJECT_DOCUMENT_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_MEDIA_DATA_URL_BYTES: usize = 300 * 1024 * 1024;
 
 /// 素材库根目录的出厂默认值。真正的根目录在运行期由 [`AssetRootState`] 持有，
 /// 由用户在原生目录选择器里指定——选择动作也发生在 Rust 侧，前端永远拿不到、
@@ -45,6 +54,369 @@ const ASSET_SKIP_DIRS: [&str; 4] = [".bf", ".pixcall", ".pixcall.cache", "$RECYC
 struct DroppedImage {
     data_url: String,
     file_name: String,
+}
+
+fn project_storage_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(PROJECT_STORAGE_DIR))
+        .map_err(|err| format!("无法定位项目存储目录: {err}"))
+}
+
+fn validate_project_id(project_id: &str) -> Result<(), String> {
+    let valid = !project_id.is_empty()
+        && project_id.len() <= 160
+        && project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if valid {
+        Ok(())
+    } else {
+        Err("项目 ID 无效".into())
+    }
+}
+
+fn project_document_path(dir: &Path, project_id: &str) -> Result<PathBuf, String> {
+    validate_project_id(project_id)?;
+    Ok(dir.join(format!("{project_id}.json")))
+}
+
+fn media_storage_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, String> {
+    let (project_id, media_id) = key
+        .split_once(':')
+        .ok_or_else(|| "图片存储键无效".to_string())?;
+    validate_project_id(project_id)?;
+    if media_id.is_empty() || media_id.len() > 240 {
+        return Err("图片存储键无效".into());
+    }
+    let encoded_id = URL_SAFE_NO_PAD.encode(media_id.as_bytes());
+    app.path()
+        .app_data_dir()
+        .map(|path| {
+            path.join(MEDIA_STORAGE_DIR)
+                .join(project_id)
+                .join(format!("{encoded_id}.media"))
+        })
+        .map_err(|err| format!("无法定位图片存储目录: {err}"))
+}
+
+fn media_key_from_path(project_id: &str, path: &Path) -> Option<String> {
+    let encoded = path.file_stem()?.to_str()?;
+    let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+    let media_id = String::from_utf8(bytes).ok()?;
+    if media_id.is_empty() || media_id.len() > 240 {
+        return None;
+    }
+    Some(format!("{project_id}:{media_id}"))
+}
+
+fn is_valid_project_json(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() <= MAX_PROJECT_DOCUMENT_BYTES)
+        .unwrap_or(false)
+        && fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some()
+}
+
+fn sync_file(path: &Path) -> Result<(), String> {
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| format!("同步项目文件失败 ({}): {err}", path.display()))
+}
+
+/// Install a fully-written temporary document.
+///
+/// `rename(old, backup)` is not reliable for the installed Windows app on all
+/// machines (the app can create files but Windows may deny renaming an existing
+/// one). Copying the backup first preserves recovery, then we prefer an atomic
+/// rename and fall back to an overwrite + fsync when the destination cannot be
+/// replaced by rename.
+fn commit_project_temp(temp: &Path, target: &Path, backup: &Path) -> Result<(), String> {
+    if target.exists() {
+        fs::copy(target, backup).map_err(|err| format!("创建项目备份失败: {err}"))?;
+    }
+
+    if let Err(rename_error) = fs::rename(temp, target) {
+        if !target.exists() {
+            return Err(format!("替换项目文件失败: {rename_error}"));
+        }
+        fs::copy(temp, target).map_err(|copy_error| {
+            format!("替换项目文件失败: {copy_error}（重命名错误: {rename_error}）")
+        })?;
+        sync_file(target)?;
+        fs::remove_file(temp).map_err(|err| format!("清理项目临时文件失败: {err}"))?;
+    }
+
+    if backup.exists() {
+        let _ = fs::remove_file(backup);
+    }
+    Ok(())
+}
+
+fn recover_project_document_sidecars(dir: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|err| format!("无法读取项目目录: {err}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("无法读取项目目录项: {err}"))?;
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .map_err(|err| format!("无法读取项目文件类型: {err}"))?
+            .is_file()
+        {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let (base_name, is_temp) = if let Some(base) = name.strip_suffix(".json.tmp") {
+            (base, true)
+        } else if let Some(base) = name.strip_suffix(".json.bak") {
+            (base, false)
+        } else {
+            continue;
+        };
+        if validate_project_id(base_name).is_err() {
+            continue;
+        }
+        let target = dir.join(format!("{base_name}.json"));
+        let temp = dir.join(format!("{base_name}.json.tmp"));
+        let backup = dir.join(format!("{base_name}.json.bak"));
+
+        if is_temp {
+            // A synced, valid .tmp is the newest save. This also repairs files
+            // left by the first Windows implementation whose rename was denied.
+            if is_valid_project_json(&temp) {
+                commit_project_temp(&temp, &target, &backup)?;
+            }
+        } else if !target.exists() && !temp.exists() {
+            // No newer temp survived, so restore the last known-good backup.
+            fs::rename(&path, &target)
+                .map_err(|err| format!("恢复项目文件失败 ({}): {err}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn load_project_documents_from_disk(
+    app: &tauri::AppHandle,
+) -> Result<Vec<serde_json::Value>, String> {
+    let dir = project_storage_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|err| format!("无法创建项目目录: {err}"))?;
+    recover_project_document_sidecars(&dir)?;
+
+    let mut projects = Vec::new();
+    let entries = fs::read_dir(&dir).map_err(|err| format!("无法读取项目目录: {err}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("无法读取项目目录项: {err}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let metadata = fs::metadata(&path)
+            .map_err(|err| format!("无法读取项目文件信息 ({}): {err}", path.display()))?;
+        if !metadata.is_file() || metadata.len() > MAX_PROJECT_DOCUMENT_BYTES {
+            eprintln!("跳过无效或过大的项目文件: {}", path.display());
+            continue;
+        }
+        let bytes = fs::read(&path)
+            .map_err(|err| format!("无法读取项目文件 ({}): {err}", path.display()))?;
+        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(project) => projects.push(project),
+            Err(err) => {
+                let backup = path.with_extension("json.bak");
+                let recovered = fs::read(&backup)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+                if let Some(project) = recovered {
+                    eprintln!("项目文件损坏，已读取备份 {}: {err}", path.display());
+                    projects.push(project);
+                } else {
+                    eprintln!("跳过损坏的项目文件 {}: {err}", path.display());
+                }
+            }
+        }
+    }
+    Ok(projects)
+}
+
+fn write_project_document_to_disk(
+    app: &tauri::AppHandle,
+    project: serde_json::Value,
+) -> Result<(), String> {
+    let project_id = project
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "项目缺少有效 ID".to_string())?;
+    let dir = project_storage_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|err| format!("无法创建项目目录: {err}"))?;
+    let target = project_document_path(&dir, project_id)?;
+    let temp = dir.join(format!("{project_id}.json.tmp"));
+    let backup = dir.join(format!("{project_id}.json.bak"));
+    let bytes = serde_json::to_vec(&project).map_err(|err| format!("无法序列化项目: {err}"))?;
+    if bytes.len() as u64 > MAX_PROJECT_DOCUMENT_BYTES {
+        return Err("项目文件超过 100MB 限制".into());
+    }
+
+    fs::write(&temp, &bytes).map_err(|err| format!("写入项目临时文件失败: {err}"))?;
+    sync_file(&temp)?;
+    commit_project_temp(&temp, &target, &backup)
+}
+
+#[tauri::command]
+async fn load_project_documents(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || load_project_documents_from_disk(&app))
+        .await
+        .map_err(|err| format!("项目读取任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn write_project_document(
+    app: tauri::AppHandle,
+    project: serde_json::Value,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || write_project_document_to_disk(&app, project))
+        .await
+        .map_err(|err| format!("项目写入任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn delete_project_documents(
+    app: tauri::AppHandle,
+    project_ids: Vec<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = project_storage_dir(&app)?;
+        fs::create_dir_all(&dir).map_err(|err| format!("无法创建项目目录: {err}"))?;
+        for project_id in project_ids {
+            let target = project_document_path(&dir, &project_id)?;
+            for path in [
+                target,
+                dir.join(format!("{project_id}.json.tmp")),
+                dir.join(format!("{project_id}.json.bak")),
+            ] {
+                if path.exists() {
+                    fs::remove_file(&path)
+                        .map_err(|err| format!("删除项目文件失败 ({}): {err}", path.display()))?;
+                }
+            }
+            let media_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|err| format!("无法定位图片存储目录: {err}"))?
+                .join(MEDIA_STORAGE_DIR)
+                .join(&project_id);
+            if media_dir.exists() {
+                fs::remove_dir_all(&media_dir)
+                    .map_err(|err| format!("删除项目图片失败 ({}): {err}", media_dir.display()))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("项目删除任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn save_canvas_media(
+    app: tauri::AppHandle,
+    key: String,
+    data_url: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !data_url.starts_with("data:") || data_url.len() > MAX_MEDIA_DATA_URL_BYTES {
+            return Err("图片数据无效或超过 300MB 限制".into());
+        }
+        let target = media_storage_path(&app, &key)?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| "图片存储路径无效".to_string())?;
+        fs::create_dir_all(parent).map_err(|err| format!("无法创建图片目录: {err}"))?;
+        let temp = target.with_extension("media.tmp");
+        let backup = target.with_extension("media.bak");
+        fs::write(&temp, data_url.as_bytes())
+            .map_err(|err| format!("写入图片临时文件失败: {err}"))?;
+        sync_file(&temp)?;
+        commit_project_temp(&temp, &target, &backup)
+    })
+    .await
+    .map_err(|err| format!("图片写入任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn load_canvas_media(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = media_storage_path(&app, &key)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let metadata = fs::metadata(&path).map_err(|err| format!("无法读取图片信息: {err}"))?;
+        if !metadata.is_file() || metadata.len() as usize > MAX_MEDIA_DATA_URL_BYTES {
+            return Err("图片文件无效或超过 300MB 限制".into());
+        }
+        fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|err| format!("读取图片文件失败: {err}"))
+    })
+    .await
+    .map_err(|err| format!("图片读取任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn list_canvas_media_keys(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_project_id(&project_id)?;
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|err| format!("无法定位图片存储目录: {err}"))?
+            .join(MEDIA_STORAGE_DIR)
+            .join(&project_id);
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut keys = Vec::new();
+        for entry in fs::read_dir(&dir).map_err(|err| format!("无法读取图片目录: {err}"))? {
+            let entry = entry.map_err(|err| format!("无法读取图片目录项: {err}"))?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("media") {
+                continue;
+            }
+            if let Some(key) = media_key_from_path(&project_id, &path) {
+                keys.push(key);
+            }
+        }
+        keys.sort();
+        Ok(keys)
+    })
+    .await
+    .map_err(|err| format!("图片列表任务失败: {err}"))?
+}
+
+#[tauri::command]
+async fn delete_canvas_media(app: tauri::AppHandle, key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = media_storage_path(&app, &key)?;
+        for candidate in [
+            path.clone(),
+            path.with_extension("media.tmp"),
+            path.with_extension("media.bak"),
+        ] {
+            if candidate.exists() {
+                fs::remove_file(&candidate)
+                    .map_err(|err| format!("删除图片文件失败 ({}): {err}", candidate.display()))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|err| format!("图片删除任务失败: {err}"))?
 }
 
 #[tauri::command]
@@ -199,7 +571,6 @@ fn build_headers(input: &HashMap<String, String>) -> Result<HeaderMap, String> {
     Ok(headers)
 }
 
-
 #[tauri::command]
 async fn http_request(
     args: HttpRequestArgs,
@@ -297,7 +668,6 @@ async fn http_request(
             .text()
             .await
             .map_err(|err| format!("读取上游响应失败: {err}"))?;
-
 
         Ok(HttpResponse {
             status: status.as_u16(),
@@ -600,7 +970,11 @@ async fn save_media_file(
     // 必须自己持有一份：这个值要移进 spawn_blocking 的闭包（'static），
     // 借用入参 `file_name` 活不了那么长
     let trimmed = file_name.trim();
-    let default_name = if trimmed.is_empty() { "素材".to_string() } else { trimmed.to_string() };
+    let default_name = if trimmed.is_empty() {
+        "素材".to_string()
+    } else {
+        trimmed.to_string()
+    };
     let dialog_app = app.clone();
 
     let picked = tauri::async_runtime::spawn_blocking(move || {
@@ -1041,8 +1415,8 @@ async fn read_asset_file(
     let root = state.snapshot()?;
     tauri::async_runtime::spawn_blocking(move || {
         let path = resolve_asset_path(&relative_path, &root)?;
-        let metadata = fs::metadata(&path)
-            .map_err(|err| format!("素材不可用 ({relative_path}): {err}"))?;
+        let metadata =
+            fs::metadata(&path).map_err(|err| format!("素材不可用 ({relative_path}): {err}"))?;
         if metadata.len() > MAX_ASSET_FILE_BYTES {
             return Err("素材超过 64MB 限制".into());
         }
@@ -1102,10 +1476,7 @@ async fn pick_asset_root(
     let picked = tauri::async_runtime::spawn_blocking(move || {
         // blocking_* 只能在非主线程调：它内部 run_on_main_thread 建对话框，
         // 再在当前线程 rx.recv() 阻塞。放主线程会死锁。
-        let builder = dialog_app
-            .dialog()
-            .file()
-            .set_title("选择素材库根目录");
+        let builder = dialog_app.dialog().file().set_title("选择素材库根目录");
         let builder = if start_dir.is_dir() {
             builder.set_directory(&start_dir)
         } else {
@@ -1140,6 +1511,41 @@ async fn pick_asset_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_ids_cannot_escape_the_storage_directory() {
+        for valid in ["project_123_abc", "canvas-42", "A1_b-2"] {
+            assert!(validate_project_id(valid).is_ok(), "应接受项目 ID: {valid}");
+        }
+        for invalid in ["", "../secret", "a/b", "a\\b", "C:drive", "项目"] {
+            assert!(
+                validate_project_id(invalid).is_err(),
+                "应拒绝项目 ID: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_temp_recovery_replaces_an_existing_windows_file() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ling-canvas-project-recovery-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project_test.json");
+        let temp = dir.join("project_test.json.tmp");
+        fs::write(&target, br#"{"id":"project_test","name":"old"}"#).unwrap();
+        fs::write(&temp, br#"{"id":"project_test","name":"new"}"#).unwrap();
+
+        recover_project_document_sidecars(&dir).unwrap();
+
+        let restored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+        assert_eq!(restored["name"], "new");
+        assert!(!temp.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
 
     /// 前端 services/aiGateway.js 发出的字段名必须与结构体严格对齐。
     /// 这里锁死 camelCase 映射，避免以后改字段名时静默丢参。
@@ -1334,6 +1740,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            load_project_documents,
+            write_project_document,
+            delete_project_documents,
+            save_canvas_media,
+            load_canvas_media,
+            list_canvas_media_keys,
+            delete_canvas_media,
             read_dropped_image,
             fetch_models,
             http_request,

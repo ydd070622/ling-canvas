@@ -5,6 +5,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
+import { initProjectsStore } from './stores/projects'
 import './style.css'
 import './styles/flow-nodes.css'
 
@@ -37,4 +38,11 @@ window.addEventListener('unhandledrejection', event => (
 
 app.use(pinia)
 app.use(router)
-app.mount('#app')
+// Project persistence is asynchronous (Tauri files / IndexedDB). Do not mount
+// routes until migration and initial loading finish, otherwise a canvas route
+// could treat the still-empty store as a new document and overwrite it.
+const bootstrap = async () => {
+  await initProjectsStore()
+  app.mount('#app')
+}
+bootstrap().catch(error => showFatal(`[bootstrap]\n${error?.stack || error?.message || String(error)}`))
