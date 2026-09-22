@@ -6,6 +6,7 @@
     :node-id="id"
     tone="image"
     :title="data.label || '图片'"
+    :compact-label="galleryItems.length > 1 ? '图片生成' : ''"
     :focused="focused"
     :multi="multi"
     :card-width="cardWidth"
@@ -49,7 +50,11 @@
           </div>
         </div>
       </div>
-      <div v-else class="flow-image-stack">
+      <div v-else class="flow-image-stack" :class="{ 'is-stacked': galleryItems.length > 1 }">
+        <div v-for="(item, index) in galleryItems.slice(1, 3)" :key="`back-${item.index}`"
+          class="flow-image-stack-back" :style="{ '--flow-stack-layer': index + 1 }" aria-hidden="true">
+          <img v-if="!brokenUrls[item.url]" :src="item.url" alt="" @error="markBroken(item.url)" />
+        </div>
         <NodeMedia
           tone="image"
           :url="data.url"
@@ -62,11 +67,10 @@
           @ratio="onMediaRatio"
           @dimensions="dimensions = $event"
         />
-        <!-- 角标用图标而不是 ↗ 这类文本箭头：文本箭头在 Windows 的兜底字体里会带一截
-             箭杆，看着像双向箭头。叠纸图标正对应「卡里还有几张」。 -->
+        <!-- 数量角标同时是展开入口；背后露出的卡片提示这是一组图片。 -->
         <button v-if="galleryItems.length > 1" class="flow-gallery-count nodrag" type="button"
           :aria-label="`展开 ${galleryItems.length} 张图片`" @click.stop="galleryOpen = true">
-          <n-icon :size="15"><ImagesOutline /></n-icon>{{ galleryItems.length }}张
+          <n-icon :size="17"><ExpandOutline /></n-icon>{{ galleryItems.length }}张
         </button>
       </div>
     </template>
@@ -78,7 +82,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { DownloadOutline, ChevronUpOutline, StarOutline, ImagesOutline } from '@vicons/ionicons5'
+import { DownloadOutline, ChevronUpOutline, StarOutline, ExpandOutline } from '@vicons/ionicons5'
 import { NodeFrame } from './base'
 import NodeMedia from './base/NodeMedia.vue'
 import { formatMediaDetails } from '../../utils/mediaDetails'

@@ -68,7 +68,7 @@
            焦点态不显示：那时表头已经写着同样的东西，再来一遍是重复。 -->
       <span v-if="!expanded" class="flow-zoom-tag">
         <span class="flow-zoom-tag-icon" v-html="NODE_ICONS[tone]"></span>
-        <span class="flow-zoom-tag-name">{{ typeLabel }}</span>
+        <span class="flow-zoom-tag-name">{{ compactLabel || typeLabel }}</span>
       </span>
       <span v-if="!expanded && mediaDetails" class="flow-media-details">{{ mediaDetails }}</span>
 
@@ -146,6 +146,8 @@ const props = defineProps({
   nodeId: { type: String, required: true },
   tone: { type: String, default: 'text' },
   title: { type: String, default: '' },
+  /** 内容态需要比节点类型更具体的标签时使用 */
+  compactLabel: { type: String, default: '' },
   /** 是否展开（= 恰好选中这一个节点） */
   focused: { type: Boolean, default: false },
   /**
@@ -200,9 +202,9 @@ const emit = defineEmits([
 ])
 
 /**
- * 角标固定显示**类型名**（图片/文本/视频），不是节点自己的名字。
+ * 角标默认显示**类型名**（图片/文本/视频），不是节点自己的名字。
  * 节点名会随上传的文件变成文件名，那样同一类节点在画布上就认不出来了；
- * 名字留给展开后的表头去显示。
+ * 名字留给展开后的表头去显示。多图节点可用 compactLabel 标明「图片生成」。
  */
 const typeLabel = computed(() => NODE_DEFINITIONS[props.tone]?.label || '')
 

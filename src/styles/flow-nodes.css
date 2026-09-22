@@ -1030,9 +1030,26 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 }
 
 /* ============ 图片节点的画廊（一张卡多图）============ */
-/* 卡边不再往后垫一层"纸片"：原来那层 inset 偏移的底色看着像有张图从卡后面滑出来，
-   而它其实只是个装饰。角标已经足够说明"里面还有几张"。 */
 .flow-image-stack { position: relative; }
+.flow-node-image .flow-stage:has(.flow-image-stack.is-stacked) { overflow: visible; }
+.flow-node-image.is-compact .flow-card:has(.flow-image-stack.is-stacked) { background: transparent; }
+.flow-image-stack.is-stacked .flow-media {
+  z-index: 3;
+  overflow: hidden;
+  border-radius: var(--flow-card-radius);
+}
+.flow-image-stack-back {
+  position: absolute;
+  inset: 0;
+  z-index: calc(3 - var(--flow-stack-layer));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--flow-card-radius);
+  background: var(--flow-well-solid);
+  transform: translate(calc(var(--flow-stack-layer) * 12px), calc(var(--flow-stack-layer) * 6px));
+  pointer-events: none;
+}
+.flow-image-stack-back img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .flow-gallery-count,
 .flow-image-gallery-actions button {
   display: inline-flex;
@@ -1049,7 +1066,7 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   line-height: 1;
   backdrop-filter: blur(8px);
 }
-.flow-gallery-count { position: absolute; z-index: 3; top: 12px; right: 12px; padding: 8px 11px; }
+.flow-gallery-count { position: absolute; z-index: 3; top: 12px; right: 12px; padding: 9px 12px; }
 .flow-gallery-count:hover,
 .flow-image-gallery-actions button:hover { background: rgba(10, 10, 10, 0.94); }
 .flow-image-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

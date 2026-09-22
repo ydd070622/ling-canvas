@@ -186,7 +186,8 @@ const props = defineProps({
 const { slots } = useNodeRefs(props.id)
 const focused = useFocusExpanded(props.id)
 const multi = useMultiSelected(props.id)
-const renderFormOpen = ref(false)
+// 室内渲染是参数表单节点：创建后直接显示完整表单，用户仍可手动收起。
+const renderFormOpen = ref(true)
 const { open: openViewer } = useMediaViewer()
 const { updateNodeInternals } = useVueFlow()
 
