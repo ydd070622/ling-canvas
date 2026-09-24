@@ -19,6 +19,7 @@ import { isDark, toggleTheme } from '../../stores/theme'
 import { activeProjects, trashedProjects } from '../../stores/projects'
 import { assetEntries } from '../../stores/assets'
 import { useUIStore } from '../../stores/ui'
+import { appVersion } from '../../composables/useAppVersion'
 import ApiSettings from '../ApiSettings.vue'
 
 const router = useRouter()
@@ -194,15 +195,18 @@ const handleFolderAction = (key, name) => {
     </nav>
 
     <div class="home-sidebar__footer">
-      <button class="home-sidebar__footer-btn" @click="toggleTheme">
-        <SunnyOutline v-if="!isDark" />
-        <MoonOutline v-else />
-        <span>主题</span>
-      </button>
-      <button class="home-sidebar__footer-btn" @click="showApiSettings = true">
-        <SettingsOutline />
-        <span>设置</span>
-      </button>
+      <div class="home-sidebar__footer-actions">
+        <button class="home-sidebar__footer-btn" @click="toggleTheme">
+          <SunnyOutline v-if="!isDark" />
+          <MoonOutline v-else />
+          <span>主题</span>
+        </button>
+        <button class="home-sidebar__footer-btn" @click="showApiSettings = true">
+          <SettingsOutline />
+          <span>设置</span>
+        </button>
+      </div>
+      <p class="home-sidebar__version">v{{ appVersion }} · Ling Canvas</p>
     </div>
 
     <n-modal
@@ -290,10 +294,21 @@ const handleFolderAction = (key, name) => {
 .home-sidebar__folder-empty { padding: 6px 12px 10px; color: #9aa6b7; font-size: 12px; }
 
 .home-sidebar__footer {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  display: flex; flex-direction: column;
   margin: 0 16px; padding: 12px 0 15px; border-top: 1px solid #e5eaf1;
 }
 .dark .home-sidebar__footer { border-top-color: rgba(255, 255, 255, 0.08); }
+.home-sidebar__footer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* 版本号：通栏居中、比按钮小一档、字距放宽，读起来像个安静的注脚。
+   可选中最方便用户复制版本号报障（侧边栏整体是 user-select: none） */
+.home-sidebar__version {
+  margin-top: 9px; text-align: center;
+  color: #9aa6b7; font-size: 10.5px; letter-spacing: .05em;
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}
+.dark .home-sidebar__version { color: #6b7686; }
 .home-sidebar__footer-btn {
   display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 8px;
   color: #64748b; font-size: 13px; transition: background 0.18s ease, color 0.18s ease;
