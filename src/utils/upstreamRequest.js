@@ -108,7 +108,21 @@ export const readReferenceImageBytes = async value => {
   // blob: 是本作用域内的对象地址，任何后端（Rust / 厂商）都取不到，
   // 必须在 webview 里读完再转 base64。
   if (/^blob:/i.test(text)) {
-    const response = await fetch(text)
+    let response
+    try {
+      response = await fetch(text)
+    } catch (error) {
+      // fetch **抛错**（而不是返回非 2xx）在这条路上只有两种可能：
+      // ① CSP 的 connect-src 拦了 blob:；② 这个地址已经被 revoke。
+      // 浏览器只给一句 "Failed to fetch"，看不出是哪种、也看不出是参考图的问题，
+      // 所以这里必须自己补上上下文。
+      //
+      // 注意 `img-src` 与 `connect-src` 是两条独立的指令：<img src="blob:...">
+      // 能显示、不代表 fetch 拿得到。调用方<探活>用的是 <img>，所以探活通过
+      // 而这里失败是可能的组合，别把两者当成同一件事。
+      const detail = error?.message || String(error)
+      throw new Error(`参考图读取失败：blob 地址取不到字节（CSP 拦截或链接已失效）— ${detail}`)
+    }
     if (!response.ok) throw new Error(`参考图读取失败 (${response.status})`)
     const blob = await response.blob()
     return {
