@@ -374,6 +374,7 @@ import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEd
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject, flushProjectSaves } from '../stores/projects'
+import { flushProjectThumbnails } from '../stores/projectThumbnails'
 import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
 import { focusedNodeId, selectedNodeIds } from '../composables/useFocusMode'
 import { activeEdgeId, clearEdgeFocus } from '../composables/useEdgeFocus'
@@ -1663,7 +1664,13 @@ onMounted(async () => {
         saveProject()
         const [projectSaved, mediaSaved] = await Promise.all([
           flushProjectSaves(),
-          flushCanvasMediaSaves()
+          flushCanvasMediaSaves(),
+          // 缩略图也排空，但**不参与下面的失败判断**：它是派生数据，
+          // 没写完不该阻止用户关闭窗口。3 秒上限覆盖"刚编辑完就关窗"这个窗口。
+          Promise.race([
+            flushProjectThumbnails(),
+            new Promise(resolve => setTimeout(resolve, 3000))
+          ])
         ])
         if (!projectSaved || !mediaSaved) {
           window.$message?.error('项目或图片尚未保存成功，已取消关闭窗口')

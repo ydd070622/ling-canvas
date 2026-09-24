@@ -17,6 +17,7 @@ import {
   ASSET_THUMB_VERSION
 } from '../config/assets'
 import { idbClear, idbGet, idbPut } from '../stores/idb'
+import { downscaleToWebpBlob } from '../utils/imageThumb'
 
 const THUMB_DB = 'ling-canvas-asset-thumbs'
 const THUMB_STORE = 'thumbs'
@@ -101,28 +102,19 @@ export const runLimited = async (items, concurrency, worker) => {
  * 这是整个素材库最大的一处内存开销，调用方务必用 runLimited 压住并发。
  */
 const makeThumbBlob = async (relativePath) => {
+  // readAssetFile 的 IPC 异常**故意**不进公共 util：它必须继续向上抛，
+  // 由 loadAssetThumb 的调用链处理。只有内存里的解码/缩放/编码那一段下沉到
+  // utils/imageThumb.js，这样画布缩略图能复用它，而素材库的换根闸门、
+  // 版本失效判据、失败缓存语义全部留在这里不受影响。
   const payload = await readAssetFile(relativePath)
-  let bitmap
-  try {
-    bitmap = await createImageBitmap(base64ToBlob(payload.dataBase64, payload.contentType))
-  } catch {
-    // 损坏文件 / 浏览器不认的格式（例如某些 svg）：记下失败，不要反复重试
-    return { failed: true }
-  }
-
-  const scale = Math.min(1, ASSET_THUMB_MAX_EDGE / Math.max(bitmap.width, bitmap.height))
-  const width = Math.max(1, Math.round(bitmap.width * scale))
-  const height = Math.max(1, Math.round(bitmap.height * scale))
-
-  const canvas = new OffscreenCanvas(width, height)
-  const context = canvas.getContext('2d')
-  // webp 带 alpha 时避免黑底
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, width, height)
-  context.drawImage(bitmap, 0, 0, width, height)
-  bitmap.close?.()
-
-  return { blob: await canvas.convertToBlob({ type: 'image/webp', quality: ASSET_THUMB_QUALITY }) }
+  const blob = await downscaleToWebpBlob(
+    base64ToBlob(payload.dataBase64, payload.contentType),
+    { maxEdge: ASSET_THUMB_MAX_EDGE, quality: ASSET_THUMB_QUALITY }
+  )
+  // 损坏文件 / 浏览器不认的格式（例如某些 svg）：记下失败，不要反复重试。
+  // 注：编码阶段（convertToBlob）的失败以前会向上抛，现在也归到这里缓存成
+  // failed —— 那一步只在 OOM 时才可能失败，而缓存失败比每次滚进视口重试更合适。
+  return blob ? { blob } : { failed: true }
 }
 
 const isSameSource = (cached, entry) => (

@@ -3,10 +3,12 @@
  * Manages nodes, edges and canvas state
  */
 import { ref } from 'vue'
-import { updateProjectCanvas, getProjectCanvas } from './projects'
+import { updateProjectCanvas, getProjectCanvas, projects } from './projects'
 import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
 import { migrateCanvasDocument, dropUnsupportedNodes, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
+import { toPersistableEdges } from '../utils/edgePayload'
+import { THUMB_MEDIA_ID, seedProjectThumbnail } from './projectThumbnails'
 import {
   computeSlots,
   resolveRefs,
@@ -68,9 +70,12 @@ const saveToHistory = (force = false) => {
   // If in batch operation and not forced, don't save | 如果在批量操作中且未强制保存，则不保存
   if (isBatchOperation && !force) return
 
+  // edges 走投影：撤销栈最多存 50 份（MAX_HISTORY），不剥的话 Vue Flow 挂在边上的
+  // sourceNode/targetNode 会被深拷贝 50 份，实测单条边就 1.9MB。下面判断"状态是否
+  // 与栈顶相同"用的全量 JSON.stringify 比较，之前每次也都在序列化这坨。
   const state = {
     nodes: JSON.parse(JSON.stringify(nodes.value)),
-    edges: JSON.parse(JSON.stringify(edges.value))
+    edges: toPersistableEdges(edges.value)
   }
 
   const current = history.value[historyIndex.value]
@@ -115,7 +120,7 @@ export const startBatchOperation = () => {
   isBatchOperation = true
   batchStartState = {
     nodes: JSON.parse(JSON.stringify(nodes.value)),
-    edges: JSON.parse(JSON.stringify(edges.value))
+    edges: toPersistableEdges(edges.value)
   }
 }
 
@@ -640,10 +645,15 @@ export const loadProject = (projectId) => {
     // 瞬态状态必须清掉：上一轮生成没跑完就关掉应用时，loading/autoExecute
     // 会跟着落盘，直接恢复会得到「永远生成中」的空转节点。
     nodes.value = dropUnsupportedNodes(resetTransientNodeState(migratedCanvasData.nodes || []))
-    // 边要跟着过滤：连到已被丢弃的节点上的边留着只会指向空气
+    // 边要跟着过滤：连到已被丢弃的节点上的边留着只会指向空气。
+    // 投影是必须的：migrateCanvasDocument 对 schemaVersion >= 4 的文档直接早退
+    // （见其文件内注释），所以已存在的臃肿文档只能在这里瘦下来，否则那 1.9MB 会
+    // 原样进内存、进撤销栈，再被每一次保存写回磁盘。
+    // 注意 nodes.value 必须仍在本行之前赋值，Vue Flow 的 createGraphEdges 要求
+    // 边的两端节点已在 store 里，顺序不能为了整洁调换。
     const aliveIds = new Set(nodes.value.map(node => node.id))
-    edges.value = (migratedCanvasData.edges || [])
-      .filter(edge => aliveIds.has(edge.source) && aliveIds.has(edge.target))
+    edges.value = toPersistableEdges((migratedCanvasData.edges || [])
+      .filter(edge => aliveIds.has(edge.source) && aliveIds.has(edge.target)))
     canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
@@ -652,6 +662,13 @@ export const loadProject = (projectId) => {
       // （见下方 imageRestorePromise.finally）。素材 hydrate 是 N 次 IPC，
       // 比 restore 慢得多，并发会让自动保存在图片还没读完时就打开。
       .then(() => hydrateAssetRefs(projectId))
+      .then(() => {
+        // 播种缩略图指纹。此时节点的 url 刚恢复好，正是能算指纹的时机。
+        // 不播种的话，Vue Flow 挂载触发的第一次自动保存会以为"源变了"，
+        // 白白重新降采样一次（一张 4000×6000 素材解码后接近 100MB）。
+        const project = projects.value.find(p => String(p.id) === String(projectId))
+        if (project) seedProjectThumbnail(project, nodes.value)
+      })
     
     nodeId = nodes.value.length
   } else {
@@ -686,10 +703,14 @@ export const saveProject = () => {
   // enriches nodes during mount (dimensions, dragging state, handle bounds, ...).
   // Sharing those objects with persistence can turn one internal layout update
   // into a cascade of project persistence writes.
+  // edges 必须在进入 JSON.stringify 之前就投影掉，不能只依赖 projects.js 的
+  // cleanProjectForStorage：那个在落盘前才跑，而这里每次保存都要深拷贝一次全量。
+  // 保存是 500ms 防抖的，平移一下视口就触发（updateViewport → debouncedSave），
+  // 所以不在这里剥的话，等于每 500ms 白白序列化 2MB。
   const snapshot = JSON.parse(JSON.stringify({
     schemaVersion: CANVAS_SCHEMA_VERSION,
     nodes: nodes.value,
-    edges: edges.value,
+    edges: toPersistableEdges(edges.value),
     viewport: canvasViewport.value
   }))
   updateProjectCanvas(projectId, {
@@ -779,6 +800,10 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
 
     for (const key of keys) {
       const storedNodeId = String(key).slice(prefix.length)
+      // 画布缩略图存在同一个 media 目录下（key `${projectId}:__thumb__`），必须显式跳过。
+      // 它今天靠"不以数字结尾"侥幸躲过下面的 previousSequentialNodeId 兜底匹配，
+      // 而那是巧合不是契约 —— 不要依赖它，见 stores/projectThumbnails.js 的不变量说明。
+      if (storedNodeId === THUMB_MEDIA_ID) continue
       const galleryMatch = storedNodeId.match(/^(.*):gallery:(\d+)$/)
       if (galleryMatch) {
         const galleryNode = nodesById.get(galleryMatch[1])

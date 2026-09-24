@@ -8,6 +8,12 @@ import {
   loadProjectDocuments,
   writeProjectDocuments
 } from '../services/projectStorage'
+import { toPersistableEdges } from '../utils/edgePayload'
+import {
+  syncProjectThumbnail,
+  hydrateProjectThumbnails,
+  copyProjectThumbnail
+} from './projectThumbnails'
 
 // Storage key | 存储键
 const STORAGE_KEY = 'ai-canvas-projects'
@@ -181,12 +187,21 @@ const cleanProjectForStorage = (project) => {
     ...project,
     canvasData: project.canvasData ? {
       ...project.canvasData,
-      nodes: project.canvasData.nodes?.map(cleanNodeForStorage) || []
+      nodes: project.canvasData.nodes?.map(cleanNodeForStorage) || [],
+      // edges 必须和 nodes 一起清洗。Vue Flow 把节点对象整个挂在边上
+      // （sourceNode/targetNode），且 graph node 与 model node 共享 data ——
+      // 只清 nodes 的话，所有剥离规则都会从 edges 这条路绕过去。
+      // 详见 utils/edgePayload.js 的文件头。
+      edges: toPersistableEdges(project.canvasData.edges)
     } : project.canvasData,
     // Remove base64 thumbnails | 移除 base64 缩略图
     // blob: 只在创建它的 WebView 会话里有效，asset: 依赖 asset 协议；两者写进
     // 项目文档都只会在下次启动变成碎图。素材库节点的 url 在内存里恒为 blob:，
     // 不在这里一并剥掉的话，每个含素材的项目都会往存储层写一个死链接。
+    //
+    // 注意：**这一行不是 bug，别删**。缩略图的字节存在 media/<projectId>/__thumb__，
+    // 文档里这个字段只承载 http(s) 远端 URL（那种跨重启有效，所以放行）。
+    // 内存里它是小图的 data URL，刷新首页靠 stores/projectThumbnails.js 水合。
     thumbnail: /^(data|blob|asset):/.test(String(project.thumbnail || '')) ? '' : project.thumbnail
   }
 }
@@ -303,30 +318,13 @@ export const updateProjectCanvas = (id, canvasData) => {
     project.cardCount = canvasData.nodes.length
   }
 
-  // Auto-update thumbnail from last edited image/video node | 自动从最后编辑的图片/视频节点更新缩略图
+  // Auto-update thumbnail | 自动更新缩略图
+  // 选源、去重、降采样、写文件、清空全部收在 stores/projectThumbnails.js。
+  // 它只改内存值 + 入队异步写文件，**不碰 saveProjects** —— 落盘由本函数末尾统一做。
   if (canvasData.nodes) {
-    const mediaNodes = canvasData.nodes
-      .filter(node => (node.type === 'image' || node.type === 'video') && node.data?.url)
-      .sort((a, b) => {
-        // Sort by last updated time | 按最后更新时间排序
-        const aTime = a.data?.updatedAt || a.data?.createdAt || 0
-        const bTime = b.data?.updatedAt || b.data?.createdAt || 0
-        return bTime - aTime
-      })
-    if (mediaNodes.length > 0) {
-      const latestNode = mediaNodes[0]
-      // Use thumbnail for video nodes, url for image nodes | 视频节点使用缩略图，图片节点使用 URL
-      if (latestNode.type === 'video') {
-        project.thumbnail = latestNode.data.thumbnail || latestNode.data.url
-      } else {
-        project.thumbnail = latestNode.data.url
-      }
-    } else {
-      // 画布中已没有可预览媒体时同步清除旧缩略图，避免首页误报有内容。
-      project.thumbnail = ''
-    }
+    syncProjectThumbnail(project, canvasData.nodes)
   }
-  
+
   saveProjects([id])
   return true
 }
@@ -403,12 +401,18 @@ export const duplicateProject = (id) => {
     id: newId,
     name: `${source.name} (副本)`,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    // 深拷贝会把 deletedAt 一起带过来，于是"复制回收站里的项目"得到的副本
+    // 也躺在回收站里，看着像没复制成功。显式清掉。
+    deletedAt: null
   })
-  
+
   projects.value = [newProject, ...projects.value]
   saveProjects([newId])
-  
+  // 副本没有 media/<newId>/ 目录，而永久删除是按目录删的——缩略图字节要单独复制一份，
+  // 否则副本指向源项目的文件，源项目一被永久删除副本就碎图。
+  copyProjectThumbnail(source, newProject).catch(() => {})
+
   return newId
 }
 
@@ -469,6 +473,14 @@ export const initProjectsStore = () => {
   if (initializationPromise) return initializationPromise
   initializationPromise = (async () => {
     await loadProjects()
+
+    // 水合缩略图：把每个项目存在 media/<id>/__thumb__ 的那张小图读回内存的
+    // project.thumbnail，于是 Home.vue（dashboard 最近画布 / 回收站 / 收藏）与
+    // CanvasCard.vue 四个读取点一行都不用改。
+    //
+    // **绝不 await** —— src/main.js 是 `await initProjectsStore()` 之后才
+    // app.mount('#app')，await 会把首页白屏时间拉长到 N 次 IPC。
+    hydrateProjectThumbnails(projects.value).catch(() => {})
 
     // Create sample project if empty | 如果为空则创建示例项目
     // A failed disk read must never be interpreted as a genuinely empty

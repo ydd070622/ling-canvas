@@ -2,6 +2,8 @@
  * IndexedDB image store | IndexedDB 图片存取
  * Persists node images (data URLs) outside localStorage quota | 把节点图片持久化到 IndexedDB，绕开 localStorage 容量限制
  */
+import { blobToDataUrl } from '../utils/imageThumb'
+
 const DB_NAME = 'ling-canvas-images'
 const STORE_NAME = 'images'
 
@@ -66,12 +68,24 @@ const loadBrowserImage = async (key) => {
   })
 }
 
-const blobToDataUrl = blob => new Promise((resolve, reject) => {
-  const reader = new FileReader()
-  reader.onload = () => resolve(reader.result)
-  reader.onerror = () => reject(reader.error || new Error('无法读取旧版图片数据'))
-  reader.readAsDataURL(blob)
-})
+/**
+ * 与 loadImage 同源，但**保证**返回 data URL 字符串。
+ *
+ * `loadImage` 的返回类型依平台而异：Tauri 下是 data URL 字符串，浏览器下是 Blob。
+ * 需要把值直接交给 `<img src>` 或写进文档时用这个，免得每个调用方各自判断一遍。
+ *
+ * @returns {Promise<string|null>}
+ */
+export const loadImageAsDataUrl = async (key) => {
+  const media = await loadImage(key)
+  if (!media) return null
+  if (typeof media === 'string') return media
+  try {
+    return await blobToDataUrl(media)
+  } catch {
+    return null
+  }
+}
 
 export const listImageKeys = async (prefix = '') => {
   if (isTauriRuntime()) {
