@@ -5,15 +5,23 @@
          发送相当于"用这份提示词生成"。
        - 其余情况 = **创建模式**：发送会建一个 AI 任务节点（收下选中 + @ 引用的上游），
          再按张数在右侧建输出节点。 -->
-  <div class="composer-wrap">
-    <div v-if="contextChips.length" class="context-strip">
+  <Teleport to="body" :disabled="!composerExpanded">
+  <div class="composer-wrap" :class="{ 'is-expanded': composerExpanded }" @keydown="onComposerEscape">
+    <div v-if="composerExpanded" class="compose-backdrop" @click="toggleComposerExpanded(false)"></div>
+    <div v-if="contextChips.length === 1" class="context-strip">
       <div v-for="chip in contextChips" :key="chip.id" class="context-chip">
         <span class="context-chip-name">{{ chip.label }}</span>
         <button class="context-chip-x" type="button" title="从上下文移除" @click="deselect(chip.id)">×</button>
       </div>
     </div>
 
-    <div class="composer">
+    <div class="composer" :role="composerExpanded ? 'dialog' : undefined" :aria-modal="composerExpanded ? true : undefined" :aria-label="composerExpanded ? '编辑提示词' : undefined">
+      <button v-if="!isParamlessNode" class="compose-expand" type="button"
+        :title="composerExpanded ? '收起提示词' : '展开提示词'" :aria-label="composerExpanded ? '收起提示词' : '展开提示词'"
+        :aria-expanded="composerExpanded" @click="toggleComposerExpanded(!composerExpanded)">
+        <svg v-if="composerExpanded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" /></svg>
+      </button>
       <div v-if="mentionRefs.length" class="prompt-references">
         <div v-for="ref in mentionRefs" :key="ref.id" class="prompt-ref">
           <img v-if="ref.thumb" :src="ref.thumb" alt="" />
@@ -24,9 +32,6 @@
       </div>
 
       <div class="compose-main">
-        <button v-if="!isParamlessNode" class="compose-attach" type="button" title="添加本地文件" @click="emit('attach')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
-        </button>
         <!-- 这两类节点没有"提示词"这回事，正文框换成一句说明 -->
         <p v-if="isRenderNode" class="compose-note">
           参数在卡片上设置，比例跟随每个视角的原图。这里只负责开始 / 停止。
@@ -46,27 +51,11 @@
           @click="updateMention"
           @blur="closeMention"
         ></textarea>
-        <!-- 图片对比没有可生成的东西，这颗键整颗收起来（留着禁用态只会让人找原因） -->
-        <button
-          v-if="!isCompareNode"
-          class="compose-send"
-          type="button"
-          :class="{ 'is-ready': sendReady, 'is-busy': editingBusy }"
-          :disabled="isEditing && !canRun"
-          :title="sendTitle"
-          @click="send"
-        >
-          <svg v-if="editingBusy" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="9.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="44 15" transform="rotate(-90 12 12)" />
-            <rect x="8.6" y="8.6" width="6.8" height="6.8" rx="1.6" fill="currentColor" />
-          </svg>
-          <svg v-else-if="isEditing" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6.2v11.6L18.6 12z" /></svg>
-          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg>
-        </button>
+
       </div>
 
-      <div v-if="!isParamlessNode" class="compose-options">
-        <div class="opt-left">
+      <div v-if="!isCompareNode" class="compose-options">
+        <div v-if="!isParamlessNode" class="opt-left">
           <label class="node-type-pill">
             <span class="node-type-dot" :class="`tone-${effectiveTarget}`"></span>
             <select
@@ -107,6 +96,23 @@
             <span class="preset-glyph">✦</span>{{ preset ? preset.title : '预设' }}
           </button>
         </div>
+        <!-- 图片对比没有可生成的东西，这颗键整颗收起来（留着禁用态只会让人找原因） -->
+        <button
+          v-if="!isCompareNode"
+          class="compose-send"
+          type="button"
+          :class="{ 'is-ready': sendReady, 'is-busy': editingBusy }"
+          :disabled="isEditing && !canRun"
+          :title="sendTitle"
+          @click="send"
+        >
+          <svg v-if="editingBusy" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="44 15" transform="rotate(-90 12 12)" />
+            <rect x="8.6" y="8.6" width="6.8" height="6.8" rx="1.6" fill="currentColor" />
+          </svg>
+          <svg v-else-if="isEditing" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6.2v11.6L18.6 12z" /></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6.5 11.5L12 6l5.5 5.5" /></svg>
+        </button>
       </div>
     </div>
 
@@ -168,6 +174,7 @@
       <div v-if="!mentionCandidates.length" class="mention-empty">没有可引用的上游素材</div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -215,6 +222,24 @@ const FALLBACK_RATIOS = [
 
 const inputRef = ref(null)
 const text = ref('')
+const composerExpanded = ref(false)
+const toggleComposerExpanded = async (expanded) => {
+  const input = inputRef.value
+  const selection = [input?.selectionStart || 0, input?.selectionEnd || 0]
+  const scrollTop = input?.scrollTop || 0
+  composerExpanded.value = expanded
+  await nextTick()
+  inputRef.value?.focus({ preventScroll: true })
+  inputRef.value?.setSelectionRange(...selection)
+  if (inputRef.value) inputRef.value.scrollTop = scrollTop
+}
+const onComposerEscape = (event) => {
+  if (event.key !== 'Escape' || !composerExpanded.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  toggleComposerExpanded(false)
+}
+
 const targetType = ref('image')
 const ratio = ref('auto')
 const count = ref(1)
@@ -809,11 +834,12 @@ const onFocusComposer = () => {
     el.setSelectionRange(el.value.length, el.value.length)
   })
 }
+watch(isParamlessNode, value => { if (value) composerExpanded.value = false })
 onMounted(() => window.addEventListener('ling-canvas:focus-composer', onFocusComposer))
 onBeforeUnmount(() => window.removeEventListener('ling-canvas:focus-composer', onFocusComposer))
 
 /** composer 自身高度 + 上下留白：新建的节点要避开的区域 */
-const COMPOSER_RESERVED_HEIGHT = 215
+const COMPOSER_RESERVED_HEIGHT = 275
 
 /**
  * 新建节点的落点：画布**去掉 composer 之后**的可用区域中心。
@@ -871,6 +897,7 @@ const viewportCenter = () => {
 
 /* ---- 主体 ---- */
 .composer {
+  position: relative;
   padding: 11px 11px 8px;
   border: 1px solid var(--border-color);
   border-radius: 22px;
@@ -902,15 +929,17 @@ const viewportCenter = () => {
 }
 .prompt-ref-x { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 15px; padding: 0; }
 
-/* 输入框和两个按钮同高（36），单行时三者的中线正好对齐；
-   文字变多时输入框向下长，按钮仍贴底 */
+/* 输入区保留多行编辑空间，发送按钮位于底部参数栏。 */
 .compose-main { display: flex; align-items: flex-end; gap: 6px; }
 .compose-input {
-  min-height: 42px;
-  max-height: 150px;
+  min-width: 0;
+  height: 120px;
+  min-height: 120px;
+  max-height: 240px;
+  overflow-y: auto;
   flex: 1;
   resize: none;
-  padding: 10px 8px;
+  padding: 10px 38px 10px 8px;
   border: 0;
   outline: 0;
   background: transparent;
@@ -990,8 +1019,9 @@ const viewportCenter = () => {
    眼睛没有落点，输入框反而被压住了。现在去掉所有方框，只留文字 + 一个小箭头，
    悬停才给底色；整条栏里只有发送按钮是实心的。 */
 /* 左缘和附件按钮对齐（都在 composer 的 9px 内边距上），不再是参差不齐的三条竖线 */
-.compose-options { display: flex; align-items: center; padding: 5px 0 2px; }
-.opt-left { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.compose-options { display: flex; align-items: center; gap: 12px; padding: 5px 0 2px; }
+.compose-options .compose-send { margin-left: auto; }
+.opt-left { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 
 .node-type-pill {
   display: flex;
@@ -1148,4 +1178,19 @@ const viewportCenter = () => {
 .mention-copy b { display: block; font-size: 11px; }
 .mention-copy span { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 9px; }
 .mention-empty { padding: 14px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+</style>
+
+<style scoped>
+.compose-expand { position: absolute; top: 10px; right: 12px; z-index: 2; display: grid; place-items: center; width: 28px; height: 28px; padding: 4px; border: 0; border-radius: 5px; color: var(--text-tertiary); background: transparent; cursor: pointer; }
+.compose-expand svg { width: 20px; height: 20px; }
+.compose-expand:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+.composer-wrap.is-expanded { position: fixed; inset: 0; left: 0; bottom: 0; width: 100%; height: 100%; transform: none; z-index: 250; display: flex; align-items: center; justify-content: center; padding: 26px; }
+.compose-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 48%); backdrop-filter: blur(3px); }
+.is-expanded .context-strip { display: none; }
+.is-expanded .composer { display: flex; flex-direction: column; width: min(840px, 100%); height: min(720px, calc(100dvh - 52px)); min-height: 0; padding: 22px 14px 10px; border-radius: 16px; box-shadow: 0 20px 80px rgb(0 0 0 / 25%); }
+.is-expanded .compose-expand { top: 10px; right: 12px; }
+.is-expanded .prompt-references { padding-right: 38px; flex-shrink: 0; }
+.is-expanded .compose-main { flex: 1; min-height: 0; margin-top: 18px; }
+.is-expanded .compose-input { height: 100%; min-height: 0; max-height: none; padding: 8px; line-height: 1.65; }
+.is-expanded .compose-options { flex-shrink: 0; padding-top: 12px; }
 </style>

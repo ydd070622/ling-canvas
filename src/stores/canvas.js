@@ -3,6 +3,7 @@
  * Manages nodes, edges and canvas state
  */
 import { ref } from 'vue'
+import { promoteConnectedRenderNodes } from '../utils/renderConnections'
 import { updateProjectCanvas, getProjectCanvas, projects } from './projects'
 import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
@@ -533,13 +534,21 @@ export const duplicateNode = (id) => {
   return newId
 }
 
+const renderInputHandle = (params) => {
+  const source = nodes.value.find(node => node.id === params.source)
+  const target = nodes.value.find(node => node.id === params.target)
+  return target?.type === 'render' && source?.type === 'text' ? 'in-text' : params.targetHandle
+}
+
 // Add edge | 添加边
 export const addEdge = (params) => {
   const newEdge = {
     ...params,
+    targetHandle: renderInputHandle(params),
     id: params.id || getEdgeId()
   }
   edges.value = [...edges.value, newEdge]
+  nodes.value = promoteConnectedRenderNodes(nodes.value, edges.value, [newEdge])
   saveToHistory() // Save after adding edge | 添加连线后保存
   debouncedSave()
   return newEdge.id
@@ -565,11 +574,13 @@ export const addEdges = (edgeSpecs, autoBatch = true) => {
   edgeSpecs.forEach(params => {
     const newEdge = {
       ...params,
+      targetHandle: renderInputHandle(params),
       id: params.id || getEdgeId()
     }
     edges.value = [...edges.value, newEdge]
     ids.push(newEdge.id)
   })
+  nodes.value = promoteConnectedRenderNodes(nodes.value, edges.value, edgeSpecs)
 
   // End batch operation if auto | 如果自动管理则结束批量操作并保存到历史
   if (autoBatch) {

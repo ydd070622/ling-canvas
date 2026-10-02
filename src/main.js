@@ -31,7 +31,11 @@ const showFatal = (text) => {
 app.config.errorHandler = (err, instance, info) => {
   showFatal(`[Vue ${info}]\n${err?.stack || err?.message || String(err)}`)
 }
-window.addEventListener('error', event => showFatal(`[window]\n${event.error?.stack || event.message}`))
+window.addEventListener('error', event => {
+  // Browser layout delivery notice, not a failed render or uncaught exception.
+  if (!event.error && /^ResizeObserver loop (completed with undelivered notifications\.|limit exceeded)$/.test(event.message || '')) return
+  showFatal(`[window]\n${event.error?.stack || event.message}`)
+})
 window.addEventListener('unhandledrejection', event => (
   showFatal(`[promise]\n${event.reason?.stack || String(event.reason)}`)
 ))

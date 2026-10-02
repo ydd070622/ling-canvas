@@ -4,7 +4,7 @@
        分区摆开、点选即可。栏上只留一句摘要，眼睛不用再在一排下拉里找。 -->
   <Teleport to="body">
     <div v-if="visible" class="param-layer" @click.self="emit('close')">
-      <div ref="panelRef" class="param-panel" :style="panelStyle">
+      <div ref="panelRef" class="param-panel" :class="{ 'is-compact': compact }" :style="panelStyle">
         <section v-if="resolutionOptions.length" class="param-section">
           <h4>清晰度</h4>
           <div class="param-grid">
@@ -76,6 +76,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ratioValue } from '../../utils/ratio'
 
 const props = defineProps({
+  compact: { type: Boolean, default: false },
   visible: { type: Boolean, default: false },
   /** 锚点：栏上那个「参数」按钮，面板贴着它弹出 */
   anchor: { type: Object, default: null },
@@ -102,7 +103,7 @@ const position = ref({ left: 0, bottom: 0, maxHeight: 0 })
 const place = () => {
   const rect = props.anchor?.getBoundingClientRect?.()
   if (!rect) return
-  const width = panelRef.value?.offsetWidth || 330
+  const width = panelRef.value?.offsetWidth || (props.compact ? 280 : 372)
   const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12)
   position.value = {
     left,
@@ -220,4 +221,11 @@ onBeforeUnmount(() => {
   opacity: 0.7;
 }
 .ratio-glyph.is-auto { width: 13px; height: 10px; border-style: dashed; }
+.param-panel.is-compact { width: 280px; padding: 12px; border-radius: 12px; }
+.is-compact .param-section + .param-section { margin-top: 12px; }
+.is-compact .param-section h4 { margin-bottom: 7px; font-size: 11px; }
+.is-compact .param-grid { gap: 5px; }
+.is-compact .param-btn { min-height: 30px; padding: 0 4px; border-radius: 7px; font-size: 11px; }
+.is-compact .param-btn.is-ratio { min-height: 42px; gap: 3px; font-size: 10px; }
+.is-compact .param-note { margin-top: 7px; font-size: 10px; line-height: 1.4; }
 </style>

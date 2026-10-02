@@ -19,7 +19,7 @@ export const ALL_PARAM_FIELDS = Object.freeze([
   'lights', 'temperature', 'temperatureCustom', 'lightType',
   'city', 'cityCustom', 'time', 'timeCustom', 'weather',
   'outside', 'outsideCustom', 'outsideImage', 'outsideImageName', 'sun',
-  'resolution'
+  'resolution', 'ratio', 'count'
 ])
 
 export const RENDER_DEFAULTS = Object.freeze({
@@ -48,7 +48,9 @@ export const RENDER_DEFAULTS = Object.freeze({
   outsideImage: '',
   outsideImageName: '',
   sun: '跟随原图',
-  resolution: '2K'
+  resolution: '2K',
+  ratio: 'auto',
+  count: 1
 })
 
 /** 各下拉的选项，照原型的 select 顺序 */
@@ -145,9 +147,11 @@ export const validateRenderParams = (params) => {
 export const buildRenderPrompt = (params) => {
   const lines = []
 
-  lines.push('将当前 SU 视角截图转化为真实、自然的室内摄影效果。')
+  lines.push('主要任务：将第一张 SU / SketchUp 室内视角截图完整重建为照片级写实的室内建筑摄影。这是整幅空间的材质与光照渲染，不是仅在原图上添加人物、阳光或滤镜。')
+  lines.push('第一张图仅作为空间几何、构图、物体布局和设计配色依据，不沿用其线稿、插画或卡通画风。去除黑色描边、轮廓线、草图线和建模视口质感，将平面色块替换为真实可感的材质表面。')
+  lines.push('对墙面、木地板、木家具、布艺、金属和玻璃分别呈现符合原设计的真实纹理、粗糙度、反射与透光；使用自然的全局照明、间接光、接触阴影和柔和明暗层次，使整个房间具有真实体积、深度与相机成像质感。不要改变物件设计或增加装饰。')
 
-  if (params.structure) lines.push('保持原图相机视角、空间结构、门窗和家具位置，不改变设计。')
+  if (params.structure) lines.push('保持原图相机视角、空间结构、门窗和家具位置，不改变设计；保留的是几何布局，不是原图的线条画风、简化材质或平面光照。')
   if (params.closed) lines.push('按封闭空间处理，不添加窗户、开口或外部景观。')
 
   if (params.lights) {
@@ -203,6 +207,13 @@ export const buildRenderPrompt = (params) => {
 
   const extra = String(params.extra || '').trim()
   if (extra) lines.push(`补充要求：${extra}`)
+  lines.push('最终交付是一张完成写实渲染的室内照片；人物和外景是附加要求，不能代替整个室内空间的写实转换。')
 
   return lines
 }
+
+export const buildRenderImages = (baseImage, params) => [
+  baseImage,
+  params.person ? params.personImage : '',
+  !params.closed && ['参考图', '卫星图'].includes(params.outside) ? params.outsideImage : ''
+].filter(Boolean)

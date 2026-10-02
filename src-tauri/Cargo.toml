@@ -1,6 +1,6 @@
 [package]
 name = "ling-canvas"
-version = "1.9.2"
+version = "1.9.29"
 description = "Ling Canvas - AI Creative Canvas"
 authors = ["Ling Canvas"]
 edition = "2021"

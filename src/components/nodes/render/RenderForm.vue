@@ -28,18 +28,12 @@
       ></textarea>
     </label>
 
-    <div class="flow-render-row">
-      <span class="flow-render-row-label"><span>保持空间结构</span></span>
-      <label class="flow-render-switch">
-        <input type="checkbox" :checked="params.structure" @change="set('structure', $event.target.checked)">
-        <span></span>
-      </label>
-    </div>
-
+    <button type="button" class="flow-render-details-toggle nodrag" :aria-expanded="detailsOpen" aria-label="展开或收起渲染参数" @click="detailsOpen = !detailsOpen">{{ detailsOpen ? '⌃' : '⌄' }}</button>
+    <div v-show="detailsOpen" class="flow-render-details">
     <div class="flow-render-row">
       <span class="flow-render-row-label"><span>封闭空间</span></span>
       <label class="flow-render-switch">
-        <input type="checkbox" :checked="params.closed" @change="set('closed', $event.target.checked)">
+        <input type="checkbox" aria-label="封闭空间" :checked="params.closed" @change="set('closed', $event.target.checked)">
         <span></span>
       </label>
     </div>
@@ -49,11 +43,11 @@
     <!-- ---------------------------------------------------------- 场景人物 -->
     <div class="flow-render-row">
       <span class="flow-render-row-label">
-        <span class="flow-render-row-title">场景人物</span>
+        <span class="flow-render-row-title">添加人物</span>
         <small class="flow-render-row-hint">整组共用</small>
       </span>
       <label class="flow-render-switch">
-        <input type="checkbox" :checked="params.person" @change="set('person', $event.target.checked)">
+        <input type="checkbox" aria-label="添加人物" :checked="params.person" @change="set('person', $event.target.checked)">
         <span></span>
       </label>
     </div>
@@ -99,7 +93,7 @@
       <div class="flow-render-row">
         <span class="flow-render-row-label"><span>人物动态模糊</span></span>
         <label class="flow-render-switch">
-          <input type="checkbox" :checked="params.personBlur" @change="set('personBlur', $event.target.checked)">
+          <input type="checkbox" aria-label="人物动态模糊" :checked="params.personBlur" @change="set('personBlur', $event.target.checked)">
           <span></span>
         </label>
       </div>
@@ -111,7 +105,7 @@
     <div class="flow-render-row">
       <span class="flow-render-row-label"><span class="flow-render-row-title">室内灯光</span></span>
       <label class="flow-render-switch">
-        <input type="checkbox" :checked="params.lights" @change="set('lights', $event.target.checked)">
+        <input type="checkbox" aria-label="室内灯光" :checked="params.lights" @change="set('lights', $event.target.checked)">
         <span></span>
       </label>
     </div>
@@ -147,10 +141,7 @@
     <div class="flow-render-rule"></div>
 
     <!-- ---------------------------------------------------------- 室外环境 -->
-    <div class="flow-render-section-head">
-      <span class="flow-render-row-title">室外环境</span>
-      <small>所有视角统一</small>
-    </div>
+
 
     <div class="flow-render-grid is-three">
       <FieldShell label="地点">
@@ -179,7 +170,7 @@
     </FieldShell>
 
     <div class="flow-render-grid">
-      <FieldShell label="窗外外景">
+      <FieldShell label="外景">
         <!-- 封闭空间下外景整组失效，原型 index.html:53 就是这么联动的 -->
         <select
           class="flow-render-select nodrag"
@@ -218,27 +209,42 @@
     <div class="flow-render-rule"></div>
 
     <!-- ---------------------------------------------------------- 输出 -->
+    </div>
+    <section class="flow-render-model-panel">
+    <span class="flow-render-panel-label">☷ 模型参数</span>
+    <details class="flow-render-structure-option">
+      <summary>结构设置</summary>
+      <label><input type="checkbox" :checked="params.structure" @change="set('structure', $event.target.checked)"> 保持空间结构</label>
+    </details>
     <div class="flow-render-grid is-model">
-      <FieldShell label="渲染模型" hint="整组共用">
+      <FieldShell label="模型">
         <select class="flow-render-select nodrag" :value="modelValue" @change="emit('update:model', $event.target.value)">
           <optgroup v-for="group in modelGroups" :key="group.label" :label="group.label">
             <option v-for="option in group.options" :key="option.optionId" :value="option.optionId">{{ option.label }}</option>
           </optgroup>
         </select>
       </FieldShell>
-      <FieldShell label="输出清晰度" :hint="resolutionHint">
-        <select class="flow-render-select nodrag" :value="params.resolution" @change="set('resolution', $event.target.value)">
-          <option v-for="option in resolutionOptions" :key="option" :value="option">{{ option }}</option>
-        </select>
+      <FieldShell label="生成参数">
+        <button ref="paramTrigger" type="button" class="flow-render-select nodrag" @click="paramOpen = !paramOpen">
+          {{ params.ratio === 'auto' ? '自动' : params.ratio }} · {{ params.resolution }} · {{ params.count }}张 ⌃
+        </button>
       </FieldShell>
     </div>
 
+    </section>
+    <ParamPanel compact :visible="paramOpen" :anchor="paramTrigger" :resolution="params.resolution"
+      :resolution-options="resolutionOptions" :resolution-hint="resolutionHint"
+      :ratio="params.ratio" :ratio-options="['auto','1:1','2:3','3:2','3:4','4:3','4:5','5:4','9:16','16:9','21:9']"
+      :count="params.count" :count-options="[1,2,4]" count-hint="数量按每个视角计算，每张独立调用；3个视角×4张会生成12张。"
+      @update:resolution="set('resolution', $event)" @update:ratio="set('ratio', $event)"
+      @update:count="set('count', $event)" @close="paramOpen = false" />
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
 import FieldShell from './FieldShell.vue'
+import ParamPanel from '../../canvas/ParamPanel.vue'
 import { RENDER_OPTIONS, showsCustomField } from '../../../utils/renderPrompt'
 
 /** 「补充提示词」那一行的文字图标，照 33.png 的 T 标 */
@@ -253,6 +259,10 @@ const props = defineProps({
   /** 档位被渠道锁死时的说明（空串 = 可自由切换） */
   resolutionHint: { type: String, default: '' }
 })
+
+const detailsOpen = ref(true)
+const paramOpen = ref(false)
+const paramTrigger = ref(null)
 
 const emit = defineEmits(['set', 'update:model', 'upload'])
 const modelGroups = computed(() => {

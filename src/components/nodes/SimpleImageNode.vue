@@ -67,6 +67,11 @@
           @ratio="onMediaRatio"
           @dimensions="dimensions = $event"
         />
+        <div v-if="data.error && !data.loading" class="flow-image-failure nodrag nowheel" :class="{ 'has-image': !!data.url }">
+          <svg class="flow-failure-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v1"/></svg>
+          <div><strong>{{ data.url ? '本次生成未完成' : '生成未完成' }}</strong><span>{{ failureSummary }}</span></div>
+          <button type="button" @click.stop="errorDialog?.showModal()">查看原因 ↗</button>
+        </div>
         <!-- 数量角标同时是展开入口；背后露出的卡片提示这是一组图片。 -->
         <button v-if="galleryItems.length > 1" class="flow-gallery-count nodrag" type="button"
           :aria-label="`展开 ${galleryItems.length} 张图片`" @click.stop="galleryOpen = true">
@@ -77,6 +82,10 @@
   </NodeFrame>
 
   <input ref="fileInputRef" type="file" accept="image/*" style="display: none" @change="handleFileSelect" />
+  <dialog ref="errorDialog" class="flow-error-dialog nodrag nowheel" @click="($event.target === errorDialog) && errorDialog.close()">
+    <h3>生成失败原因</h3><p>以下为服务返回的完整信息。</p>
+    <pre>{{ data.error }}</pre><button type="button" @click="errorDialog.close()">关闭</button>
+  </dialog>
 </template>
 
 <script setup>
@@ -108,6 +117,14 @@ const props = defineProps({
   id: String,
   data: Object,
   selected: Boolean
+})
+const errorDialog = ref(null)
+const failureSummary = computed(() => {
+  const error = String(props.data?.error || '')
+  if (/error sending request|network|连接失败|fetch failed/i.test(error)) return '未能连接生成服务，请检查网络或服务配置。'
+  if (/timeout|timed out|超时/i.test(error)) return '生成请求超时，请稍后再试。'
+  if (/429|rate.limit|频率|限流/i.test(error)) return '服务暂时繁忙，请稍后再试。'
+  return '这次未能生成图片，可查看原因后重试。'
 })
 
 const {

@@ -60,9 +60,9 @@ const focused = useFocusExpanded(props.id)
 /**
  * 文本节点的尺寸由用户拖出来（数据里存着），其它节点是按素材比例算的。
  */
-const boxWidth = computed(() => Number(props.data?.boxWidth) || 0)
+const boxWidth = computed(() => Number(props.data?.boxWidth) || 320)
 /** 这是**内容框**的高度，不是卡片高度 —— 卡片自然包住它，不去算"减去表头多少" */
-const boxHeight = computed(() => Number(props.data?.boxHeight) || 0)
+const boxHeight = computed(() => Number(props.data?.boxHeight) || Math.max(0, boxWidth.value - 2))
 const handleResize = ({ width, height }) => editNode(props.id, { boxWidth: width, boxHeight: height })
 const multi = useMultiSelected(props.id)
 

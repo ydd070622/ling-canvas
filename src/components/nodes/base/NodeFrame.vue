@@ -126,7 +126,7 @@
         @mousedown.stop.prevent="startResize"
       ></span>
 
-      <NodePort type="target" side="left" :tone="tone" />
+      <slot name="inputs"><NodePort type="target" side="left" :tone="tone" /></slot>
       <NodePort v-if="hasOutput" type="source" side="right" :tone="tone" />
     </div>
 

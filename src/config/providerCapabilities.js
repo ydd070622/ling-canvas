@@ -182,7 +182,9 @@ export const prefersChatProtocolForImage = modelKey => {
  * 此时 id 仍叫 openai、providerConfig.defaultBaseUrl 还是火宝，
  * 只有 upstream.baseUrl 才反映真正打的是哪家。
  */
-const RATIO_IN_PROMPT_HOSTS = ['linkapi.pro']
+// 两个 LinkAPI 域名共用协议适配，避免切换地址后丢失比例与清晰度配置。
+const LINKAPI_HOSTS = ['linkapi.pro', 'linkapi.ai']
+const RATIO_IN_PROMPT_HOSTS = LINKAPI_HOSTS
 
 /**
  * 该渠道是否需要把比例写进提示词。
@@ -278,7 +280,7 @@ export const GEMINI_NATIVE_PATH = '/v1beta/models/{model}:generateContent'
  * 没实测过的站不猜 —— 猜错只是白跑一次请求，但会在每次生成前多一次无效往返。
  * 其他渠道想用，在渠道配置里写 `geminiNative: true` 即可。
  */
-const GEMINI_NATIVE_HOSTS = ['linkapi.pro']
+const GEMINI_NATIVE_HOSTS = LINKAPI_HOSTS
 
 /**
  * 这次请求是否该走原生 Gemini 路由。
@@ -341,7 +343,7 @@ export const isGeminiNativeUnavailableError = error => {
 // ============================================================================
 
 /** 已知「走 chat 时收下档位却不透传」的渠道，按实际生效的 Base URL 主机名匹配。 */
-const IMAGE_SIZE_DROPPING_HOSTS = ['linkapi.pro']
+const IMAGE_SIZE_DROPPING_HOSTS = LINKAPI_HOSTS
 
 /**
  * 该渠道 + 该模型能否真正指定清晰度档位。

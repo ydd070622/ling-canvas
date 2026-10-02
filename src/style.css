@@ -105,7 +105,7 @@ body {
   stroke-width: 2;
 }
 
-.vue-flow__handle:not(.handle) {
+.vue-flow__handle:not(.handle):not(.flow-port) {
   width: 10px;
   height: 10px;
   background-color: var(--accent-color) !important;

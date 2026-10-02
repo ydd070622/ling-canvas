@@ -27,6 +27,7 @@ import { INPUT_HANDLE, OUTPUT_HANDLE } from '../../../config/nodeRegistry'
 
 const props = defineProps({
   /** target = 输入（固定在左）；source = 输出（固定在右） */
+  handleId: { type: String, default: '' },
   type: { type: String, default: 'target' },
   side: { type: String, default: 'left' },
   /** 端口类型色：text / image / video / audio / task */
@@ -35,7 +36,7 @@ const props = defineProps({
 
 defineEmits([])
 
-const id = computed(() => (props.type === 'source' ? OUTPUT_HANDLE : INPUT_HANDLE))
+const id = computed(() => props.handleId || (props.type === 'source' ? OUTPUT_HANDLE : INPUT_HANDLE))
 const positionEnum = computed(() => (props.side === 'right' ? Position.Right : Position.Left))
 const sideClass = computed(() => `flow-port-side-${props.side}`)
 

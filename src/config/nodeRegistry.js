@@ -420,6 +420,15 @@ export const validateCanvasConnection = (connection, nodes, edges) => {
     return { valid: false, reason: '该节点类型不支持连线' }
   }
 
+  if (targetNode.type === 'render' && connection.targetHandle === 'in-text' && sourceNode.type !== 'text') {
+    return { valid: false, reason: '文本输入点只接收文本节点' }
+  }
+  if (targetNode.type === 'render' && connection.targetHandle === INPUT_HANDLE && sourceNode.type !== 'image' &&
+      !edges.some(edge => edge.source === connection.source && edge.target === connection.target)) {
+    return { valid: false, reason: '图片输入点只接收图片节点' }
+  }
+  // 旧存档的 in 口可能连有文本，继续兼容；新的连线由 Canvas 分配到独立文本口。
+
   // Vue Flow 在重建受控 v-model:edges 时也会调 isValidConnection，
   // 那时候选边已在 edges 里，不能把它当成自己的重复项。
   const isDifferentEdge = edge => !connection.id || edge.id !== connection.id

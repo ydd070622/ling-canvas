@@ -18,7 +18,7 @@
   <NodeFrame
     :node-id="id"
     tone="render"
-    :title="data.label || '室内渲染'"
+    :title="data.label || '室内·智能渲染'"
     :focused="focused"
     :always-expanded="renderFormOpen"
     :multi="multi"
@@ -30,6 +30,10 @@
     @remove="remove"
     @duplicate="duplicateAndRefresh"
   >
+    <template #inputs>
+      <NodePort class="flow-render-image-port" :style="{ top: imagePortY + 'px' }" type="target" side="left" tone="image" title="图片输入" />
+      <NodePort class="flow-render-text-port" :style="{ top: textPortY + 'px' }" handle-id="in-text" type="target" side="left" tone="text" title="文本输入" />
+    </template>
     <template #body>
       <div v-if="!renderFormOpen" class="flow-render-compact">
         <img v-if="views[0]?.url" :src="views[0].url" alt="室内渲染视角预览">
@@ -38,30 +42,34 @@
           <button class="nodrag" type="button" @click.stop="renderFormOpen = true">编辑参数</button>
         </div>
       </div>
-      <div v-else class="flow-render">
+      <div v-else ref="renderRoot" class="flow-render">
         <button class="flow-render-collapse nodrag" type="button" @click.stop="renderFormOpen = false">收起参数</button>
         <div class="flow-render-scroll nodrag">
+          <section class="flow-render-mode-panel">
+            <span class="flow-render-panel-label">◎ 生成类型</span>
           <div class="flow-render-mode">
             <button
               type="button"
               class="nodrag"
               :class="{ 'is-active': params.viewMode === 'single' }"
               @click="setField('viewMode', 'single')"
-            >单视角</button>
+            >单角度</button>
             <button
               type="button"
               class="nodrag"
               :class="{ 'is-active': params.viewMode === 'multi' }"
               @click="setField('viewMode', 'multi')"
-            >多视角</button>
+            >多角度</button>
           </div>
 
+          </section>
+
           <!-- --------------------------------------------- 视角缩略图网格 -->
-          <div class="flow-render-views">
+          <div class="flow-render-views" :class="{ 'is-single': params.viewMode === 'single', 'is-empty': !views.length }">
             <div class="flow-render-views-head">
-              <span class="flow-render-views-title">多角度视角</span>
+              <span class="flow-render-views-title">{{ params.viewMode === 'single' ? '底图' : '上传多角度' }}</span>
               <small v-if="views.length">已连接 {{ views.length }} 个</small>
-              <small v-else>从左侧连入，或用下面的 ＋ 添加</small>
+
             </div>
 
             <!-- 列的是**全部**视角，不只是本次要跑的：单视角模式下被跳过的那几张
@@ -122,6 +130,7 @@
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5M7.5 9.5 12 5l4.5 4.5" /><path d="M5 16v2.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V16" /></svg>
               </button>
+              <span v-if="params.viewMode === 'single' && !views.length" class="flow-render-upload-caption">上传图片</span>
               <input ref="localInput" hidden type="file" accept="image/*" multiple @change="onLocalFiles">
             </div>
           </div>
@@ -148,7 +157,8 @@
             :class="{ 'is-stop': busy }"
             :disabled="!busy && !canStart"
             @click="busy ? cancelGeneration() : runViews()"
-          >{{ submitLabel }}</button>
+          >{{ busy ? '停止生成' : submitLabel }}</button>
+          <p v-if="!views.length" class="flow-render-empty-hint">{{ params.viewMode === 'single' ? '请先完成：底图 · 上传图片' : '请先完成：上传多角度 · 添加图片' }}</p>
         </div>
       </div>
     </template>
@@ -156,9 +166,10 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import { NodeFrame } from './base'
+import NodePort from './base/NodePort.vue'
 import RenderForm from './render/RenderForm.vue'
 import { useNodeRefs } from '../../composables/useNodeRefs'
 import { useFocusExpanded, useMultiSelected } from '../../composables/useFocusMode'
@@ -173,15 +184,31 @@ import {
 import { INPUT_HANDLE, OUTPUT_HANDLE, getAcceptLimit } from '../../config/nodeRegistry'
 import { buildNodeNotices } from '../../utils/nodeNotices'
 import { approximateRatio, findSizeByRatio } from '../../utils/ratio'
+import { renderOutputOffsets, renderOutputSize } from '../../utils/renderOutputLayout'
 import { resolveImageTierOptions, imageTierLockNote } from '../../utils/imageTiers'
 import { isLikelyTextModel } from '../../composables/useModelGuard'
-import { readParams, validateRenderParams, buildRenderPrompt } from '../../utils/renderPrompt'
+import { readParams, validateRenderParams, buildRenderPrompt, buildRenderImages } from '../../utils/renderPrompt'
 
 const props = defineProps({
   id: String,
   data: Object,
   selected: Boolean
 })
+
+// 兼容旧存档：已连入的文本也要落到真实文本 Handle。
+watch(() => edges.value.filter(edge => edge.target === props.id).map(edge =>
+  `${edge.id}:${edge.targetHandle}:${nodes.value.find(node => node.id === edge.source)?.type}`).join('|'), () => {
+  let changed = false
+  const next = edges.value.map(edge => {
+    if (edge.target !== props.id) return edge
+    const kind = nodes.value.find(node => node.id === edge.source)?.type
+    const targetHandle = kind === 'text' ? 'in-text' : kind === 'image' ? INPUT_HANDLE : edge.targetHandle
+    if (targetHandle === edge.targetHandle) return edge
+    changed = true
+    return { ...edge, targetHandle }
+  })
+  if (changed) edges.value = next
+}, { immediate: true })
 
 const { slots } = useNodeRefs(props.id)
 const focused = useFocusExpanded(props.id)
@@ -395,7 +422,53 @@ const tileTitle = (position) => {
  * **所有控件都必须走这里，不能 v-model 绑 props.data** —— 直接改 store 对象会绕过
  * updateNode 的存档与撤销栈，编辑会在重载后静默消失、Ctrl+Z 也看不见。
  */
+const renderRoot = ref(null)
+const imagePortY = ref(180)
+const textPortY = ref(380)
+let portObserver
+let portRefreshFrame = null
+const measureInputPorts = () => {
+  const root = renderRoot.value
+  const card = root?.closest('.flow-card')
+  if (!card) return
+  const cardRect = card.getBoundingClientRect()
+  const scale = cardRect.height / card.offsetHeight || 1
+  const centerY = (element) => {
+    const rect = element.getBoundingClientRect()
+    return (rect.top + rect.height / 2 - cardRect.top) / scale
+  }
+  const imageArea = root.querySelector('.flow-render-views')
+  const textArea = root.querySelector('.flow-render-textarea')?.closest('.flow-render-field')
+  if (imageArea) imagePortY.value = centerY(imageArea)
+  if (textArea) textPortY.value = centerY(textArea)
+}
+onMounted(async () => {
+  await nextTick()
+  measureInputPorts()
+  portObserver = new ResizeObserver(() => {
+    if (portRefreshFrame !== null) return
+    portRefreshFrame = requestAnimationFrame(() => {
+      portRefreshFrame = null
+      refreshConnectedNodes()
+    })
+  })
+  if (renderRoot.value) portObserver.observe(renderRoot.value)
+  refreshConnectedNodes()
+})
+onBeforeUnmount(() => {
+  portObserver?.disconnect()
+  if (portRefreshFrame !== null) cancelAnimationFrame(portRefreshFrame)
+})
+const refreshConnectedNodes = async () => {
+  await nextTick()
+  measureInputPorts()
+  await nextTick()
+  // 更新表单尺寸及相邻节点的测量，连线端点跟随模式切换后的布局。
+  updateNodeInternals([props.id, ...views.value.map(view => view.nodeId).filter(Boolean)])
+}
 const setField = (key, next) => { updateNode(props.id, { [key]: next }) }
+watch(() => params.value.viewMode, refreshConnectedNodes, { flush: 'post' })
+watch(renderFormOpen, refreshConnectedNodes, { flush: 'post' })
 
 // 档位选项会随「渠道 + 模型」变（渠道吞档位时只剩 1K）。
 // 存档里那一档若已不在选项里，原生 <select> 会显示空白 —— 落回第一档并写回节点。
@@ -569,19 +642,12 @@ const OUTPUT_MIN_GAP = 300
  * 但保留一个最小间距：几张原图挨得很近时，照搬偏移会让输出节点叠在一起 ——
  * 结果比原图值钱，宁可错开。
  */
-const outputOffsets = () => {
+const outputOffsets = (ratios) => {
   const sourceY = views.value.map((view) => {
     const node = nodes.value.find(item => String(item.id) === String(view.nodeId))
     return node?.position?.y
   })
-  const known = sourceY.filter(value => Number.isFinite(value))
-  const base = known.length ? Math.min(...known) : 0
-  let previous = -Infinity
-  return sourceY.map((value, index) => {
-    const offset = Number.isFinite(value) ? value - base : index * OUTPUT_MIN_GAP
-    previous = Math.max(offset, previous + OUTPUT_MIN_GAP)
-    return previous
-  })
+  return renderOutputOffsets(sourceY, ratios)
 }
 
 /**
@@ -603,13 +669,27 @@ const ensureOutputs = (positions, ratios) => {
   const self = nodes.value.find(node => String(node.id) === String(props.id))
   const ids = [...(props.data?.viewOutputIds || [])]
   const width = self?.measured?.width || 400
-  const offsets = outputOffsets()
+  const offsets = outputOffsets(ratios)
   let touched = false
+  const placed = []
+  const separateOutput = (node, ratio) => {
+    const size = renderOutputSize(ratio, node.measured || node.dimensions)
+    let y = node.position.y
+    for (const previous of placed) {
+      if (node.position.x < previous.x + previous.width + 24 && node.position.x + size.width + 24 > previous.x &&
+          y < previous.y + previous.height + 48 && y + size.height + 48 > previous.y) {
+        y = previous.y + previous.height + 48
+      }
+    }
+    if (y !== node.position.y) updateNodeMeta(node.id, { position: { ...node.position, y } })
+    placed.push({ x: node.position.x, y, ...size })
+  }
 
   startBatchOperation()
   positions.forEach((position) => {
     const existing = ids[position] ? nodes.value.find(n => String(n.id) === String(ids[position])) : null
     if (existing?.type === 'image' && isOwnOutput(existing)) {
+      separateOutput(existing, ratios[position])
       // 用户可能剪断过这条出边 —— 补回来，但绝不重建节点（里面可能有结果）
       if (!hasEdgeTo(existing.id)) {
         addEdge({
@@ -643,6 +723,7 @@ const ensureOutputs = (positions, ratios) => {
       data: { order: 1 }
     })
     ids[position] = newId
+    separateOutput(nodes.value.find(node => node.id === newId), ratios[position])
     touched = true
   })
   endBatchOperation()
@@ -730,10 +811,41 @@ const runViews = async (positions) => {
 
     // 量比例必须在建输出节点之前完成：卡片宽度按比例定，晚写会让卡片高矮跳一次
     const probes = await Promise.all(all.map(view => probeImage(view.url)))
-    const ratios = probes.map(probe => probe.ratio)
+    const ratios = probes.map(probe => params.value.ratio === 'auto' ? probe.ratio : params.value.ratio)
     if (cancelled.value) return
 
-    const outputs = ensureOutputs(targets, ratios)
+    const primaryOutputs = ensureOutputs(targets, ratios)
+    const count = [1, 2, 4].includes(Number(params.value.count)) ? Number(params.value.count) : 1
+    const variantIds = { ...(props.data?.viewVariantOutputIds || {}) }
+    const outputGroups = targets.map((position, index) => {
+      const group = [primaryOutputs[index]]
+      for (let variant = 1; variant < count; variant++) {
+        const key = `${position}:${variant}`
+        let output = nodes.value.find(node => node.id === variantIds[key] && isOwnOutput(node))
+        if (!output) {
+          const primary = primaryOutputs[index]
+          const id = stampNode(addNode('image', {
+            x: (primary?.position.x || 0) + variant * (renderOutputSize(ratios[position], primary?.measured || primary?.dimensions).width + 64),
+            y: primary?.position.y || 0
+          }, { label: `视角 ${position + 1} · 第${variant + 1}张`, ratio: ratios[position], loading: true, ownerId: props.id }))
+          variantIds[key] = id
+          output = nodes.value.find(node => node.id === id)
+        }
+        const previous = group[group.length - 1]
+        const previousSize = renderOutputSize(ratios[position], previous.measured || previous.dimensions)
+        const currentSize = renderOutputSize(ratios[position], output.measured || output.dimensions)
+        if (output.position.x < previous.position.x + previousSize.width + 64 && output.position.x + currentSize.width > previous.position.x &&
+            output.position.y < previous.position.y + previousSize.height + 48 && output.position.y + currentSize.height > previous.position.y) {
+          updateNodeMeta(output.id, { position: { x: previous.position.x + previousSize.width + 64, y: output.position.y } })
+          output = nodes.value.find(node => node.id === output.id)
+        }
+        if (!hasEdgeTo(output.id)) addEdge({ source: props.id, target: output.id, sourceHandle: OUTPUT_HANDLE, targetHandle: INPUT_HANDLE, type: 'flowEdge', data: { order: 1 } })
+        group.push(output)
+      }
+      return group
+    })
+    updateNode(props.id, { viewVariantOutputIds: variantIds })
+    const outputs = outputGroups.flat()
     const viewErrors = [...(props.data?.viewErrors || [])]
 
     /*
@@ -748,16 +860,16 @@ const runViews = async (positions) => {
      */
     const plan = []
     targets.forEach((position, index) => {
-      const output = outputs[index]
+      const output = primaryOutputs[index]
       if (probes[position]?.ok) {
-        plan.push({ position, output })
+        outputGroups[index].forEach(output => plan.push({ position, output }))
         return
       }
       const message = '原图读不到（多为重新打开项目导致），请重新上传这张图'
       viewErrors[position] = message
       // 已经有图的结果节点不写这条 error：那会让一张好图挂上"失败"的表头。
       // 这次没出图照样记在 viewErrors 上，缩略图和汇总提示都会说。
-      if (output) updateNode(output.id, output.data?.url ? { loading: false } : { loading: false, error: message })
+      outputGroups[index].forEach(output => output && updateNode(output.id, output.data?.url ? { loading: false } : { loading: false, error: message }))
     })
 
     if (!plan.length) {
@@ -780,6 +892,7 @@ const runViews = async (positions) => {
     for (let i = 0; i < plan.length; i += 1) {
       if (cancelled.value) break
       const { position, output } = plan[i]
+      if (output) updateNode(output.id, { loading: true, error: '' })
       cursor = i + 1
       runningPosition.value = position
       updateNode(props.id, { viewErrors })
@@ -795,7 +908,7 @@ const runViews = async (positions) => {
           size: findSizeByRatio(currentModel.value?.sizes || [], ratios[position]) || ratios[position],
           resolution: resolutionFor(params.value),
           n: 1,
-          image: [all[position].url, params.value.personImage, params.value.outsideImage].filter(Boolean)
+          image: buildRenderImages(all[position].url, params.value)
         }, { providerId: providerId.value })
 
         const url = (Array.isArray(results) ? results : []).find(item => item?.url)?.url
@@ -831,14 +944,17 @@ const runViews = async (positions) => {
 
     const failed = targets.filter(position => viewErrors[position]).length
     // 中途停下必须明说 —— 不然「4 个视角只出了 1 张」看起来像静默失败
-    if (cancelled.value) window.$message?.info(`已停止：本次完成 ${ok} / ${targets.length}`)
-    else if (failed) window.$message?.warning(`已完成 ${ok} / ${targets.length}，${failed} 个视角没出图，原因在各结果节点上`)
+    if (cancelled.value) window.$message?.info(`已停止：本次完成 ${ok} / ${plan.length}`)
+    else if (failed || ok < plan.length) window.$message?.warning(`已完成 ${ok} / ${plan.length}，失败原因在各结果节点上`)
     else window.$message?.success(`已完成 ${ok} 张效果图`)
   } finally {
     // 预检抛错时也必须摘掉，否则卡片会永远停在"生成中"
     starting.value = false
     running.value = false
     runningPosition.value = -1
+    updateNode(props.id, { loading: false })
+    nodes.value.filter(node => node.data?.ownerId === props.id && node.data?.loading)
+      .forEach(node => updateNode(node.id, { loading: false }))
   }
 }
 

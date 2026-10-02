@@ -1013,6 +1013,31 @@ modelStore.updateCustomProvider(nativeKey, { defaultBaseUrl: base, geminiNative:
 modelStore.setApiKeyByProvider(nativeKey, 'k')
 const nativeUpstream = modelStore.resolveUpstreamContext(nativeKey)
 
+await test('LinkAPI 两个域名：竖图走原生协议，Chat 回退保留比例提示', async () => {
+  const { buildGeminiImageRequest } = await import('../src/utils/upstreamRequest.js')
+  const { buildChatImageRequest } = await import('../src/api/image.js')
+  const model = 'gemini-3.1-flash-image'
+  for (const host of ['linkapi.ai', 'linkapi.pro']) {
+    for (const suffix of ['', '/v1']) {
+      const baseUrl = `https://${host}${suffix}`
+      assert.equal(prefersGeminiNativeImage({}, baseUrl, model), true)
+      assert.equal(prefersRatioInPrompt({}, baseUrl), true)
+      assert.equal(prefersGeminiNativeImage({ geminiNative: false }, baseUrl, model), false)
+      assert.equal(prefersGeminiNativeImage({}, baseUrl, 'gpt-image-2'), false)
+      assert.deepEqual(resolveImageTierOptions({ modelKey: model, baseUrl }), ['1K', '2K', '4K'])
+      assert.deepEqual(resolveImageTierOptions({ modelKey: model, baseUrl, providerConfig: { geminiNative: false } }), ['1K'])
+      const request = await buildGeminiImageRequest({
+        model, prompt: '室内渲染', size: '3:4', resolution: '2K',
+        images: [`data:image/png;base64,${REFERENCE_BYTES.toString('base64')}`]
+      })
+      assert.deepEqual(request.generationConfig.imageConfig, { aspectRatio: '3:4', imageSize: '2K' })
+      assert.equal(request.contents[0].parts[1].inlineData.data, REFERENCE_BYTES.toString('base64'))
+      const fallback = buildChatImageRequest({ model, prompt: '室内渲染', images: [], size: '3:4', resolution: '2K', ratioInPrompt: prefersRatioInPrompt({}, baseUrl) })
+      assert.match(fallback.messages[0].content[0].text, /画面比例 3:4（竖版）/)
+    }
+  }
+})
+
 await test('原生路由判定：仅 gemini 系 + 支持原生路由的渠道', () => {
   assert.equal(prefersGeminiNativeImage({ geminiNative: true }, base, 'gemini-3.1-flash-image'), true)
   assert.equal(prefersGeminiNativeImage({}, 'https://linkapi.pro', 'gemini-3.1-flash-image'), true)

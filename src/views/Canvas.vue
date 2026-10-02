@@ -12,8 +12,8 @@
       <!-- Vue Flow canvas | Vue Flow 画布 -->
       <VueFlow
         :key="flowKey"
-        v-model:nodes="nodes"
-        v-model:edges="edges"
+        :delete-key-code="null"
+        @nodes-change="onFlowNodesChange"
         v-model:viewport="viewport"
         :node-types="nodeTypes"
         :edge-types="edgeTypes"
@@ -36,8 +36,9 @@
         @node-click="onNodeClick"
         @pane-click="onPaneClick"
         @dblclick="onCanvasDoubleClick"
-        @selection-end="refreshSelectionOverlay"
-        @node-drag-start="startBatchOperation"
+        @selection-start="clearEdgeFocus"
+        @selection-end="onCanvasSelectionEnd"
+        @node-drag-start="handleNodeDragStart"
         @node-drag-stop="handleNodeDragStop"
         @viewport-change="handleViewportChange"
         @edges-change="onEdgesChange"
@@ -53,11 +54,17 @@
       </div>
 
       <!-- Multi-node selection management | 多节点框选管理 -->
+      <svg v-if="selectionWire" class="selection-wire-preview">
+        <path v-for="(start, index) in selectionWire.starts" :key="index"
+          :d="`M ${start.x} ${start.y} C ${start.x + 70} ${start.y}, ${selectionWire.x - 70} ${selectionWire.y}, ${selectionWire.x} ${selectionWire.y}`" />
+      </svg>
       <div
         v-if="selectionOverlay"
         class="selection-group-outline"
         :style="selectionOverlay.boxStyle"
       >
+        <button v-if="selectedCanvasNodes.filter(node => node.type === 'image').length >= 2" class="selection-output-port" type="button" title="拖到下游节点，连接全部所选图片；点击创建下游"
+          @pointerdown.stop.prevent="startSelectionConnection">+</button>
         <div class="selection-action-bar" @mousedown.stop @click.stop>
           <button type="button" class="selection-action" title="将所选节点编为一组" @click="groupSelectedNodes">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="2.4" /><circle cx="17" cy="17" r="2.4" /><path d="M9 8.5l6 6M15 8.5l-6 6" /></svg>
@@ -339,7 +346,9 @@
  * Canvas view component | 画布视图组件
  * Main infinite canvas with Vue Flow integration
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick, markRaw } from 'vue'
+import { useCanvasFlowSync } from '../composables/useCanvasFlowSync'
+import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, nextTick, markRaw } from 'vue'
+import { fitNodeGroups, releaseGroupMembers, joinDroppedGroupMembers } from '../utils/groupBounds'
 import { useRouter, useRoute } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -376,7 +385,7 @@ import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject, flushProjectSaves } from '../stores/projects'
 import { flushProjectThumbnails } from '../stores/projectThumbnails'
 import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
-import { focusedNodeId, selectedNodeIds } from '../composables/useFocusMode'
+import { selectedNodeIds } from '../composables/useFocusMode'
 import { activeEdgeId, clearEdgeFocus } from '../composables/useEdgeFocus'
 
 // Window close handler for saving | 窗口关闭处理函数（用于保存）
@@ -450,7 +459,25 @@ const route = useRoute()
 const zoomLevel = computed(() => viewport.value?.zoom ?? 1)
 
 // Vue Flow instance | Vue Flow 实例
-const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoordinate } = useVueFlow()
+const canvasFlow = useVueFlow()
+// ResizeObserver delivers dimensions before paint. Apply group geometry in
+// the next frame so measuring and resizing never feed back in that delivery.
+let groupFitFrame = null
+const draggedGroupMembers = new Set()
+const dragGroupBounds = new Map()
+watch(nodes, () => {
+  if (groupFitFrame !== null) return
+  groupFitFrame = requestAnimationFrame(() => {
+    groupFitFrame = null
+    const fitted = fitNodeGroups(nodes.value, 28, new Set(dragGroupBounds.keys()))
+    if (fitted !== nodes.value) nodes.value = fitted
+  })
+}, { deep: true, flush: 'post' })
+onBeforeUnmount(() => {
+  if (groupFitFrame !== null) cancelAnimationFrame(groupFitFrame)
+})
+const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoordinate } = canvasFlow
+const { onNodesChange: onFlowNodesChange, onEdgeSelectionChange } = useCanvasFlowSync(nodes, edges, canvasFlow)
 
 // Register custom node types | 注册自定义节点类型
 const nodeTypes = {
@@ -573,6 +600,38 @@ const refreshSelectionOverlay = () => {
   })
 }
 
+let edgeSelectionRect = null
+watch(canvasFlow.userSelectionRect, rect => {
+  if (rect) edgeSelectionRect = { ...rect }
+}, { flush: 'sync' })
+const onCanvasSelectionEnd = () => {
+  const rect = edgeSelectionRect
+  edgeSelectionRect = null
+  const canvas = document.querySelector('.canvas-flow')
+  if (rect && rect.width > 3 && rect.height > 3 && canvas) {
+    const bounds = canvas.getBoundingClientRect()
+    const box = { left: bounds.left + rect.x, top: bounds.top + rect.y,
+      right: bounds.left + rect.x + rect.width, bottom: bounds.top + rect.y + rect.height }
+    const selected = new Set()
+    canvas.querySelectorAll('.flow-edge-hit').forEach(path => {
+      const matrix = path.getScreenCTM()
+      if (!matrix) return
+      const length = path.getTotalLength()
+      const steps = Math.max(1, Math.ceil(length * (viewport.value.zoom || 1) / 4))
+      for (let step = 0; step <= steps; step++) {
+        const point = path.getPointAtLength(length * step / steps)
+        const x = matrix.a * point.x + matrix.c * point.y + matrix.e
+        const y = matrix.b * point.x + matrix.d * point.y + matrix.f
+        if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) {
+          selected.add(path.dataset.edgeId); break
+        }
+      }
+    })
+    edges.value = edges.value.map(edge => ({ ...edge, selected: selected.has(edge.id) }))
+  }
+  refreshSelectionOverlay()
+}
+
 watch(selectedCanvasNodes, refreshSelectionOverlay, { deep: true, flush: 'post' })
 
 watch(showAssetHistoryModal, (isOpen) => {
@@ -665,7 +724,7 @@ const deleteSelectedCanvasElements = () => {
 
   startBatchOperation()
   selectedNodeIds.forEach(removeNode)
-  selectedEdgeIds.forEach(removeEdge)
+  selectedEdgeIds.forEach(cutEdge)
   // 走 cutEdge 而不是 removeEdge：它会顺带把目标节点正文里的引用编号重排
   if (focusedEdgeId) cutEdge(focusedEdgeId)
   endBatchOperation()
@@ -736,7 +795,7 @@ const groupSelectedNodes = () => {
       ? {
           ...node,
           parentNode: groupId,
-          extent: 'parent',
+          extent: undefined,
           position: {
             x: node.position.x - groupPosition.x,
             y: node.position.y - groupPosition.y
@@ -841,7 +900,7 @@ const handleAddWorkflow = ({ workflow, options }) => {
     source: idMap[edge.source] || edge.source,
     target: idMap[edge.target] || edge.target,
     sourceHandle: OUTPUT_HANDLE,
-    targetHandle: INPUT_HANDLE,
+    targetHandle: edge.targetHandle || INPUT_HANDLE,
     type: edge.type,
     data: edge.data
   }))
@@ -860,6 +919,12 @@ const handleAddWorkflow = ({ workflow, options }) => {
     })
   }, 100)
 
+}
+
+const targetInputHandle = (sourceId, targetId) => {
+  const source = nodes.value.find(node => node.id === sourceId)
+  const target = nodes.value.find(node => node.id === targetId)
+  return target?.type === 'render' && source?.type === 'text' ? 'in-text' : INPUT_HANDLE
 }
 
 // ===== Flow 连线系统：语义标签 + 类型校验 + 快速新建 =====
@@ -951,7 +1016,12 @@ const menuOptions = computed(() => {
       name: nodeTypeLabels[type] || type
     }))
   }
-  return buildQuickAddOptions(menuSources.value, menu.value.direction)
+  const options = buildQuickAddOptions(menuSources.value, menu.value.direction)
+  if (menu.value.direction === 'upstream' && menuSources.value.length === 1 && menuSources.value[0].type === 'render') {
+    const kind = connectStartHandleId.value === 'in-text' ? 'text' : 'image'
+    return options.filter(option => option.type === kind)
+  }
+  return options
 })
 
 const menuTitle = computed(() => {
@@ -962,7 +1032,7 @@ const menuTitle = computed(() => {
 })
 
 /** 端口 id → 方向：左口(in) 往上游，右口(out) 往下游 */
-const resolveDirection = handleId => (handleId === INPUT_HANDLE ? 'upstream' : 'downstream')
+const resolveDirection = handleId => ([INPUT_HANDLE, 'in-text'].includes(handleId) ? 'upstream' : 'downstream')
 
 /** 点击端口时新节点的落点：按锚点尺寸往对应方向让开一个身位 */
 const anchorSidePosition = (anchor, direction) => {
@@ -1169,7 +1239,7 @@ const handleMenuSelect = (option) => {
       source,
       target,
       sourceHandle: OUTPUT_HANDLE,
-      targetHandle: INPUT_HANDLE,
+      targetHandle: targetInputHandle(source, target),
       type: 'flowEdge',
       data: { order: nextOrder }
     })
@@ -1221,6 +1291,50 @@ const createDownstreamFromSelection = () => {
 }
 
 // Handle connection | 处理连接
+const selectionWire = ref(null)
+let selectionWireController = null
+const startSelectionConnection = event => {
+  if (event.button !== 0) return
+  const sources = selectedCanvasNodes.value.filter(node => node.type === 'image').map(node => node.id)
+  if (!sources.length) return
+  const canvasRect = document.querySelector('.canvas-flow').getBoundingClientRect()
+  const origin = { x: event.clientX, y: event.clientY }
+  const starts = sources.map(id => {
+    const rect = Array.from(document.querySelectorAll('.vue-flow__node')).find(el => el.dataset.id === id)?.getBoundingClientRect()
+    return rect ? { x: rect.right - canvasRect.left, y: (rect.top + rect.bottom) / 2 - canvasRect.top } : null
+  }).filter(Boolean)
+  selectionWireController?.abort()
+  const controller = new AbortController()
+  selectionWireController = controller
+  window.addEventListener('pointermove', move => {
+    selectionWire.value = { starts, x: move.clientX - canvasRect.left, y: move.clientY - canvasRect.top }
+  }, { signal: controller.signal })
+  window.addEventListener('pointerup', release => {
+    controller.abort()
+    selectionWire.value = null
+    if (Math.hypot(release.clientX-origin.x, release.clientY-origin.y) < 5) {
+      createDownstreamFromSelection()
+      return
+    }
+    const targetElement = document.elementFromPoint(release.clientX, release.clientY)?.closest('.vue-flow__node')
+    const target = targetElement?.dataset.id
+    if (!target || sources.includes(target)) return
+    const candidates = sources.filter(source => !edges.value.some(edge => edge.source === source && edge.target === target))
+    if (!candidates.length) return
+    let proposed = [...edges.value]
+    for (const source of candidates) {
+      const validation = validateCanvasConnection({ source, target }, nodes.value, proposed)
+      if (!validation.valid) { window.$message?.warning(validation.reason); return }
+      proposed.push({ source, target })
+    }
+    startBatchOperation()
+    candidates.forEach(source => onConnect({ source, target }))
+    endBatchOperation()
+  }, { once: true, signal: controller.signal })
+  window.addEventListener('pointercancel', () => { controller.abort(); selectionWire.value = null }, { once: true, signal: controller.signal })
+}
+onBeforeUnmount(() => selectionWireController?.abort())
+
 // 单一输入口：边不再分槽，顺序（data.order）就是正文里的引用编号顺序。
 const onConnect = (params) => {
   const validation = validateCanvasConnection(params, nodes.value, edges.value)
@@ -1234,7 +1348,7 @@ const onConnect = (params) => {
     source: params.source,
     target: params.target,
     sourceHandle: OUTPUT_HANDLE,
-    targetHandle: INPUT_HANDLE,
+    targetHandle: targetInputHandle(params.source, params.target),
     type: 'flowEdge',
     data: { order: nextOrder }
   })
@@ -1252,62 +1366,19 @@ const onNodeClick = (event) => {
   // to run after Vue Flow and collapse Ctrl-selection (or toggle Shift twice).
 }
 
-/**
- * 展开/收起的尺寸补偿 | Keep the visual center put
- *
- * 卡片一换尺寸，节点坐标（左上角）不动就会朝右下角"长出去"，看起来像卡片自己滑走了。
- * 这里记下换尺寸前的视觉中心，等 DOM 换完再按新尺寸把左上角挪回去。
- *
- * 一次选中变化最多影响两个节点：上一个焦点（收起）和新的焦点（展开）。
- * 多选（0 个或 ≥2 个选中）时 focusedNodeId 为 null，两边都不展开，所以不用补偿。
- */
-watch(focusedNodeId, async (next, prev) => {
-  const sizeOf = node => ({
-    width: node.measured?.width || node.dimensions?.width || 0,
-    height: node.measured?.height || node.dimensions?.height || 0
-  })
+// 受控节点同步后，已有 DOM 的尺寸归零不会必然触发 ResizeObserver。
+// 补量只处理缺少尺寸的节点，避免连线仍在但节点 visibility:hidden。
+watch(() => nodes.value.filter(node => !node.hidden &&
+  (!node.dimensions?.width || !node.dimensions?.height)).map(node => node.id).join('|'),
+  async (ids) => {
+    if (!ids) return
+    await nextTick()
+    updateNodeInternals(ids.split('|'))
+  }, { flush: 'post' })
 
-  const affected = [prev, next]
-    .filter(Boolean)
-    .map(id => nodes.value.find(node => String(node.id) === id))
-    // 没量过尺寸的节点跳过：刚建出来的节点 measured 还是 0，拿它当"旧尺寸"算出来的
-    // 中心就是左上角本身，补偿反而会把新节点平白推走半个卡宽。
-    .filter(node => node && sizeOf(node).width > 0 && sizeOf(node).height > 0)
-  if (!affected.length) return
-
-  // 此刻 DOM 还是旧尺寸，`measured` 也还是旧值 —— 正是要的中心
-  const centers = affected.map((node) => {
-    const { width, height } = sizeOf(node)
-    return {
-      id: node.id,
-      cx: node.position.x + width / 2,
-      cy: node.position.y + height / 2
-    }
-  })
-
-  await nextTick()
-
-  // 注意：offsetWidth / offsetHeight 是**布局尺寸，不受 CSS transform 影响**。
-  // 画布的缩放是靠 transformationpane 上的 scale 做的，所以这两个值本来就是 flow
-  // 坐标，不能再除 zoom —— 除一次会让补偿量偏大 1/zoom 倍，卡片反而越纠越偏。
-  const placements = []
-  centers.forEach(({ id, cx, cy }) => {
-    const el = document.querySelector(`.vue-flow__node[data-id="${id}"]`)
-    if (!el) return
-    const width = el.offsetWidth
-    const height = el.offsetHeight
-    if (!width || !height) return
-    placements.push({ id, position: { x: cx - width / 2, y: cy - height / 2 } })
-  })
-  if (!placements.length) return
-
-  const byId = new Map(placements.map(item => [String(item.id), item.position]))
-  nodes.value = nodes.value.map(node => (
-    byId.has(String(node.id)) ? { ...node, position: byId.get(String(node.id)) } : node
-  ))
-  // 尺寸变了，端口几何要重算（边端点取自 handle 的 DOM 矩形）
-  nextTick(() => placements.forEach(item => updateNodeInternals(item.id)))
-}, { flush: 'pre' })
+// NodeFrame 的内容尺寸不再随选中状态变化，工具栏是绝对定位。
+// 不在选中后的 nextTick 中重写 position：该回调会与 Vue Flow 拖动竞争，
+// 使用过期坐标覆盖鼠标位置。节点位置统一交给拖动处理。
 
 // Handle viewport change | 处理视口变化
 const handleViewportChange = (newViewport) => {
@@ -1315,9 +1386,37 @@ const handleViewportChange = (newViewport) => {
   refreshSelectionOverlay()
 }
 
+const handleNodeDragStart = ({ node, nodes: draggedNodes }) => {
+  startBatchOperation()
+  draggedGroupMembers.clear()
+  dragGroupBounds.clear()
+  const moving = draggedNodes?.length ? draggedNodes : [node]
+  const movingIds = new Set(moving.map(item => item.id))
+  for (const item of moving) {
+    const member = nodes.value.find(candidate => candidate.id === item.id)
+    if (!member || member.type === 'group' || movingIds.has(member.parentNode)) continue
+    draggedGroupMembers.add(member.id)
+    if (!member.parentNode) continue
+    const group = nodes.value.find(candidate => candidate.id === member.parentNode)
+    if (!group) continue
+    draggedGroupMembers.add(member.id)
+    dragGroupBounds.set(group.id, { x: group.position.x, y: group.position.y,
+      width: parseFloat(group.style?.width) || group.dimensions?.width || 0,
+      height: parseFloat(group.style?.height) || group.dimensions?.height || 0 })
+  }
+}
 const handleNodeDragStop = () => {
-  endBatchOperation()
-  refreshSelectionOverlay()
+  // Engine release patches finish before changing parent coordinates.
+  requestAnimationFrame(() => {
+    const previousParents = new Map(nodes.value.filter(node => draggedGroupMembers.has(node.id) && node.parentNode).map(node => [node.id, node.parentNode]))
+    nodes.value = releaseGroupMembers(nodes.value, draggedGroupMembers, dragGroupBounds)
+    nodes.value = joinDroppedGroupMembers(nodes.value, draggedGroupMembers, previousParents)
+    dragGroupBounds.clear()
+    draggedGroupMembers.clear()
+    nodes.value = fitNodeGroups(nodes.value)
+    endBatchOperation()
+    refreshSelectionOverlay()
+  })
 }
 
 // Handle edges change | 处理边变化
@@ -1326,8 +1425,10 @@ const edgeTargets = new Map()
 watch(edges, (list) => { list.forEach(edge => edgeTargets.set(edge.id, edge.target)) }, { immediate: true })
 
 const onEdgesChange = (changes) => {
+  onEdgeSelectionChange(changes)
   const removals = changes.filter(change => change.type === 'remove')
   if (!removals.length) return
+  removals.forEach(change => removeEdge(change.id))
 
   // 被删的边可能带着引用绑定：目标节点要重排编号、正文里的 token 也要同步改写
   const affected = [...new Set(removals.map(change => edgeTargets.get(change.id)).filter(Boolean))]
@@ -2116,18 +2217,21 @@ onUnmounted(() => {
 .search-result-item small { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 .search-empty { padding: 36px 0; color: var(--text-secondary); font-size: 14px; text-align: center; }
 
-.selection-group-outline { position: absolute; z-index: 15; pointer-events: none; border: 1px solid color-mix(in srgb, var(--accent-color) 58%, transparent); border-radius: 12px; background: transparent; }
+.selection-group-outline { position: absolute; z-index: 15; pointer-events: none; border: 1px solid rgb(140 140 145 / 65%); border-radius: 12px; background: rgb(120 120 125 / 14%); }
+.selection-output-port { position: absolute; right: -12px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); pointer-events: auto; cursor: crosshair; touch-action: none; }
+.selection-wire-preview { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 16; pointer-events: none; }
+.selection-wire-preview path { fill: none; stroke: #92929e; stroke-width: 1.5; stroke-dasharray: 5 4; }
 .selection-action-bar { position: absolute; left: 50%; top: -10px; display: flex; align-items: center; gap: 2px; min-height: 38px; transform: translate(-50%, -100%); border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--bg-secondary) 94%, transparent); padding: 4px; box-shadow: 0 8px 22px rgb(15 23 42 / 10%), 0 1px 2px rgb(15 23 42 / 6%); backdrop-filter: blur(14px); pointer-events: auto; white-space: nowrap; }
 .selection-action-bar button { border: 1px solid transparent; border-radius: 8px; color: var(--text-secondary); font-size: 12.5px; font-weight: 500; line-height: 1; transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease; }
 .selection-action { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 6px 9px; }
 .selection-action:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); color: var(--text-primary); }
 .selection-action:active { transform: translateY(1px); }
 .selection-action-divider { width: 1px; height: 18px; margin: 0 3px; background: color-mix(in srgb, var(--border-color) 78%, transparent); }
-.selection-action.is-primary { border-color: color-mix(in srgb, var(--accent-color) 22%, transparent); background: color-mix(in srgb, var(--accent-color) 10%, transparent); color: color-mix(in srgb, var(--accent-color) 78%, #064e3b); }
-.selection-action.is-primary:hover { border-color: color-mix(in srgb, var(--accent-color) 34%, transparent); background: color-mix(in srgb, var(--accent-color) 16%, transparent); color: color-mix(in srgb, var(--accent-color) 90%, #064e3b); }
+.selection-action.is-primary { border-color: rgb(128 128 132 / 28%); background: rgb(128 128 132 / 12%); color: var(--text-primary); }
+.selection-action.is-primary:hover { border-color: rgb(160 160 165 / 40%); background: rgb(128 128 132 / 22%); color: var(--text-primary); }
 .dark .selection-action-bar { border-color: rgb(255 255 255 / 9%); background: rgb(37 37 39 / 88%); box-shadow: 0 10px 28px rgb(0 0 0 / 34%); }
 .dark .selection-action-divider { background: rgb(255 255 255 / 10%); }
-.dark .selection-action.is-primary { color: #86efac; }
+.dark .selection-action.is-primary { color: #e4e4e7; border-color: #48484c; background: #343437; }
 .selection-action svg, .selection-layout-popover svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .selection-caret { margin-left: -3px; color: var(--text-secondary); font-size: 13px; }
 .selection-layout-menu { position: relative; }

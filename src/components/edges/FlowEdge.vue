@@ -8,12 +8,18 @@
        真正的断线动作在剪刀那颗按钮上，避免手一抖就把线剪了。 -->
   <path
     class="flow-edge-hit"
+    :data-edge-id="id"
     :d="path"
+    vector-effect="non-scaling-stroke"
+    @pointerdown.stop
     @mouseenter="onEnter"
+    @mousemove="moveScissors"
     @mouseleave="onLeave"
-    @click.stop="focusEdge(props.id)"
+    @click.stop="selectEdge"
   />
+  <path v-if="!isIdle && isRunning" :d="path" class="flow-edge-stream" pathLength="100" />
   <BaseEdge
+    :interaction-width="0"
     :id="id"
     :path="path"
     :marker-end="markerEnd"
@@ -48,8 +54,9 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, useVueFlow } from '@vue-flow/core'
-import { cutEdge, nodeSlots } from '../../stores/canvas'
+import { cutEdge, nodeSlots, nodes, edges } from '../../stores/canvas'
 import { activeEdgeId, clearEdgeFocus, focusEdge } from '../../composables/useEdgeFocus'
+import { isEdgeRunning } from '../../utils/edgeRunState'
 
 const props = defineProps({
   id: String,
@@ -67,36 +74,23 @@ const props = defineProps({
   selected: Boolean
 })
 
-const { viewport, findNode } = useVueFlow()
+const { viewport, screenToFlowCoordinate } = useVueFlow()
 const hovered = ref(false)
+const isRunning = computed(() => isEdgeRunning(
+  nodes.value.find(node => node.id === props.source), nodes.value.find(node => node.id === props.target)
+))
+const cursorPosition = ref(null)
+const moveScissors = event => {
+  cursorPosition.value = screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+}
+const selectEdge = () => {
+  nodes.value = nodes.value.map(node => node.selected ? { ...node, selected: false } : node)
+  edges.value = edges.value.map(edge => ({ ...edge, selected: edge.id === props.id }))
+  focusEdge(props.id)
+}
 let leaveTimer = null
 
-/**
- * 连线端点按**节点卡片的边**算，不用 Vue Flow 传进来的 handle 坐标。
- *
- * 两个原因：
- * 1) 端口在视觉上被挪到了卡片外侧（见 flow-nodes.css 的「端口挪到卡片外面」），
- *    handle 坐标跟着一起外移，线端就会停在卡片外面 —— 缩小时那段空隙看着就像线断了；
- * 2) handle 的位置是 Vue Flow 缓存的（节点尺寸变化才重算），实测与 DOM 里的实际位置
- *    能差出十几像素，拿它画线本来就不稳。
- *
- * 节点几何是权威的：左边出、右边进，竖向取卡片中点 —— 与端口画在哪儿无关。
- */
-const anchorX = (nodeId, side, fallback) => {
-  const node = findNode(nodeId)
-  if (!node) return fallback
-  const width = node.dimensions?.width || node.measured?.width || node.width || 0
-  if (!width) return fallback
-  return side === 'right' ? node.position.x + width : node.position.x
-}
-const anchorY = (nodeId, fallback) => {
-  const node = findNode(nodeId)
-  if (!node) return fallback
-  const height = node.dimensions?.height || node.measured?.height || node.height || 0
-  if (!height) return fallback
-  return node.position.y + height / 2
-}
-
+// 连线直接使用 Vue Flow 根据真实 Handle 测量的端点。
 /**
  * `getBezierPath` 顺手把**曲线自身的中点**算出来了（labelX / labelY）。
  * 剪刀必须落在这上面 —— 早先拿 `(sourceX + targetX) / 2` 手算中点，那是两个端点的
@@ -104,10 +98,10 @@ const anchorY = (nodeId, fallback) => {
  * 想点它得先离开线，鼠标一离开剪刀就没了。
  */
 const geometry = computed(() => getBezierPath({
-  sourceX: anchorX(props.source, 'right', props.sourceX),
-  sourceY: anchorY(props.source, props.sourceY),
-  targetX: anchorX(props.target, 'left', props.targetX),
-  targetY: anchorY(props.target, props.targetY),
+  sourceX: props.sourceX,
+  sourceY: props.sourceY,
+  targetX: props.targetX,
+  targetY: props.targetY,
   sourcePosition: props.sourcePosition,
   targetPosition: props.targetPosition,
   curvature: 0.32
@@ -122,18 +116,19 @@ const isIdle = computed(() => {
 })
 
 /** 悬停或点中：剪刀露出来 */
-const revealed = computed(() => hovered.value || activeEdgeId.value === String(props.id))
+const revealed = computed(() => hovered.value || props.selected || activeEdgeId.value === String(props.id))
 
 const edgeStyle = computed(() => ({
   stroke: isIdle.value ? 'var(--flow-text-faint)' : 'var(--flow-accent)',
-  strokeWidth: revealed.value ? 2.8 : isIdle.value ? 1.6 : 1.75,
+  strokeWidth: revealed.value || props.selected ? 2.8 : isIdle.value ? 1.6 : 1.75,
   opacity: isIdle.value ? 0.5 : revealed.value ? 1 : 0.8,
   ...props.style
 }))
 
 /** 剪刀落在曲线中点上，并按画布缩放反向补偿，保证恒定屏幕尺寸 */
 const actionStyle = computed(() => {
-  const [, labelX, labelY] = geometry.value
+  const labelX = cursorPosition.value?.x ?? geometry.value[1]
+  const labelY = cursorPosition.value?.y ?? geometry.value[2]
   const zoom = viewport.value?.zoom || 1
   return {
     position: 'absolute',
@@ -143,7 +138,7 @@ const actionStyle = computed(() => {
 })
 
 /** 鼠标要从线上移到剪刀上，给一点宽限时间，避免中途熄灭 */
-const onEnter = () => { clearTimeout(leaveTimer); hovered.value = true }
+const onEnter = event => { clearTimeout(leaveTimer); hovered.value = true; if (event?.currentTarget?.tagName?.toLowerCase() === 'path') moveScissors(event) }
 const onLeave = () => {
   clearTimeout(leaveTimer)
   leaveTimer = setTimeout(() => { hovered.value = false }, 240)

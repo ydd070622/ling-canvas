@@ -10,8 +10,8 @@
  * 这样做的理由是内容比控件重要：一张画布上大部分节点是"结果"，用户看的是结果，
  * 控件只在他要对某一张动手时才需要出现。
  *
- * 展开/收起会让卡片尺寸变化，而节点坐标是左上角 —— 直接用新尺寸渲染会让卡片
- * 朝右下角"长出去"。保持视觉中心不动的补偿在 `views/Canvas.vue` 的 watch 里做。
+ * NodeFrame 目前仅按 alwaysExpanded 展开正文，选中只切换悬浮工具栏。
+ * 选中变化不改写节点坐标，避免与拖动竞争。
  */
 import { computed } from 'vue'
 import { nodes } from '../stores/canvas'
