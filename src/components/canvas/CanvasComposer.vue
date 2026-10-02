@@ -6,7 +6,7 @@
        - 其余情况 = **创建模式**：发送会建一个 AI 任务节点（收下选中 + @ 引用的上游），
          再按张数在右侧建输出节点。 -->
   <Teleport to="body" :disabled="!composerExpanded">
-  <div class="composer-wrap" :class="{ 'is-expanded': composerExpanded }" @keydown="onComposerEscape">
+  <div class="composer-wrap" :class="{ 'is-expanded': composerExpanded, 'is-hidden': !composerVisible }" @keydown="onComposerEscape">
     <div v-if="composerExpanded" class="compose-backdrop" @click="toggleComposerExpanded(false)"></div>
     <div v-if="contextChips.length === 1" class="context-strip">
       <div v-for="chip in contextChips" :key="chip.id" class="context-chip">
@@ -273,6 +273,13 @@ const isRenderNode = computed(() => isEditing.value && editingNode.value.type ==
 const isCompareNode = computed(() => isEditing.value && editingNode.value.type === 'compare')
 /** 这两类节点的可编辑面都在卡片上，composer 只说明、不编辑 */
 const isParamlessNode = computed(() => isRenderNode.value || isCompareNode.value)
+
+/**
+ * 有选中节点时才升起来。
+ * 这条栏本质是「选中节点的提示词编辑器」—— 没有选中 = 没有编辑对象，
+ * 常驻底部只会挡住画布下方。新建节点走双击空白 / 端口菜单，不依赖它。
+ */
+const composerVisible = computed(() => selectedNodes.value.length > 0)
 
 const contextChips = computed(() => selectedNodes.value.map(node => ({
   id: node.id,
@@ -725,6 +732,20 @@ watch([() => editingNode.value?.id, targetType], () => {
   presetOpen.value = false
 })
 
+/**
+ * 收下去时把挂在栏上的浮层一起关掉。
+ * 模型 / 参数 / 预设面板是拎到触发按钮旁边渲染的，栏一往下降，锚点就在动，
+ * 留着它们会悬在半空跟着飘。mention 候选同理。
+ */
+watch(composerVisible, (visible) => {
+  if (visible) return
+  paramOpen.value = false
+  modelOpen.value = false
+  presetOpen.value = false
+  closeMention()
+  composerExpanded.value = false
+})
+
 const send = async () => {
   // 室内渲染：只借用这颗按钮当作开始 / 停止。必须在 resolveTokens / editNode 之前拦下 ——
   // 那两条会往节点里写 prompt 与 refBindings，而它的提示词是 buildRenderPrompt 现算的。
@@ -867,6 +888,20 @@ const viewportCenter = () => {
   z-index: 120;
   width: min(840px, calc(100vw - 190px));
   transform: translateX(-50%);
+  transition: transform 0.34s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.24s ease;
+  will-change: transform;
+}
+
+/* 没选中节点时收下去：整条向下移出自己的高度 + 底部留白，再淡出。
+   它 teleport 在 body 上、body 是 overflow:hidden，多出来的部分被裁掉，不会撑出滚动条。 */
+.composer-wrap.is-hidden {
+  transform: translate(-50%, calc(100% + 28px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-wrap { transition: none; }
 }
 
 /* ---- 上下文 chip ---- */
