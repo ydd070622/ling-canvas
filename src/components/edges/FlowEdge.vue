@@ -92,15 +92,37 @@ let leaveTimer = null
 
 // 连线直接使用 Vue Flow 根据真实 Handle 测量的端点。
 /**
+ * Vue Flow 给的端点取的是端口圆的**外沿**，不是圆心（`Position.Right` = handle.x + width）。
+ * 而端口圆被 CSS 整个挪到了卡片外：`.canvas-flow` 里端口是 32px（半径 16），
+ * 圆心再外移 18px（见 flow-nodes.css「端口挪到卡片外面」+ `.canvas-flow` 的覆盖）。
+ * 两者相加，线的端点在卡片外 **34px** 处 —— 端口平时 `opacity: 0`，
+ * 这段就成了一截看得见的空档：线两头都接不到节点。
+ *
+ * 把端点沿连接方向拉回卡片边框（16 + 18 = 34）。拉到边框即可，再往里也没有副作用：
+ * 边画在节点层**下面**，探进卡片的那一截被不透明的卡片盖住。
+ *
+ * ⚠️ 这个数跟着 CSS 走：端口尺寸或外移距离一改，这里要同步。
+ */
+const PORT_ENDPOINT_INSET = 16 + 18
+/**
+ * 只改 x、不改 y：端口都挂在卡片左右两侧的水平中线上。
+ * `left:-1 / right:1` 是端口相对卡片的朝外方向，取反即"往卡片里拉"。
+ */
+const OUTWARD = { left: -1, right: 1 }
+const pullInsideCard = (x, position) => (
+  Number.isFinite(x) ? x - (OUTWARD[position] || 0) * PORT_ENDPOINT_INSET : x
+)
+
+/**
  * `getBezierPath` 顺手把**曲线自身的中点**算出来了（labelX / labelY）。
  * 剪刀必须落在这上面 —— 早先拿 `(sourceX + targetX) / 2` 手算中点，那是两个端点的
  * 中点、不是曲线的中点；端点坐标又和实际画的线差了十几像素，于是剪刀飘在线旁边，
  * 想点它得先离开线，鼠标一离开剪刀就没了。
  */
 const geometry = computed(() => getBezierPath({
-  sourceX: props.sourceX,
+  sourceX: pullInsideCard(props.sourceX, props.sourcePosition),
   sourceY: props.sourceY,
-  targetX: props.targetX,
+  targetX: pullInsideCard(props.targetX, props.targetPosition),
   targetY: props.targetY,
   sourcePosition: props.sourcePosition,
   targetPosition: props.targetPosition,
