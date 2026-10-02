@@ -1527,8 +1527,32 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .canvas-flow .vue-flow__node .flow-render-input,
 .canvas-flow .vue-flow__node .flow-render-textarea { cursor: text !important; }
 
-/* 室内渲染：参考图的灰色分组卡片，只作用于渲染节点。 */
-.flow-node-render .flow-render { --render-panel: var(--flow-well-solid); --render-border: var(--flow-card-border); padding-bottom: 10px; }
+/* 室内渲染：参考图的灰色分组卡片，只作用于渲染节点。
+   控件（开关 / 激活标签 / 主按钮）在参考图里是深色 UI 的中性灰 —— 深色主题照搬就对，
+   浅色也必须给一套等价的浅灰，否则那几块深灰压在白卡上又重又脏。
+   所以颜色走 token，深色只覆盖颜色、不动尺寸：浅色的关/开是"浅灰 → 中灰"，
+   激活标签与主按钮是"炭灰底 + 反白字"，与深色的"浅灰底 + 深字"互为镜像。 */
+.flow-node-render .flow-render {
+  --render-panel: var(--flow-well-solid);
+  --render-border: var(--flow-card-border);
+  --render-switch-off: #d8dde5;
+  --render-switch-on: #8b96a8;
+  --render-switch-knob: #ffffff;
+  --render-active-bg: #3c4655;
+  --render-active-fg: #ffffff;
+  --render-active-border: #3c4655;
+  --render-submit-bg: #3c4655;
+  padding-bottom: 10px;
+}
+.dark .flow-node-render .flow-render {
+  --render-switch-off: #414141;
+  --render-switch-on: #777777;
+  --render-switch-knob: #f4f4f4;
+  --render-active-bg: #d6d6d6;
+  --render-active-fg: #272727;
+  --render-active-border: #bcbcbc;
+  --render-submit-bg: #555555;
+}
 .flow-render-scroll { gap: 10px; padding: 8px 12px 0; }
 .flow-render-collapse { margin: 0 12px; padding: 3px 6px; background: transparent; font-size: 10px; }
 .flow-render-mode-panel, .flow-render-views, .flow-render-model-panel,
@@ -1538,7 +1562,7 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-render-panel-label { display: block; margin-bottom: 8px; color: var(--flow-text-weak); font-size: 11px; }
 .flow-render-mode { gap: 6px; padding: 0; background: transparent; }
 .flow-render-mode button { height: 32px; border: 1px solid var(--render-border); border-radius: 8px; }
-.flow-render-mode button.is-active { background: #d6d6d6; color: #272727; border-color: #bcbcbc; box-shadow: none; }
+.flow-render-mode button.is-active { background: var(--render-active-bg); color: var(--render-active-fg); border-color: var(--render-active-border); box-shadow: none; }
 .flow-render-views-title::before { content: '▧'; margin-right: 6px; }
 .flow-render-views-head { font-size: 11px; font-weight: 500; }
 .flow-render-views-head small { font-size: 10px; }
@@ -1554,9 +1578,9 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-render-row { min-height: 52px; }
 .flow-render-row-label, .flow-render-row-title { color: var(--flow-text-mid); font-size: 11px; font-weight: 500; }
 .flow-render-row-label::before { content: '⊙'; color: var(--flow-text-faint); }
-.flow-render-switch span { width: 46px; height: 28px; background: #414141; }
-.flow-render-switch span::after { width: 20px; height: 20px; top: 4px; left: 4px; background: #f4f4f4; }
-.flow-render-switch input:checked + span { background: #777; }
+.flow-render-switch span { width: 46px; height: 28px; background: var(--render-switch-off); }
+.flow-render-switch span::after { width: 20px; height: 20px; top: 4px; left: 4px; background: var(--render-switch-knob); }
+.flow-render-switch input:checked + span { background: var(--render-switch-on); }
 .flow-render-switch input:checked + span::after { transform: translateX(18px); }
 .flow-render-switch input:focus-visible + span { outline: 2px solid var(--flow-accent); outline-offset: 3px; }
 .flow-render-rule { display: none; }
@@ -1565,7 +1589,7 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-render-select { height: 34px; border-radius: 8px; }
 .flow-render-model-panel .flow-render-grid { gap: 8px; }
 .flow-render-foot { padding: 12px 12px 0; }
-.flow-render-submit { background: #555; border: 1px solid var(--render-border); border-radius: 8px; height: 40px; }
+.flow-render-submit { background: var(--render-submit-bg); border: 1px solid var(--render-border); border-radius: 8px; height: 40px; }
 .flow-render-submit:disabled { opacity: .65; }
 .flow-render-empty-hint { text-align: center; font-size: 10px; color: var(--flow-text-faint); margin: 8px 0 0; }
 
