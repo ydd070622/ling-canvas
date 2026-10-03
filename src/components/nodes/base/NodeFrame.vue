@@ -22,23 +22,45 @@
     @dragleave="dragOver = false"
     @drop="onDrop"
   >
+    <!-- 焦点态（恰好选一个）才出现。
+         多选时的批量操作走画布顶部那条 selection-action-bar，不在这里。 -->
     <NodeToolbar v-if="focused">
       <div class="flow-tb-group">
-        <button
+<button
           v-if="uploadable"
           class="flow-tool-btn nodrag"
           type="button"
           :title="uploadTitle"
           @click="emit('upload')"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5" /><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5" /><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" /></svg><span>{{ uploadTitle }}</span>
         </button>
-        <button v-if="viewable" class="flow-tool-btn nodrag" type="button" title="查看" @click="emit('view')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+<button v-if="viewable && tone !== 'image'" class="flow-tool-btn nodrag" type="button" title="查看" @click="emit('view')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg><span>预览</span>
         </button>
-        <!-- 保存到本地：要先把字节取回来再挂 <a download>，所以是异步的 ——
-             取的过程中禁用，避免连点存出好几份 -->
-        <button
+        <button v-if="tone === 'image' && mediaUrl" class="flow-tool-btn nodrag" type="button" title="裁切图片" @click="emit('crop')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3v14h14M3 7h14v14" /></svg><span>裁切</span>
+        </button>
+        <button v-if="tone === 'image' && mediaUrl" class="flow-tool-btn nodrag" type="button" title="圈选物体，生成透明背景图片" @click="emit('cutout')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 19c-4-2-5-6-3-10s8-6 12-3 3 9-1 11-8 0-8 4 5 2 6 0" /></svg><span>抠图</span>
+        </button>
+<button v-if="editable" class="flow-tool-btn nodrag" type="button" title="编辑提示词" @click="emit('edit')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5 17.5 10.5" /></svg><span>编辑提示词</span>
+        </button>
+<button class="flow-tool-btn nodrag" type="button" title="创建副本" @click="emit('duplicate')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.2" /><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" /></svg><span>复制</span>
+        </button>
+<div v-if="(tone === 'image' && mediaUrl) || (viewable && mediaUrl)" class="flow-tb-sep"></div>
+<button
+          v-if="tone === 'image' && mediaUrl"
+          class="flow-tool-btn nodrag"
+          type="button"
+          title="发送到智能体"
+          @click="emit('send-to-agent')"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" /><path d="M12 13V8" /><path d="M9.5 10.5 12 8l2.5 2.5" /></svg><span>发给智能体</span>
+        </button>
+<button
           v-if="viewable && mediaUrl"
           class="flow-tool-btn nodrag"
           type="button"
@@ -46,19 +68,13 @@
           :disabled="downloading"
           @click="saveMedia"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg><span>{{ downloading ? '保存中…' : '下载' }}</span>
         </button>
-        <button v-if="editable" class="flow-tool-btn nodrag" type="button" title="编辑提示词" @click="emit('edit')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16v4Z" /><path d="M13.5 6.5 17.5 10.5" /></svg>
-        </button>
-        <button class="flow-tool-btn nodrag" type="button" title="创建副本" @click="emit('duplicate')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2.2" /><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" /></svg>
-        </button>
-      </div>
+</div>
       <div class="flow-tb-sep"></div>
       <div class="flow-tb-group">
         <button class="flow-tool-btn flow-tool-danger nodrag" type="button" title="删除" @click="emit('remove')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M10 4h4M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M10 4h4M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7" /></svg><span>删除</span>
         </button>
       </div>
     </NodeToolbar>
@@ -198,7 +214,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'remove', 'duplicate', 'view', 'edit', 'upload', 'drop-file', 'notice-action', 'resize'
+  'remove', 'duplicate', 'view', 'edit', 'upload', 'drop-file', 'notice-action', 'resize', 'send-to-agent', 'crop', 'cutout'
 ])
 
 /**

@@ -4,7 +4,8 @@
  */
 import { ref } from 'vue'
 import { promoteConnectedRenderNodes } from '../utils/renderConnections'
-import { updateProjectCanvas, getProjectCanvas, projects } from './projects'
+import { updateProjectCanvas, getProjectCanvas, projects, cleanNodeForStorage } from './projects'
+import { cloneMediaSnapshot, equalMediaSnapshots } from '../utils/mediaSnapshot'
 import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
 import { migrateCanvasDocument, dropUnsupportedNodes, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
@@ -75,12 +76,12 @@ const saveToHistory = (force = false) => {
   // sourceNode/targetNode 会被深拷贝 50 份，实测单条边就 1.9MB。下面判断"状态是否
   // 与栈顶相同"用的全量 JSON.stringify 比较，之前每次也都在序列化这坨。
   const state = {
-    nodes: JSON.parse(JSON.stringify(nodes.value)),
+    nodes: cloneMediaSnapshot(nodes.value),
     edges: toPersistableEdges(edges.value)
   }
 
   const current = history.value[historyIndex.value]
-  if (current && JSON.stringify(current) === JSON.stringify(state)) return
+  if (current && equalMediaSnapshots(current, state)) return
 
   // Remove future history if we're not at the end | 如果不在末尾，删除未来历史
   if (historyIndex.value < history.value.length - 1) {
@@ -120,7 +121,7 @@ export const startBatchOperation = () => {
   }
   isBatchOperation = true
   batchStartState = {
-    nodes: JSON.parse(JSON.stringify(nodes.value)),
+    nodes: cloneMediaSnapshot(nodes.value),
     edges: toPersistableEdges(edges.value)
   }
 }
@@ -689,7 +690,7 @@ export const loadProject = (projectId) => {
   
   // Initialize history with current state | 用当前状态初始化历史
   history.value = [{
-    nodes: JSON.parse(JSON.stringify(nodes.value)),
+    nodes: cloneMediaSnapshot(nodes.value),
     edges: JSON.parse(JSON.stringify(edges.value))
   }]
   historyIndex.value = 0
@@ -720,7 +721,7 @@ export const saveProject = () => {
   // 所以不在这里剥的话，等于每 500ms 白白序列化 2MB。
   const snapshot = JSON.parse(JSON.stringify({
     schemaVersion: CANVAS_SCHEMA_VERSION,
-    nodes: nodes.value,
+    nodes: nodes.value.map(cleanNodeForStorage),
     edges: toPersistableEdges(edges.value),
     viewport: canvasViewport.value
   }))
@@ -1043,7 +1044,7 @@ export const redo = () => {
  */
 const restoreState = (state) => {
   isRestoring = true
-  nodes.value = JSON.parse(JSON.stringify(state.nodes))
+  nodes.value = cloneMediaSnapshot(state.nodes)
   edges.value = JSON.parse(JSON.stringify(state.edges))
   setTimeout(() => {
     isRestoring = false

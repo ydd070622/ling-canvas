@@ -26,8 +26,7 @@
         :selection-mode="'partial'"
         :pan-on-drag="[1, 2]"
         :pan-activation-key-code="'Space'"
-        :snap-to-grid="true"
-        :snap-grid="[20, 20]"
+        :snap-to-grid="false"
         :is-valid-connection="isValidConnection"
         :connect-on-click="false"
         @connect="onConnect"
@@ -63,21 +62,32 @@
         class="selection-group-outline"
         :style="selectionOverlay.boxStyle"
       >
-        <button v-if="selectedCanvasNodes.filter(node => node.type === 'image').length >= 2" class="selection-output-port" type="button" title="拖到下游节点，连接全部所选图片；点击创建下游"
+        <button v-if="selectedCanvasNodes.filter(node => node.type === 'image').length >= 2" class="selection-output-port" type="button" title="拖到空白处创建共同下游；拖到节点连接全部所选图片"
           @pointerdown.stop.prevent="startSelectionConnection">+</button>
         <div class="selection-action-bar" @mousedown.stop @click.stop>
           <button type="button" class="selection-action" title="将所选节点编为一组" @click="groupSelectedNodes">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="2.4" /><circle cx="17" cy="17" r="2.4" /><path d="M9 8.5l6 6M15 8.5l-6 6" /></svg>
-            <span>打组</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="13" height="13" rx="2" /><path d="M16 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h3" /></svg><span>打组</span>
+          </button>
+          <button v-if="selectedImageNodes.length >= 2" type="button" class="selection-action"
+            :disabled="mergingImages" aria-label="图层合并" :title="mergingImages ? '合并中…' : '图层合并：保留当前布局与间隙'" @click="mergeSelectedImages">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="12" height="12" rx="2" /><path d="M9 18v3h12V9h-3M8 9h5M10.5 6.5v5" /></svg><span>{{ mergingImages ? '合并中…' : '图层合并' }}</span>
           </button>
           <button type="button" class="selection-action" title="复制所选节点" @click="duplicateSelectedNodes">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg>
-            <span>复制</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="11" rx="1.5" /><path d="M6 16H5a1 1 0 0 1-1-1V6.5A1.5 1.5 0 0 1 5.5 5H14a1 1 0 0 1 1 1v1" /></svg><span>复制</span>
           </button>
           <span class="selection-action-divider" aria-hidden="true"></span>
-          <button type="button" class="selection-action is-primary" title="基于所选内容创建下游" @click="createDownstreamFromSelection">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            <span>创建下游</span>
+          <button
+            v-if="selectedImageNodes.length"
+            type="button"
+            class="selection-action"
+            title="把所选图片发送到智能体，让它看图写作"
+            @click="sendSelectionToAgent"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" /><path d="M12 13V8" /><path d="M9.5 10.5 12 8l2.5 2.5" /></svg><span>发给智能体</span>
+          </button>
+          <button v-if="selectedImageNodes.length >= 2" type="button" class="selection-action"
+            :disabled="batchDownloading" aria-label="批量下载" :title="batchDownloading ? batchDownloadProgress : '批量下载：保存为 ZIP'" @click="downloadSelectedImages">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v4h16v-4" /></svg><span>{{ batchDownloading ? batchDownloadProgress : '批量下载' }}</span>
           </button>
         </div>
       </div>
@@ -218,6 +228,9 @@
     <!-- Workflow Panel | 工作流面板 -->
     <WorkflowPanel v-model:show="showWorkflowPanel" @add-workflow="handleAddWorkflow" />
 
+    <!-- Agent Panel | 智能体抽屉：左侧栏图标 / Alt+A 打开 -->
+    <AgentPanel v-model:show="agent.panelOpen" />
+
     <!-- Canvas search | 画布搜索 -->
     <n-modal v-model:show="showSearchModal" preset="card" :closable="false" :mask-closable="true" class="canvas-search-modal">
       <div class="canvas-search-panel">
@@ -271,6 +284,7 @@
           <section>
             <h4>移动画布</h4>
             <div class="shortcut-row"><span>平移画布</span><kbd>Space</kbd><i>+</i><span>拖动</span></div>
+            <div class="shortcut-row"><span>打开 / 收回智能体</span><kbd>{{ agentShortcutLabel }}</kbd></div>
             <div class="shortcut-row"><span>滚轮缩放</span><span>滚动鼠标</span></div>
           </section>
           <section>
@@ -334,7 +348,7 @@
     <AssetPickerModal v-model:show="showAssetPicker" @select="handleAssetPick" />
 
     <!-- 底部 composer：选中的节点自动成为上下文 -->
-    <CanvasComposer :screen-to-flow="screenToFlowCoordinate" @attach="handleComposerAttach" />
+    <CanvasComposer v-show="!agent.panelOpen" :screen-to-flow="screenToFlowCoordinate" @attach="handleComposerAttach" />
 
     <!-- 全屏查看图片 / 视频 / 音频（全局唯一一个） -->
     <MediaViewer />
@@ -349,6 +363,13 @@
 import { useCanvasFlowSync } from '../composables/useCanvasFlowSync'
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, nextTick, markRaw } from 'vue'
 import { fitNodeGroups, releaseGroupMembers, joinDroppedGroupMembers } from '../utils/groupBounds'
+import { handleAgentShortcut } from '../utils/agentShortcut'
+import { agentShortcut, agentShortcutLabel } from '../stores/agentShortcut'
+import { downloadImageBatch } from '../utils/downloadMedia'
+import { mergeImages } from '../utils/mergeImages'
+import { instantiateGroupWorkflow } from '../utils/groupWorkflow'
+import { generationHistory, loadGenerationHistory, recordGeneratedImages, deleteGenerationHistory } from '../stores/generationHistory'
+import { openMediaViewer } from '../composables/useMediaViewer'
 import { useRouter, useRoute } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -397,6 +418,8 @@ let isDestroyingWindow = false
 import ApiSettings from '../components/ApiSettings.vue'
 import DownloadModal from '../components/DownloadModal.vue'
 import WorkflowPanel from '../components/WorkflowPanel.vue'
+import AgentPanel from '../components/agent/AgentPanel.vue'
+import { useAgentStore } from '../stores/agent'
 import { isDark, toggleTheme } from '../stores/theme'
 import { openExternal } from '@/utils'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -406,6 +429,9 @@ import { invoke } from '@tauri-apps/api/core'
 // API Config state | API 配置状态
 const modelStore = useModelStore()
 const isApiConfigured = computed(() => !!modelStore.currentApiKey)
+
+// Canvas agent | 画布智能体
+const agent = useAgentStore()
 
 // Chat templates | 问答模板
 const CHAT_TEMPLATES = {
@@ -445,6 +471,8 @@ import RenderNode from '../components/nodes/RenderNode.vue'
 import CompareNode from '../components/nodes/CompareNode.vue'
 import FlowEdge from '../components/edges/FlowEdge.vue'
 import AssetPickerModal from '../components/canvas/AssetPickerModal.vue'
+import { resolveAssetUrl } from '../services/assetLibrary'
+import { layoutAssetImages } from '../utils/assetLayout'
 import MediaViewer from '../components/canvas/MediaViewer.vue'
 import CreateMenu from '../components/canvas/CreateMenu.vue'
 import CanvasComposer from '../components/canvas/CanvasComposer.vue'
@@ -469,7 +497,22 @@ watch(nodes, () => {
   if (groupFitFrame !== null) return
   groupFitFrame = requestAnimationFrame(() => {
     groupFitFrame = null
-    const fitted = fitNodeGroups(nodes.value, 28, new Set(dragGroupBounds.keys()))
+    let fitted = nodes.value
+    // Preview incoming members without changing their parent mid-gesture.
+    if (draggedGroupMembers.size) {
+      const preview = joinDroppedGroupMembers(fitted, draggedGroupMembers)
+      const previewGroups = new Set(preview.filter(node => node.type === 'group').map(node => node.id))
+      const visual = fitNodeGroups(preview, 28, previewGroups)
+      let changed = false
+      const next = fitted.map(node => {
+        if (node.type !== 'group') return node
+        const bounds = visual.find(candidate => candidate.id === node.id)?.data?.dragBounds
+        if (JSON.stringify(bounds) === JSON.stringify(node.data?.dragBounds)) return node
+        changed = true
+        return { ...node, data: { ...node.data, dragBounds: bounds } }
+      })
+      if (changed) fitted = next
+    } else fitted = fitNodeGroups(nodes.value)
     if (fitted !== nodes.value) nodes.value = fitted
   })
 }, { deep: true, flush: 'post' })
@@ -563,10 +606,61 @@ const matchedNodes = computed(() => {
     return searchableText.includes(query)
   }).slice(0, 8)
 })
-const historyImageAssets = computed(() => nodes.value.filter(node => node.type === 'image' && node.data?.url).slice().reverse())
+const historyImageAssets = computed(() => generationHistory.value)
+const migratedHistoryUrls = new Set()
+onMounted(() => loadGenerationHistory().catch(() => window.$message?.error('读取生成历史失败')))
+watch(() => nodes.value.filter(node => node.type === 'image' && node.data?.url && (node.data.ownerId || node.data.galleryUrls?.length)).map(node => node.data.galleryUrls?.length ? node.data.galleryUrls : [node.data.url]).flat(), urls => {
+  const unseen = urls.filter(url => !migratedHistoryUrls.has(url))
+  unseen.forEach(url => migratedHistoryUrls.add(url))
+  if (unseen.length) recordGeneratedImages(unseen.map(url => ({ url }))).catch(error => console.warn('恢复生成历史失败', error))
+}, { immediate: true })
 const isAllHistorySelected = computed(() => historyImageAssets.value.length > 0 && historyImageAssets.value.every(asset => selectedHistoryIds.value.includes(asset.id)))
 const historyDate = computed(() => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replaceAll('/', '-'))
 const selectedCanvasNodes = computed(() => nodes.value.filter(node => node.selected))
+
+/** 所选里真正有图可发的图片节点 —— 「发给智能体」那颗按钮据此显隐 */
+const selectedImageNodes = computed(() => (
+  selectedCanvasNodes.value.filter(node => node.type === 'image' && node.data?.url)
+))
+const batchDownloading = ref(false)
+const mergingImages = ref(false)
+const mergeSelectedImages = async () => {
+  if (mergingImages.value) return
+  mergingImages.value = true
+  try {
+    const items = selectedImageNodes.value.map(node => {
+      const element = [...document.querySelectorAll('.vue-flow__node')].find(element => element.dataset.id === node.id)
+      const image = element?.querySelector('.flow-stage img')
+      if (!image) throw new Error('请等待所选图片显示后再合并')
+      const rect = image.getBoundingClientRect()
+      const position = screenToFlowCoordinate({ x: rect.left, y: rect.top })
+      return { url: image.currentSrc || node.data.url, ...position, width: rect.width / viewport.value.zoom,
+        height: rect.height / viewport.value.zoom, z: Number(getComputedStyle(element).zIndex) || 0 }
+    })
+    const result = await mergeImages(items)
+    const id = stampImageNode(addNode('image', { x: result.left, y: result.top + result.layoutHeight + 60 }, {
+      url: result.url, base64: result.url, label: '合并图片', width: result.width, height: result.height
+    }))
+    nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === id }))
+    window.$message?.success('已按当前布局合并为一张图片，原图已保留')
+  } catch (error) {
+    window.$message?.error(error.message || '图片合并失败')
+  } finally { mergingImages.value = false }
+}
+const batchDownloadProgress = ref('准备下载…')
+const downloadSelectedImages = async () => {
+  if (batchDownloading.value) return
+  const selected = selectedImageNodes.value.map(node => ({ ...node, data: { ...node.data, galleryUrls: node.data?.galleryUrls ? [...node.data.galleryUrls] : undefined } }))
+  batchDownloading.value = true
+  try {
+    await downloadImageBatch(selected, (done, total) => { batchDownloadProgress.value = `下载 ${done}/${total}` })
+  } catch (error) {
+    window.$message?.error(error.message || '批量下载失败')
+  } finally {
+    batchDownloading.value = false
+    batchDownloadProgress.value = '准备下载…'
+  }
+}
 const selectionBoxStyle = ref(null)
 const selectionOverlay = computed(() => (
   selectedCanvasNodes.value.length >= 2 && selectionBoxStyle.value
@@ -677,8 +771,10 @@ const handleUploadResource = () => {
   closeMenu()
 }
 
-// Canvas agent placeholder | 画布智能体预留入口
+// Canvas agent | 画布智能体：左侧栏图标与 Alt+A 共用这一个开关
+// 开关本身在 store 里 —— 图片节点上的「发送到智能体」按钮也要打开它
 const handleCanvasAgent = () => {
+  agent.togglePanel()
 }
 
 const toggleHistoryBatching = () => {
@@ -688,7 +784,7 @@ const toggleHistoryBatching = () => {
 
 const handleHistoryAssetClick = (asset) => {
   if (!isHistoryBatching.value) {
-    focusSearchNode(asset)
+    openMediaViewer({ url: asset.data.url, kind: 'image', alt: asset.data.label || '生成图片' })
     return
   }
   selectedHistoryIds.value = selectedHistoryIds.value.includes(asset.id)
@@ -751,6 +847,12 @@ const downloadSelectedNodes = () => {
   }
 
   downloadableNodes.forEach(node => openExternal(node.data.url))
+}
+
+// 把所选图片整批发给画布智能体（暂存为附件，等用户补要求再发）
+const sendSelectionToAgent = () => {
+  if (!selectedImageNodes.value.length) return
+  agent.attachSelectedImages()
 }
 
 const groupSelectedNodes = () => {
@@ -848,15 +950,15 @@ const layoutSelectedNodes = (layout) => {
   refreshSelectionOverlay()
 }
 
-const downloadSelectedHistoryAssets = () => {
+const downloadSelectedHistoryAssets = async () => {
   const selectedAssets = historyImageAssets.value.filter(asset => selectedHistoryIds.value.includes(asset.id))
-  selectedAssets.forEach(asset => openExternal(asset.data.url))
+  try { await downloadImageBatch(selectedAssets) } catch (error) { window.$message?.error(error.message) }
 }
 
-const deleteSelectedHistoryAssets = () => {
+const deleteSelectedHistoryAssets = async () => {
   const selectedAssets = historyImageAssets.value.filter(asset => selectedHistoryIds.value.includes(asset.id))
-  if (!selectedAssets.length || !window.confirm(`确定删除选中的 ${selectedAssets.length} 张历史图片吗？对应画布节点也会一并删除。`)) return
-  selectedAssets.forEach(asset => removeNode(asset.id))
+  if (!selectedAssets.length || !window.confirm(`确定删除选中的 ${selectedAssets.length} 张历史记录吗？画布图片会保留。`)) return
+  try { await deleteGenerationHistory(selectedAssets.map(asset => asset.id)) } catch (error) { window.$message?.error(error.message); return }
   selectedHistoryIds.value = []
 }
 
@@ -876,6 +978,15 @@ const handleAddWorkflow = ({ workflow, options }) => {
 
   // Create nodes from workflow template | 从工作流模板创建节点
   const startPosition = { x: viewportCenterX - 300, y: viewportCenterY - 200 }
+  if (workflow.savedGroup) {
+    const restored = instantiateGroupWorkflow(workflow, startPosition)
+    startBatchOperation()
+    nodes.value = [...nodes.value, ...restored.nodes]
+    edges.value = [...edges.value, ...restored.edges]
+    endBatchOperation()
+    nextTick(() => restored.nodes.forEach(node => updateNodeInternals(node.id)))
+    return
+  }
   const { nodes: newNodes, edges: newEdges } = workflow.createNodes(startPosition, options)
 
   // Start batch operation manually | 手动开始批量操作
@@ -1173,7 +1284,7 @@ const handleMenuSelect = (option) => {
    * 落点坐标是按锚点算的固定值，不错开的话每建一个都叠在同一个位置上 ——
    * 以前靠"向上/向下分支"手动选，现在没有那个了，就得自己让开。
    */
-  const siblings = state.mode === 'port'
+  const siblings = state.mode === 'port' && !state.atDropPosition
     ? (state.direction === 'upstream'
         ? edges.value.filter(edge => edge.target === state.sources[0]).length
         : edges.value.filter(edge => edge.source === state.sources[0]).length)
@@ -1318,7 +1429,24 @@ const startSelectionConnection = event => {
     }
     const targetElement = document.elementFromPoint(release.clientX, release.clientY)?.closest('.vue-flow__node')
     const target = targetElement?.dataset.id
-    if (!target || sources.includes(target)) return
+    if (!target) {
+      const sourceNodes = nodes.value.filter(node => sources.includes(node.id))
+      if (!buildQuickAddOptions(sourceNodes, 'downstream').length) return
+      const position = screenToFlowCoordinate({ x: release.clientX, y: release.clientY })
+      menu.value = {
+        visible: true,
+        mode: 'port',
+        direction: 'downstream',
+        sources,
+        atDropPosition: true,
+        flowX: position.x,
+        flowY: position.y - 120,
+        x: release.clientX - canvasRect.left,
+        y: release.clientY - canvasRect.top
+      }
+      return
+    }
+    if (sources.includes(target)) return
     const candidates = sources.filter(source => !edges.value.some(edge => edge.source === source && edge.target === target))
     if (!candidates.length) return
     let proposed = [...edges.value]
@@ -1406,10 +1534,11 @@ const handleNodeDragStart = ({ node, nodes: draggedNodes }) => {
   }
 }
 const handleNodeDragStop = () => {
+  const allowDetach = true
   // Engine release patches finish before changing parent coordinates.
   requestAnimationFrame(() => {
     const previousParents = new Map(nodes.value.filter(node => draggedGroupMembers.has(node.id) && node.parentNode).map(node => [node.id, node.parentNode]))
-    nodes.value = releaseGroupMembers(nodes.value, draggedGroupMembers, dragGroupBounds)
+    nodes.value = releaseGroupMembers(nodes.value, draggedGroupMembers, dragGroupBounds, allowDetach)
     nodes.value = joinDroppedGroupMembers(nodes.value, draggedGroupMembers, previousParents)
     dragGroupBounds.clear()
     draggedGroupMembers.clear()
@@ -1491,6 +1620,8 @@ const onCanvasDoubleClick = (event) => {
 }
 
 // Canvas undo / redo shortcuts | 画布撤销、重做快捷键
+const handleAgentToggleShortcut = (event) => handleAgentShortcut(event, () => agent.togglePanel(), agentShortcut.value)
+
 const handleCanvasShortcut = (event) => {
   const target = event.target
 
@@ -1713,7 +1844,12 @@ const checkMobile = () => {
 const loadProjectById = (projectId) => {
   // Update flow key to force VueFlow re-render | 更新 key 强制 VueFlow 重新渲染
   flowKey.value = Date.now()
-  
+
+  // 换项目就把智能体收掉：它这一轮的上下文快照属于上一张画布
+  agent.closePanel()
+  agent.cancel()
+
+
   if (projectId && projectId !== 'new') {
     loadProject(projectId)
   } else {
@@ -1742,6 +1878,7 @@ onMounted(async () => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
   window.addEventListener('keydown', handleCanvasShortcut)
+  window.addEventListener('keydown', handleAgentToggleShortcut, true)
   window.addEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
   document.addEventListener('dblclick', onCanvasDoubleClick, true)
   document.addEventListener('pointerdown', rememberSelectionOnPort, true)
@@ -1762,10 +1899,14 @@ onMounted(async () => {
       closeRequestUnlisten = await appWindow.onCloseRequested(async event => {
         if (isDestroyingWindow) return
         event.preventDefault()
+        // 智能体进程要在窗口销毁前收掉。Rust 侧销毁时也会兜底 kill_all，
+        // 这里先发一次是为了让正在跑的那一轮尽早停，不白等它跑完。
+        agent.cancel()
         saveProject()
-        const [projectSaved, mediaSaved] = await Promise.all([
+        const [projectSaved, mediaSaved, chatsSaved] = await Promise.all([
           flushProjectSaves(),
           flushCanvasMediaSaves(),
+          agent.persistHistory(),
           // 缩略图也排空，但**不参与下面的失败判断**：它是派生数据，
           // 没写完不该阻止用户关闭窗口。3 秒上限覆盖"刚编辑完就关窗"这个窗口。
           Promise.race([
@@ -1773,7 +1914,7 @@ onMounted(async () => {
             new Promise(resolve => setTimeout(resolve, 3000))
           ])
         ])
-        if (!projectSaved || !mediaSaved) {
+        if (!projectSaved || !mediaSaved || !chatsSaved) {
           window.$message?.error('项目或图片尚未保存成功，已取消关闭窗口')
           return
         }
@@ -1924,7 +2065,8 @@ const fillNodeWithAsset = (nodeId, item) => {
   return true
 }
 
-const handleAssetPick = (items) => {
+const handleAssetPick = async (items) => {
+  if (!items?.length) return
   // 从节点里的「素材库」按钮打开时，目标就是那个节点，不再新建
   const targetId = assetTargetNodeId.value
   assetTargetNodeId.value = ''
@@ -1935,17 +2077,33 @@ const handleAssetPick = (items) => {
   }
 
   const center = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-  items.forEach((item, index) => {
+  showAssetPicker.value = false
+  const ratios = await Promise.all(items.map(async item => {
+    try {
+      const url = await resolveAssetUrl(item.relativePath)
+      return await new Promise(resolve => {
+        const image = new Image()
+        const timer = setTimeout(() => finish(0), 5000)
+        const finish = ratio => {
+          clearTimeout(timer)
+          image.onload = image.onerror = null
+          resolve(ratio)
+        }
+        image.onload = () => finish(image.naturalWidth / image.naturalHeight)
+        image.onerror = () => finish(0)
+        image.src = url
+      })
+    } catch { return 0 }
+  }))
+  const positions = layoutAssetImages(ratios, center)
+  startBatchOperation()
+  try { items.forEach((item, index) => {
     addAssetNode({
       relativePath: item.relativePath,
       name: item.name,
-      // 与拖入多图的错位规则保持一致
-      position: {
-        x: center.x + (index % 4) * 40,
-        y: center.y + Math.floor(index / 4) * 40
-      }
+      position: positions[index]
     })
-  })
+  }) } finally { endBatchOperation() }
   // 与 handleTauriDragDrop 一致：节点建完显式落盘
   saveProject()
   showAssetPicker.value = false
@@ -1977,8 +2135,10 @@ const handleTauriDragDrop = async (event) => {
       const clientX = payload.position.x / dpr
       const clientY = payload.position.y / dpr
       const droppedOnNode = nodeIdAtPoint(clientX, clientY)
+      const imported = []
 
-      for (const [index, filePath] of imagePaths.entries()) {
+      startBatchOperation()
+      try { for (const [index, filePath] of imagePaths.entries()) {
         try {
           // Copy into project storage so the node does not depend on the source path | 复制进项目存储，不依赖原文件路径
           const image = await invoke('read_dropped_image', { path: filePath })
@@ -1986,16 +2146,15 @@ const handleTauriDragDrop = async (event) => {
           const pseudoFile = { type: isVideo ? 'video/mp4' : 'image/png', name: `${image.fileName}` }
           // 落在节点上就地填充；落在空白处新建
           if (index === 0 && droppedOnNode && fillNodeWithFile(droppedOnNode, pseudoFile, image.dataUrl)) continue
-          addMediaNode({
-            file: pseudoFile,
-            dataUrl: image.dataUrl,
-            position: screenToFlowCoordinate({ x: clientX + index * 40, y: clientY + index * 40 })
-          })
+          imported.push({ file: pseudoFile, dataUrl: image.dataUrl,
+            ratio: isVideo ? 16 / 9 : await measureImportedImage(image.dataUrl) })
         } catch (err) {
           console.error('[DragDrop] Failed to import file:', filePath, err)
           window.$message?.error(`文件导入失败：${String(err)}`)
         }
       }
+      addImportedMediaGrid(imported, screenToFlowCoordinate({ x: clientX, y: clientY }))
+      } finally { endBatchOperation() }
       // Save project after drop | 拖拽完成后保存项目
       saveProject()
       break
@@ -2087,6 +2246,24 @@ const addMediaNode = ({ file, dataUrl, position }) => {
   return nodeId
 }
 
+const measureImportedImage = url => new Promise(resolve => {
+  const image = new Image()
+  const finish = ratio => {
+    clearTimeout(timer)
+    image.onload = image.onerror = null
+    resolve(ratio)
+  }
+  const timer = setTimeout(() => finish(0), 5000)
+  image.onload = () => finish(image.naturalWidth / image.naturalHeight)
+  image.onerror = () => finish(0)
+  image.src = url
+})
+
+const addImportedMediaGrid = (items, origin) => {
+  const positions = layoutAssetImages(items.map(item => item.ratio), origin)
+  items.forEach((item, index) => addMediaNode({ ...item, position: positions[index] }))
+}
+
 /** composer 的 ＋：选文件 → 落在视口中心 */
 const handleComposerAttach = () => {
   const input = document.createElement('input')
@@ -2112,20 +2289,21 @@ const onDrop = async (event) => {
   if (!files.length) return
 
   const droppedOnNode = nodeIdAtPoint(event.clientX, event.clientY)
-  for (const [index, file] of files.entries()) {
+  const imported = []
+  startBatchOperation()
+  try { for (const [index, file] of files.entries()) {
     try {
       const dataUrl = await fileToDataUrl(file)
       // 落在节点上就地填充；落在空白处建新节点（多文件时第一个落节点、其余各自建节点）
       if (index === 0 && droppedOnNode && fillNodeWithFile(droppedOnNode, file, dataUrl)) continue
-      addMediaNode({ file, dataUrl, position: screenToFlowCoordinate({
-        x: event.clientX + index * 40,
-        y: event.clientY + index * 40
-      }) })
+      imported.push({ file, dataUrl, ratio: file.type.startsWith('video/') ? 16 / 9 : await measureImportedImage(dataUrl) })
     } catch (err) {
       console.error('[DragDrop] 导入失败:', file.name, err)
       window.$message?.error(`导入失败：${file.name}`)
     }
   }
+  addImportedMediaGrid(imported, screenToFlowCoordinate({ x: event.clientX, y: event.clientY }))
+  } finally { endBatchOperation() }
   // FileReader is asynchronous, so save only after every node exists | 全部节点创建后再保存
   saveProject()
 }
@@ -2141,6 +2319,7 @@ const onOpenAssetPicker = (event) => {
 onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', handleCanvasShortcut)
+  window.removeEventListener('keydown', handleAgentToggleShortcut, true)
   window.removeEventListener('ling-canvas:open-asset-picker', onOpenAssetPicker)
   document.removeEventListener('dblclick', onCanvasDoubleClick, true)
   document.removeEventListener('pointerdown', rememberSelectionOnPort, true)

@@ -2,11 +2,19 @@ import assert from 'node:assert/strict'
 import {fitNodeGroups,releaseGroupMembers,joinDroppedGroupMembers} from '../src/utils/groupBounds.js'
 const bounds=new Map([['g',{x:100,y:100,width:400,height:400}]])
 const base=[{id:'g',type:'group',position:{x:100,y:100},style:{width:'400px',height:'400px'},data:{memberIds:['a','b']}},{id:'a',parentNode:'g',extent:undefined,position:{x:28,y:28},dimensions:{width:100,height:100},data:{groupId:'g'}},{id:'b',parentNode:'g',position:{x:228,y:228},dimensions:{width:100,height:100},data:{groupId:'g'}}]
-assert.equal(fitNodeGroups(base,28,new Set(['g'])),base,'Original group bounds stay frozen throughout drag')
+const live = fitNodeGroups(base,28,new Set(['g']))
+assert.deepEqual(live[0].position,base[0].position,'Parent origin stays fixed throughout drag')
+assert.deepEqual(live[1].position,base[1].position,'Member coordinates stay fixed during live fitting')
+assert.ok(live[0].data.dragBounds,'Visible bounds update during drag')
 assert.equal(releaseGroupMembers(base,new Set(['a']),bounds),base,'Inside release remains grouped')
-for(const position of [{x:-100,y:28},{x:450,y:28},{x:28,y:-100},{x:28,y:450}]){
+for (const position of [{x:-120,y:28},{x:430,y:28},{x:28,y:-120},{x:28,y:430}]) {
+ const near=base.map(n=>n.id==='a'?{...n,position}:n)
+ assert.equal(releaseGroupMembers(near,new Set(['a']),bounds),near,'Near-edge movement stays grouped even with center outside')
+}
+for(const position of [{x:-200,y:28},{x:500,y:28},{x:28,y:-200},{x:28,y:500}]){
  const dragged=base.map(n=>n.id==='a'?{...n,position}:n)
- const next=releaseGroupMembers(dragged,new Set(['a']),bounds)
+ assert.equal(releaseGroupMembers(dragged,new Set(['a']),bounds,false),dragged,'Explicitly disabled detach retains membership')
+ const next=releaseGroupMembers(dragged,new Set(['a']),bounds,true)
  const member=next.find(n=>n.id==='a')
  assert.equal(member.parentNode,undefined)
  assert.equal(member.data.groupId,undefined)

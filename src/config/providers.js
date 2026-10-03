@@ -171,8 +171,8 @@ export const PROVIDERS = {
     }
   },
   openai: {
-    label: 'OpenAI',
-    defaultBaseUrl: 'https://api.chatfire.cn',
+    label: 'Linkapi',
+    defaultBaseUrl: 'https://linkapi.ai',
     // 端点路径
     endpoints: {
       chat: '/v1/chat/completions',
@@ -255,7 +255,8 @@ export const getProviderList = () => {
     .filter(([key]) => key !== 'default')
     .map(([key, value]) => ({
       key,
-      label: value.label
+      label: value.label,
+      defaultBaseUrl: value.defaultBaseUrl
     }))
 }
 

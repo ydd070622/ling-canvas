@@ -138,7 +138,7 @@ export const loadProjects = async () => {
  * Clean node data for storage | 清理节点数据用于存储
  * Removes base64 data URLs to reduce storage size | 移除 base64 数据减小存储大小
  */
-const cleanNodeForStorage = (inputNode) => {
+export const cleanNodeForStorage = (inputNode) => {
   const node = toCanvasNode(inputNode)
   if (!node.data) return node
   

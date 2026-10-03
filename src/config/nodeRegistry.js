@@ -71,7 +71,7 @@ export const NODE_MODES = Object.freeze({
   image: {
     t2i:  { label: '文生图',   accepts: { text: 3 }, roles: { text: ['提示词', '补充', '补充'] } },
     i2i:  { label: '图生图',   accepts: { image: 2, text: 2 }, roles: { image: ['底图', '参考'], text: ['描述', '补充'] } },
-    ref:  { label: '参考重绘', accepts: { image: 4, text: 2 }, roles: { image: ['参考', '参考', '参考', '参考'], text: ['描述', '补充'] } },
+    ref:  { label: '参考重绘', accepts: { image: Infinity, text: 2 }, roles: { image: ['参考', '参考', '参考', '参考'], text: ['描述', '补充'] } },
     edit: { label: '局部编辑', accepts: { image: 1, text: 1 }, roles: { image: ['底图'], text: ['编辑要求'] } },
     grid: { label: '九宫格分镜', accepts: { text: 2 }, roles: { text: ['分镜要求', '补充'] } }
   },
@@ -379,7 +379,8 @@ export const getAcceptLimit = (node, kind, sourceKinds = []) => {
 
 /** 该上游在目标节点的某个序号上承担的角色（首帧 / 参考…） */
 export const getSlotRole = (node, kind, index, sourceKinds = []) =>
-  getModeDef(node, sourceKinds)?.roles?.[kind]?.[index] || '上下文'
+  getModeDef(node, sourceKinds)?.roles?.[kind]?.[index] ||
+  (node?.type === 'image' && kind === 'image' ? '参考' : '上下文')
 
 const createsCycle = (sourceId, targetId, edges) => {
   const outgoing = new Map()

@@ -19,6 +19,12 @@ export const runNode = (nodeId) => {
 export const cancelNode = (nodeId) => {
   window.dispatchEvent(new CustomEvent(CANCEL_NODE_EVENT, { detail: { nodeId } }))
 }
+const runners = new Map()
+export const runNodeAndWait = async (id) => {
+  const run = runners.get(String(id))
+  if (!run) throw new Error('节点未准备好，请确认它已显示在画布中')
+  await run()
+}
 
 /**
  * 节点侧：只响应发给自己的那条。
@@ -36,10 +42,12 @@ export const useNodeRunBridge = (id, { run, cancel }) => {
   }
 
   onMounted(() => {
+    runners.set(String(id), run)
     window.addEventListener(RUN_NODE_EVENT, onRun)
     window.addEventListener(CANCEL_NODE_EVENT, onCancel)
   })
   onBeforeUnmount(() => {
+    runners.delete(String(id))
     window.removeEventListener(RUN_NODE_EVENT, onRun)
     window.removeEventListener(CANCEL_NODE_EVENT, onCancel)
   })

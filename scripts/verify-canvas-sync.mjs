@@ -108,10 +108,30 @@ for(const position of [{x:-200,y:128},{x:-200,y:-150},{x:1100,y:-150},{x:1100,y:
  assert.equal(document.querySelector('[data-id="memberA"]').style.transform,`translate(${position.x}px,${position.y}px)`)
 }
 stopFit()
+// Live visual fitting must not disturb the engine's active drag coordinates.
+const liveGroupOrigin={...nodes.value.find(n=>n.id==='group').position}
+for(const position of [{x:-300,y:100},{x:-300,y:-200},{x:1200,y:-200},{x:1200,y:900}]) {
+ flow.updateNodePositions([{id:'memberA',parentNode:'group',position,from:flow.findNode('memberA').position}],true,true)
+ await settle()
+ nodes.value=fitNodeGroups(nodes.value,28,new Set(['group']))
+ await settle()
+ assert.deepEqual(nodes.value.find(n=>n.id==='group').position,liveGroupOrigin)
+ assert.deepEqual(world('memberA'),position,'Live fitting retains pointer position')
+ assert.deepEqual(world('memberB'),stationary,'Live fitting retains sibling position')
+ assert.equal(document.querySelector('[data-id="memberA"]').style.transform,`translate(${position.x}px,${position.y}px)`)
+ assert.ok(flow.findNode('group').data.dragBounds,'Engine receives live frame on every move')
+}
+flow.updateNodePositions([{id:'memberA',parentNode:'group',position:{x:1200,y:900},from:flow.findNode('memberA').position}],false,false)
+nodes.value=fitNodeGroups(nodes.value)
+await settle()
+assert.deepEqual(world('memberA'),{x:1200,y:900})
+assert.equal(flow.findNode('group').data.dragBounds,undefined)
+console.log('PASS: live engine drag in four directions, stationary parent origin, frame updates, no release jump')
 const group=nodes.value.find(n=>n.id==='group')
 const beforeDetach=world('memberA')
 const bounds=new Map([['group',{x:group.position.x,y:group.position.y,width:200,height:200}]])
-nodes.value=releaseGroupMembers(nodes.value,new Set(['memberA']),bounds)
+assert.equal(releaseGroupMembers(nodes.value,new Set(['memberA']),bounds,false),nodes.value,'Disabled detach keeps the group')
+nodes.value=releaseGroupMembers(nodes.value,new Set(['memberA']),bounds,true)
 await settle()
 assert.equal(flow.findNode('memberA').parentNode,undefined,'Engine must clear parent on detach')
 assert.deepEqual(nodes.value.find(n=>n.id==='memberA').position,beforeDetach)

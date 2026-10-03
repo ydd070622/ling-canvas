@@ -14,6 +14,8 @@ use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
+mod agent;
+
 const MAX_DROPPED_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
 /// 单个 multipart 文件上限（参考图/首帧图解码后）
 const MAX_MULTIPART_FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -1729,6 +1731,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(HttpRequestState::default())
         .manage(AssetRootState::default())
+        .manage(agent::AgentProcessState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -1738,6 +1741,12 @@ pub fn run() {
                 }
             }
             Ok(())
+        })
+        // 窗口一销毁就把所有还在跑的 claude 进程树收掉，别留下烧 token 的 node.exe
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                window.state::<agent::AgentProcessState>().kill_all();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             load_project_documents,
@@ -1757,7 +1766,9 @@ pub fn run() {
             read_asset_file,
             stat_asset_files,
             get_asset_root,
-            pick_asset_root
+            pick_asset_root,
+            agent::agent_send,
+            agent::agent_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

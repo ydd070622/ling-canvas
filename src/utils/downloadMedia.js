@@ -17,6 +17,40 @@
  */
 import { isTauriRuntime } from '../services/assetLibrary'
 import { openExternal } from './openExternal'
+import { zipSync } from 'fflate'
+
+export const downloadImageBatch = async (nodes, onProgress = () => {}) => {
+  const items = nodes.flatMap(node => {
+    const urls = node.data?.galleryUrls?.length ? node.data.galleryUrls : [node.data?.url]
+    return urls.filter(Boolean).map(url => ({ url, kind: 'image', label: node.data?.label || '图片' }))
+  })
+  const files = {}
+  let failed = 0
+  for (let index = 0; index < items.length; index++) {
+    try {
+      const { bytes, contentType } = await fetchBytes(items[index].url)
+      if (!bytes.length) throw new Error('图片内容为空')
+      const name = `${String(index + 1).padStart(3, '0')}-${downloadFileName({ ...items[index], contentType })}`
+      files[name] = bytes
+    } catch {
+      failed++
+    }
+    onProgress(index + 1, items.length)
+  }
+  const count = Object.keys(files).length
+  if (!count) throw new Error('所选图片均无法读取，请检查图片或网络')
+  const archive = zipSync(files, { level: 0 })
+  const fileName = `画布图片-${Date.now()}.zip`
+  const saved = isTauriRuntime()
+    ? !!await saveViaDialog({ fileName, dataBase64: bytesToBase64(archive) })
+    : saveBlob(archive, 'application/zip', fileName)
+  if (saved) {
+    const message = `已下载 ${count} 张图片${failed ? `，${failed} 张读取失败` : ''}`
+    if (failed) window.$message?.warning(message)
+    else window.$message?.success(message)
+  } else if (failed) window.$message?.warning(`${failed} 张图片读取失败，保存已取消`)
+  return { saved, count, failed }
+}
 
 /** MIME → 扩展名。只覆盖这个应用会碰到的几类 */
 const MIME_EXTENSIONS = {
@@ -113,7 +147,7 @@ const bytesToBase64 = (bytes) => {
  * 2. 桌面端其余一律交给 `fetch_binary`：外链绕开 CORS，本地路径 / `asset:` 也能读。
  * 3. 网页端 `fetch`（同源素材能过，跨域外链会被 CORS 挡下 → 走 openExternal 兜底）。
  */
-const fetchBytes = async (url) => {
+export const fetchBytes = async (url) => {
   // mime 段可能带 `;charset=utf-8` 之类的参数，所以先整段吞下再自己切
   const dataMatch = url.match(/^data:([^,]*),([\s\S]*)$/)
   if (dataMatch) {

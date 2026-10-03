@@ -14,6 +14,7 @@
  */
 
 import { requestUpstream } from '@/services/aiGateway'
+import { recordGeneratedImages } from '@/stores/generationHistory'
 import {
   resolveProviderEndpointRule,
   prefersChatProtocolForImage,
@@ -268,7 +269,11 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
  */
 export const generateImage = async (payload = {}, options = {}) => {
   const desired = Math.max(1, Math.floor(Number(payload.n ?? payload.count ?? 1) || 1))
-  if (desired <= 1) return requestImagesOnce(payload, options)
+  if (desired <= 1) {
+    const results = await requestImagesOnce(payload, options)
+    recordGeneratedImages(results, payload).catch(error => console.warn('生成历史保存失败', error))
+    return results
+  }
 
   const { onProgress } = options
   let done = 0
@@ -296,6 +301,7 @@ export const generateImage = async (payload = {}, options = {}) => {
       console.warn(`[generateImage] ${failures.length}/${desired} 次请求失败：`, failures)
       options.onPartialFailure?.(failures)
     }
+    recordGeneratedImages(trimmed, payload).catch(error => console.warn('生成历史保存失败', error))
     return trimmed
   }
 

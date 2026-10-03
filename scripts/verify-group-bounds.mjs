@@ -18,3 +18,24 @@ for(const position of [{x:-200,y:-140},{x:900,y:700},{x:28,y:28}]) {
   }
 }
 console.log('PASS: remove parent constraint, left/up/right/down movement, adaptive bounds, stable world positions')
+
+const origin = { ...nodes[0].position }
+for (const position of [{x:-300,y:-200},{x:900,y:700},{x:28,y:28}]) {
+  nodes=nodes.map(n=>n.id==='a'?{...n,position}:n)
+  const expected=absolute(nodes)
+  nodes=fitNodeGroups(nodes,28,new Set(['g']))
+  assert.deepEqual(nodes[0].position,origin,'Live fitting never moves the drag origin')
+  assert.deepEqual(absolute(nodes),expected,'Live fitting preserves all member positions')
+  const frame=nodes[0].data.dragBounds
+  for(const child of nodes.slice(1)) {
+    assert.ok(child.position.x>=frame.x+28 && child.position.y>=frame.y+28)
+    assert.ok(child.position.x+child.dimensions.width+28<=frame.x+frame.width)
+    assert.ok(child.position.y+child.dimensions.height+28<=frame.y+frame.height)
+  }
+  assert.equal(fitNodeGroups(nodes,28,new Set(['g'])),nodes,'Live bounds stabilize')
+}
+const before=absolute(nodes)
+nodes=fitNodeGroups(nodes)
+assert.deepEqual(absolute(nodes),before,'Release fitting preserves positions')
+assert.equal(nodes[0].data.dragBounds,undefined,'Release clears temporary frame')
+console.log('PASS: continuous drag bounds in every direction, stable drag origin, release cleanup')

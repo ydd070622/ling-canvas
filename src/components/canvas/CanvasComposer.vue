@@ -145,7 +145,6 @@
       :ratio-options="ratioOptions"
       :count="count"
       :count-options="effectiveTarget === 'image' ? COUNTS : []"
-      :count-hint="countHint"
       :video-preset="videoPreset"
       :video-preset-options="effectiveTarget === 'video' ? videoPresetOptions : []"
       @update:resolution="resolution = $event"
@@ -244,15 +243,6 @@ const targetType = ref('image')
 const ratio = ref('auto')
 const count = ref(1)
 const preset = ref(null)
-
-/**
- * 张数是客户端并发发 N 次请求，不是一次请求出 N 张 ——
- * 上游普遍不认 n（聚合站的 chat 端点连这个字段都没有），
- * 所以选了 4 张就是 4 次调用、4 份费用。这事必须先说清。
- */
-const countHint = computed(() => (
-  count.value > 1 ? `每张都是一次独立请求，共 ${count.value} 次调用、约 ${count.value} 倍费用` : ''
-))
 
 /* ------------------------------------------------------------------ 选中上下文 */
 const selectedNodes = computed(() => nodes.value.filter(node => selectedNodeIds.value.includes(String(node.id))))

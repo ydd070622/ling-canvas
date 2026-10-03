@@ -42,6 +42,12 @@
         </div>
         
         <!-- My workflows | 我的工作流 -->
+        <div v-else-if="groupWorkflows.length" class="workflow-grid">
+          <button v-for="workflow in groupWorkflows" :key="workflow.id" class="workflow-card" @click="handleAddWorkflow({ ...workflow, savedGroup: true })">
+            <div class="card-cover"><n-icon :size="36"><GridOutline /></n-icon></div>
+            <div class="card-title">{{ workflow.name }}</div>
+          </button>
+        </div>
         <div v-else class="empty-state">
           <n-icon :size="36" class="text-gray-500">
             <FolderOpenOutline />
@@ -58,7 +64,9 @@
  * Workflow Panel Component | 工作流面板组件
  * 显示工作流模板列表，支持一键添加到画布
  */
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { groupWorkflows, loadGroupWorkflows } from '../stores/groupWorkflows'
+onMounted(() => loadGroupWorkflows().catch(() => window.$message?.error('无法读取我的工作流')))
 import { NIcon } from 'naive-ui'
 import { 
   CloseOutline,

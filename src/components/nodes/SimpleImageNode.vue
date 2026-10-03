@@ -23,9 +23,12 @@
     @remove="remove"
     @duplicate="duplicateAndRefresh"
     @view="openPreview"
+    @crop="openImageEditor('crop')"
+    @cutout="openImageEditor('cutout')"
     @upload="triggerFileInput"
     @drop-file="handleDroppedFile"
     @notice-action="handleNoticeAction"
+    @send-to-agent="handleSendToAgent"
   >
     <template #body>
       <!-- 一次生成的多张都留在这张卡里（画廊），主图排第一。
@@ -67,10 +70,10 @@
           @ratio="onMediaRatio"
           @dimensions="dimensions = $event"
         />
-        <div v-if="data.error && !data.loading" class="flow-image-failure nodrag nowheel" :class="{ 'has-image': !!data.url }">
+        <div v-if="data.error && !data.loading" class="flow-image-failure nowheel" :class="{ 'has-image': !!data.url }">
           <svg class="flow-failure-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v1"/></svg>
           <div><strong>{{ data.url ? '本次生成未完成' : '生成未完成' }}</strong><span>{{ failureSummary }}</span></div>
-          <button type="button" @click.stop="errorDialog?.showModal()">查看原因 ↗</button>
+          <button class="nodrag" type="button" @click.stop="errorDialog?.showModal()">查看原因 ↗</button>
         </div>
         <!-- 数量角标同时是展开入口；背后露出的卡片提示这是一组图片。 -->
         <button v-if="galleryItems.length > 1" class="flow-gallery-count nodrag" type="button"
@@ -80,6 +83,7 @@
       </div>
     </template>
   </NodeFrame>
+  <ImageEditModal v-model:show="imageEditorOpen" :url="data.url" :mode="imageEditorMode" @complete="createEditedImage" />
 
   <input ref="fileInputRef" type="file" accept="image/*" style="display: none" @change="handleFileSelect" />
   <dialog ref="errorDialog" class="flow-error-dialog nodrag nowheel" @click="($event.target === errorDialog) && errorDialog.close()">
@@ -94,6 +98,7 @@ import { NIcon } from 'naive-ui'
 import { DownloadOutline, ChevronUpOutline, StarOutline, ExpandOutline } from '@vicons/ionicons5'
 import { NodeFrame } from './base'
 import NodeMedia from './base/NodeMedia.vue'
+import ImageEditModal from '../canvas/ImageEditModal.vue'
 import { formatMediaDetails } from '../../utils/mediaDetails'
 import { downloadMedia } from '../../utils/downloadMedia'
 import { useNodeRefs } from '../../composables/useNodeRefs'
@@ -102,9 +107,10 @@ import { useNodeRunBridge } from '../../composables/useNodeRunBridge'
 import { openMediaViewer } from '../../composables/useMediaViewer'
 import { useImageGeneration } from '../../hooks/useApi'
 import { useModelStore } from '../../stores/pinia'
+import { useAgentStore } from '../../stores/agent'
 import {
   updateNode, editNode, editField, dropOrphanRefs, setNodeMedia,
-  duplicateNode, removeNode
+  duplicateNode, removeNode, nodes, addNode, updateNodeMeta, saveProject, startBatchOperation, endBatchOperation
 } from '../../stores/canvas'
 import { normalizeRatioKey, findSizeByRatio, ratioDisplay } from '../../utils/ratio'
 import { resolveImageTierOptions } from '../../utils/imageTiers'
@@ -186,6 +192,7 @@ const onMediaRatio = (value) => { mediaRatio.value = value }
 
 const fileInputRef = ref(null)
 const modelStore = useModelStore()
+const agent = useAgentStore()
 const { loading: generating, progress: genProgress, generate, stop: stopGeneration } = useImageGeneration()
 
 const isGenerating = computed(() => generating.value || props.data?.loading === true)
@@ -298,6 +305,30 @@ const handleDroppedFile = (file) => {
 }
 
 const openPreview = () => openMediaViewer({ url: props.data.url, kind: 'image', alt: props.data.label })
+const imageEditorOpen = ref(false)
+const imageEditorMode = ref('crop')
+const openImageEditor = mode => { imageEditorMode.value = mode; imageEditorOpen.value = true }
+const createEditedImage = result => {
+  const source = nodes.value.find(node => node.id === props.id)
+  if (!source) return
+  let position = { ...source.position }
+  let parent = source.parentNode
+  while (parent) {
+    const group = nodes.value.find(node => node.id === parent)
+    if (!group) break
+    position.x += group.position.x; position.y += group.position.y
+    parent = group.parentNode
+  }
+  position.x += (source.dimensions?.width || cardWidth.value) + 48
+  const label = `${props.data.label || '图片'}-${result.mode === 'crop' ? '裁切' : '抠图'}`
+  startBatchOperation()
+  try {
+    const id = addNode('image', position, { label, ratio: `${result.width}:${result.height}` })
+    setNodeMedia(id, { url: result.dataUrl, base64: result.dataUrl, fileName: label })
+    updateNodeMeta(id, { zIndex: Math.max(0,...nodes.value.map(node => node.zIndex || 0)) + 1 })
+  } finally { endBatchOperation() }
+  saveProject()
+}
 const openAssetPicker = () => { window.dispatchEvent(new CustomEvent('ling-canvas:open-asset-picker', { detail: { nodeId: props.id } })) }
 
 /* ------------------------------------------------------------------ 生成 */
@@ -419,6 +450,13 @@ const duplicateAndRefresh = () => {
 
 const remove = () => {
   removeNode(props.id)
+}
+
+// 把这张图暂存进智能体面板，等用户补完要求再一起发出。
+// 多条一起发走画布顶部那条 selection-action-bar，不经过这里。
+const handleSendToAgent = () => {
+  if (!props.data?.url) return
+  agent.attachImage(props.id, props.data.url, props.data.label)
 }
 
 watch(
