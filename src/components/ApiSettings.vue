@@ -2,20 +2,20 @@
   <n-modal
     v-model:show="showModal"
     preset="card"
-    title="模型配置"
+    title="设置"
     class="api-settings-modal"
     :bordered="false"
     :segmented="{ content: true }"
   >
     <div class="settings-layout">
-      <aside class="provider-panel">
-        <div class="provider-heading">
-          <div>
-            <h3>供应商</h3>
-            <p>选择或添加 API 来源</p>
-          </div>
-        </div>
+      <aside class="settings-nav">
+        <button v-for="item in settingsTabs" :key="item.key" :class="{ active: activeSettingsTab === item.key }" @click="activeSettingsTab = item.key"><n-icon :size="17"><component :is="item.icon" /></n-icon>{{ item.label }}</button>
+        <span class="settings-version">Ling Canvas {{ appVersion }}</span>
+      </aside>
 
+      <section class="settings-main">
+        <template v-if="activeSettingsTab === 'models'">
+          <div class="settings-page-heading"><h2>模型服务</h2><button type="button" class="add-provider-button" @click="addBlankProvider"><n-icon :size="16"><AddOutline /></n-icon>添加供应商</button></div>
         <div class="provider-list">
           <div
             v-for="provider in providerOptions"
@@ -44,20 +44,15 @@
           </div>
         </div>
 
-        <button type="button" class="add-provider-button" @click="addBlankProvider">
-          <n-icon :size="16"><AddOutline /></n-icon>
-          添加供应商
-        </button>
-      </aside>
-
-      <section class="settings-main">
+          <Transition name="provider-switch" mode="out-in">
+          <div :key="formData.provider" class="provider-content">
         <div class="config-card">
           <div class="config-title-row">
             <div class="provider-identity">
               <span class="provider-avatar large">{{ formData.name.slice(0, 1).toUpperCase() || 'A' }}</span>
               <div>
                 <h3>{{ formData.name || '未命名供应商' }}</h3>
-                <p>配置供应商名称、接口地址与 API Key</p>
+
               </div>
             </div>
             <div class="config-header-actions">
@@ -105,15 +100,6 @@
 
           <details class="advanced-config" :open="!!formData.advanced.trim()">
             <summary>高级配置 · 渠道兼容性</summary>
-            <p class="advanced-hint">
-              中转站对同一套参数的反应差别很大，这里是逐个渠道的手动纠正开关。
-              留空即用默认行为。填写后点「保存供应商」生效。
-            </p>
-            <ul class="advanced-keys">
-              <li v-for="(hint, key) in overrideKeyHints" :key="key">
-                <code>{{ key }}</code><span>{{ hint }}</span>
-              </li>
-            </ul>
             <textarea
               v-model="formData.advanced"
               class="advanced-input"
@@ -129,7 +115,7 @@
           <div class="models-header">
             <div>
               <h3>可用模型</h3>
-              <p>通过供应商 API 拉取模型，并选择需要加入画布的模型</p>
+
             </div>
             <div class="models-toolbar">
               <div class="model-filters">
@@ -152,6 +138,7 @@
             </div>
           </div>
 
+          <div class="model-search"><n-input v-model:value="modelSearch" clearable placeholder="搜索模型名称或 ID" /><n-button size="small" :type="enabledOnly ? 'primary' : 'default'" @click="enabledOnly = !enabledOnly">已启用 {{ enabledModelCount }}</n-button></div>
           <div class="model-list">
             <div v-if="testing" class="models-empty"><n-spin size="small" /> 正在连接并读取模型…</div>
             <template v-else-if="filteredModels.length">
@@ -168,7 +155,7 @@
                     @blur="saveModelAlias(model)"
                     @keydown.enter.prevent="$event.target.blur()"
                   />
-                  <span>{{ model.id }}</span>
+                  <span v-if="model.name !== model.id">{{ model.id }}</span>
                 </div>
                 <span class="model-type-label">{{ typeLabel(model.type) }}</span>
                 <n-switch
@@ -185,6 +172,10 @@
             </div>
           </div>
         </div>
+          </div>
+          </Transition>
+        </template>
+        <SettingsPreferences v-else :page="activeSettingsTab" @close="showModal = false" />
       </section>
     </div>
   </n-modal>
@@ -193,6 +184,8 @@
 <script setup>
 import { computed, markRaw, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import SettingsPreferences from './SettingsPreferences.vue'
+import { appVersion } from '../composables/useAppVersion'
 import {
   NButton,
   NIcon,
@@ -205,6 +198,11 @@ import {
 } from 'naive-ui'
 import {
   AddOutline,
+  GridOutline,
+  HardwareChipOutline,
+  FolderOutline,
+  KeypadOutline,
+  InformationCircleOutline,
   ChatbubbleEllipsesOutline,
   CloudOutline,
   ImageOutline,
@@ -241,6 +239,16 @@ const testing = ref(false)
 const draggingProviderKey = ref('')
 const dragOverProviderKey = ref('')
 const activeModelFilter = ref('all')
+const activeSettingsTab = ref('models'), modelSearch = ref(''), enabledOnly = ref(false)
+const settingsTabs = [
+ {key:'models',label:'模型服务',icon:markRaw(CloudOutline)},
+ {key:'canvas',label:'画布偏好',icon:markRaw(GridOutline)},
+ {key:'media',label:'素材与存储',icon:markRaw(FolderOutline)},
+ {key:'agent',label:'智能体',icon:markRaw(HardwareChipOutline)},
+ {key:'shortcuts',label:'快捷键',icon:markRaw(KeypadOutline)},
+ {key:'about',label:'关于',icon:markRaw(InformationCircleOutline)}
+]
+const enabledModelCount = computed(() => remoteModels.value.filter(isModelEnabled).length)
 const connectionStatus = ref('idle')
 const remoteModelsByProvider = ref(loadRemoteModelsCache())
 
@@ -257,7 +265,7 @@ const providerOptions = computed(() => modelStore.providerList)
 const currentProvider = computed(() => providerOptions.value.find(item => item.key === formData.provider))
 const isCustomProvider = computed(() => !!currentProvider.value?.isCustom)
 const isLinkapi = computed(() => currentProvider.value?.key === 'linkapi')
-const overrideKeyHints = PROVIDER_OVERRIDE_KEYS
+
 
 /**
  * 高级配置的实时校验。
@@ -298,9 +306,10 @@ const modelFilters = [
   { key: 'video', label: '视频', icon: markRaw(VideocamOutline) }
 ]
 
-const filteredModels = computed(() => activeModelFilter.value === 'all'
-  ? remoteModels.value
-  : remoteModels.value.filter(model => model.type === activeModelFilter.value))
+const filteredModels = computed(() => remoteModels.value.filter(model =>
+  (activeModelFilter.value === 'all' || model.type === activeModelFilter.value)
+  && (!enabledOnly.value || isModelEnabled(model))
+  && `${model.name} ${model.id}`.toLowerCase().includes(modelSearch.value.trim().toLowerCase())))
 
 const connectionStatusLabel = computed(() => ({
   idle: '未测试',
@@ -358,6 +367,8 @@ watch(remoteModelsByProvider, value => {
 }, { deep: true })
 
 const selectProvider = key => {
+  if (testing.value || saving.value || formData.provider === key) return
+  modelSearch.value = ''
   formData.provider = key
   // The provider being configured is also the provider used by canvas model
   // selectors, so model switches take effect immediately without another save.
@@ -713,17 +724,6 @@ const clearProviderConfiguration = provider => {
 .advanced-config { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 14px; }
 .advanced-config summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 600; user-select: none; }
 .advanced-config summary:hover { color: var(--text-primary); }
-.advanced-hint { margin: 10px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
-.advanced-keys { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 5px; }
-.advanced-keys li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
-.advanced-keys code {
-  flex: 0 0 auto;
-  border-radius: 4px;
-  padding: 1px 6px;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font: 11px/1.6 ui-monospace, Consolas, monospace;
-}
 .advanced-input {
   margin-top: 12px;
   min-height: 96px;
@@ -761,6 +761,25 @@ const clearProviderConfiguration = provider => {
 .model-type-label { border-radius: 999px; background: var(--bg-tertiary); padding: 3px 8px; color: var(--text-secondary); font-size: 11px; }
 .models-empty { grid-column: 1 / -1; min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .models-empty strong { color: var(--text-primary); font-size: 14px; }
+.settings-layout { grid-template-columns:188px minmax(0,1fr); }
+.settings-nav { display:flex; flex-direction:column; gap:6px; padding:24px 12px; border-right:1px solid var(--border-color); background:var(--bg-tertiary); }
+.settings-nav button { display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:8px; color:var(--text-secondary); text-align:left; }
+.settings-nav button.active { color:var(--text-primary); background:var(--bg-secondary); box-shadow:inset 3px 0 var(--accent-color); }
+.settings-version { margin-top:auto; padding:14px 12px; font-size:11px; color:var(--text-secondary); }
+.settings-main { display:block; padding:24px 28px; overflow-y:auto; }
+.settings-page-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:20px; }
+.settings-page-heading h2 { font-size:21px; margin:0; }
+.settings-page-heading .add-provider-button { padding:7px 12px; border-style:solid; flex-shrink:0; }
+.provider-list { flex-direction:row; flex:none; flex-wrap:wrap; gap:8px; overflow:visible; margin:0 0 16px; }
+.provider-item { width:auto; min-width:140px; border-color:var(--border-color); }
+.provider-content { min-width:0; }
+.models-card { flex:none; }
+.model-list { max-height:none; overflow:visible; flex:none; }
+.model-search { display:flex; gap:8px; margin:0 0 14px; }
+.provider-switch-enter-active,.provider-switch-leave-active { transition:opacity .16s ease, transform .16s ease; }
+.provider-switch-enter-from { opacity:0; transform:translateY(8px); }
+.provider-switch-leave-to { opacity:0; transform:translateY(-4px); }
+@media(prefers-reduced-motion:reduce){.provider-switch-enter-active,.provider-switch-leave-active{transition:none}}
 
 @keyframes pulse { 50% { opacity: .35; } }
 

@@ -21,6 +21,7 @@
         :min-zoom="0.1"
         :max-zoom="2"
         :zoom-on-double-click="false"
+        :zoom-on-scroll="preferences.zoomOnScroll"
         :selection-key-code="true"
         :multi-selection-key-code="['Control', 'Meta', 'Shift']"
         :selection-mode="'partial'"
@@ -82,7 +83,7 @@
             title="把所选图片发送到智能体，让它看图写作"
             @click="sendSelectionToAgent"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" /><path d="M12 13V8" /><path d="M9.5 10.5 12 8l2.5 2.5" /></svg><span>发给智能体</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" /><path d="M12 13V8" /><path d="M9.5 10.5 12 8l2.5 2.5" /></svg><span>智能体</span>
           </button>
           <button v-if="selectedImageNodes.length >= 2" type="button" class="selection-action"
             :disabled="batchDownloading" aria-label="批量下载" :title="batchDownloading ? batchDownloadProgress : '批量下载：保存为 ZIP'" @click="downloadSelectedImages">
@@ -370,6 +371,7 @@ import { instantiateGroupWorkflow } from '../utils/groupWorkflow'
 import { generationHistory, loadGenerationHistory, recordGeneratedImages, deleteGenerationHistory } from '../stores/generationHistory'
 import { openMediaViewer } from '../composables/useMediaViewer'
 import { useRouter, useRoute } from 'vue-router'
+import { preferences } from '../stores/preferences'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { NIcon, NSwitch, NMessageProvider, NSpin, NModal, NInput, NButton } from 'naive-ui'
 import { 

@@ -97,6 +97,38 @@ fn kill_pid_tree(pid: u32) {
 }
 
 /// 发一条消息并流式收取回复。
+#[tauri::command]
+pub async fn detect_agent_cli_path() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut directories = Vec::new();
+        if let Some(path) = std::env::var_os("PATH") {
+            directories.extend(std::env::split_paths(&path));
+        }
+        // GUI applications may inherit an older PATH than a newly installed CLI.
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            directories.push(std::path::PathBuf::from(&home).join(".local").join("bin"));
+        }
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            directories.push(std::path::PathBuf::from(appdata).join("npm"));
+        }
+        #[cfg(windows)]
+        let names = ["claude.exe", "claude.cmd", "claude.bat"];
+        #[cfg(not(windows))]
+        let names = ["claude"];
+        for directory in directories {
+            if !directory.is_absolute() { continue; }
+            for name in names {
+                let candidate = directory.join(name);
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().into_owned());
+                }
+            }
+        }
+        None
+    }).await.map_err(|err| format!("检测 Claude Code 失败: {err}"))
+}
+
+/// 发一条消息并流式收取回复。
 ///
 /// 事件顺序固定为「若干 Line → (可选 Err) → Done」，前端据此判断这一轮结束。
 #[tauri::command]

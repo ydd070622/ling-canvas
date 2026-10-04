@@ -1468,6 +1468,23 @@ fn get_asset_root(state: State<'_, AssetRootState>) -> Result<String, String> {
 /// 路径自始至终没有经过前端：前端只拿到「最终生效的路径字符串」用于展示。
 /// 取消时返回 `Ok(None)`，前端据此不做任何副作用。
 #[tauri::command]
+async fn pick_agent_cli_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("选择 Claude Code 程序")
+            .add_filter("程序文件", &["exe", "cmd", "bat"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|err| format!("程序选择失败: {err}"))?;
+    let Some(path) = picked else { return Ok(None); };
+    let path = path.into_path().map_err(|err| format!("无法解析程序路径: {err}"))?;
+    if !path.is_file() { return Err("所选程序不存在".into()); }
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 async fn pick_asset_root(
     app: tauri::AppHandle,
     state: State<'_, AssetRootState>,
@@ -1767,6 +1784,8 @@ pub fn run() {
             stat_asset_files,
             get_asset_root,
             pick_asset_root,
+            pick_agent_cli_path,
+            agent::detect_agent_cli_path,
             agent::agent_send,
             agent::agent_cancel
         ])
