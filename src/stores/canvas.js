@@ -6,7 +6,7 @@ import { ref } from 'vue'
 import { promoteConnectedRenderNodes } from '../utils/renderConnections'
 import { updateProjectCanvas, getProjectCanvas, projects, cleanNodeForStorage } from './projects'
 import { cloneMediaSnapshot, equalMediaSnapshots } from '../utils/mediaSnapshot'
-import { saveImage, loadImage, listImageKeys, deleteImage } from './imageStore'
+import { saveImage, loadImage, listImageKeys, deleteImage, peekImage, imagePreviewKey } from './imageStore'
 import { createDefaultNodeData, isMediaNodeType } from '../config/nodeRegistry'
 import { migrateCanvasDocument, dropUnsupportedNodes, resetTransientNodeState, CANVAS_SCHEMA_VERSION } from '../utils/migrateCanvasDocument'
 import { toPersistableEdges } from '../utils/edgePayload'
@@ -657,6 +657,14 @@ export const loadProject = (projectId) => {
     // 瞬态状态必须清掉：上一轮生成没跑完就关掉应用时，loading/autoExecute
     // 会跟着落盘，直接恢复会得到「永远生成中」的空转节点。
     nodes.value = dropUnsupportedNodes(resetTransientNodeState(migratedCanvasData.nodes || []))
+    // Warm media is attached before the first graph render.
+    nodes.value.forEach(node => {
+      if (!isMediaNodeType(node.type) || !node.data) return
+      const cached = peekImage(`${projectId}:${node.id}`)
+      if (cached && !node.data.url) node.data.url = typeof cached === 'string' ? cached : URL.createObjectURL(cached)
+      const preview = peekImage(imagePreviewKey(`${projectId}:${node.id}`))
+      if (preview && typeof preview === 'string') node.data.previewUrl = preview
+    })
     // 边要跟着过滤：连到已被丢弃的节点上的边留着只会指向空气。
     // 投影是必须的：migrateCanvasDocument 对 schemaVersion >= 4 的文档直接早退
     // （见其文件内注释），所以已存在的臃肿文档只能在这里瘦下来，否则那 1.9MB 会
@@ -727,7 +735,7 @@ export const saveProject = () => {
   }))
   updateProjectCanvas(projectId, {
     ...snapshot
-  })
+  }, nodes.value)
   persistProjectImages(projectId)
 }
 
@@ -807,6 +815,33 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
     const keys = await listImageKeys(prefix)
     if (!keys.length) return
 
+    // Small previews become visible before reading all full-resolution media.
+    const previewKeys = keys.filter(key => String(key).endsWith(':__preview__'))
+    let previewCursor = 0
+    await Promise.all(Array.from({length: Math.min(4, previewKeys.length)}, async () => {
+      while (previewCursor < previewKeys.length && currentProjectId.value === projectId) {
+        const key = previewKeys[previewCursor++]
+        const preview = await loadImage(key).catch(() => null)
+        if (currentProjectId.value !== projectId) return
+        const id = String(key).slice(prefix.length, -':__preview__'.length)
+        const node = nodes.value.find(node => String(node.id) === id)
+        if (node?.type === 'image' && typeof preview === 'string') node.data.previewUrl = preview
+      }
+    }))
+
+    // Read independent files four at a time; retain sequential alias matching
+    // below so legacy documents still claim each image only once.
+    const mediaByKey = new Map()
+    let cursor = 0
+    await Promise.all(Array.from({ length: Math.min(4, keys.length) }, async () => {
+      while (cursor < keys.length) {
+        const key = keys[cursor++]
+        if (String(key).slice(prefix.length) === THUMB_MEDIA_ID || String(key).endsWith(':__preview__')) continue
+        try { mediaByKey.set(key, await loadImage(key)) } catch { /* Other images can still recover. */ }
+      }
+    }))
+    if (currentProjectId.value !== projectId) return
+
     const nodesById = new Map(nodes.value.map(node => [String(node.id), node]))
     const claimedNodeIds = new Set()
 
@@ -822,7 +857,7 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
         if (galleryNode?.type === 'image' && Array.isArray(galleryNode.data?.galleryUrls)) {
           const index = Number(galleryMatch[2])
           if (index >= galleryNode.data.galleryUrls.length) continue
-          const media = await loadImage(key)
+          const media = mediaByKey.get(key)
           if (media) {
             if (!galleryNode.data.galleryUrls[index]) {
               galleryNode.data.galleryUrls[index] = typeof media === 'string' ? media : URL.createObjectURL(media)
@@ -856,7 +891,7 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
       // manual recovery pass may still be able to reconnect the binary.
       if (!node || !isMediaNodeType(node.type)) continue
 
-      const media = await loadImage(key)
+      const media = mediaByKey.get(key)
       const hasTemporaryBlobUrl = node.data?.url?.startsWith?.('blob:')
       if (media && node.data && (!node.data.url || hasTemporaryBlobUrl)) {
         node.data.url = typeof media === 'string' ? media : URL.createObjectURL(media)

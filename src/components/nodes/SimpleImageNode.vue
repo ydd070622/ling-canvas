@@ -60,7 +60,7 @@
         </div>
         <NodeMedia
           tone="image"
-          :url="data.url"
+          :url="data.url || data.previewUrl"
           :loading="data.loading"
           :alt="data.label"
           @upload="triggerFileInput"
@@ -68,7 +68,7 @@
           @preview="openPreview"
           :ratio="configuredRatio"
           @ratio="onMediaRatio"
-          @dimensions="dimensions = $event"
+          @dimensions="data.url && (dimensions = $event)"
         />
         <div v-if="data.error && !data.loading" class="flow-image-failure nowheel" :class="{ 'has-image': !!data.url }">
           <svg class="flow-failure-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v1"/></svg>

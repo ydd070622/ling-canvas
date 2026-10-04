@@ -43,7 +43,6 @@
         @edges-change="onEdgesChange"
         class="canvas-flow"
       >
-        <Background v-if="showGrid" :gap="20" :size="1" />
       </VueFlow>
 
       <div v-if="isDragOverCanvas" class="canvas-drop-overlay">
@@ -372,7 +371,6 @@ import { generationHistory, loadGenerationHistory, recordGeneratedImages, delete
 import { openMediaViewer } from '../composables/useMediaViewer'
 import { useRouter, useRoute } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
-import { Background } from '@vue-flow/background'
 import { NIcon, NSwitch, NMessageProvider, NSpin, NModal, NInput, NButton } from 'naive-ui'
 import { 
   ChevronBackOutline,
@@ -494,6 +492,7 @@ let groupFitFrame = null
 const draggedGroupMembers = new Set()
 const dragGroupBounds = new Map()
 watch(nodes, () => {
+  if (!nodes.value.some(node => node.type === 'group')) return
   if (groupFitFrame !== null) return
   groupFitFrame = requestAnimationFrame(() => {
     groupFitFrame = null
@@ -515,7 +514,7 @@ watch(nodes, () => {
     } else fitted = fitNodeGroups(nodes.value)
     if (fitted !== nodes.value) nodes.value = fitted
   })
-}, { deep: true, flush: 'post' })
+}, { flush: 'post' })
 onBeforeUnmount(() => {
   if (groupFitFrame !== null) cancelAnimationFrame(groupFitFrame)
 })
@@ -545,7 +544,6 @@ const autoExecute = ref(false)
 const homepageGenerationSettings = ref(null)
 const homepageReferenceImages = ref([])
 const isMobile = ref(false)
-const showGrid = ref(true)
 const showApiSettings = ref(false)
 const isProcessing = ref(false)
 
@@ -668,8 +666,15 @@ const selectionOverlay = computed(() => (
     : null
 ))
 
+let selectionOverlayFrame = null
 const refreshSelectionOverlay = () => {
-  nextTick(() => {
+  if (selectedCanvasNodes.value.length < 2) {
+    selectionBoxStyle.value = null
+    return
+  }
+  if (selectionOverlayFrame !== null) return
+  selectionOverlayFrame = requestAnimationFrame(() => {
+    selectionOverlayFrame = null
     const canvas = document.querySelector('.canvas-flow')
     const selectedElements = canvas?.querySelectorAll?.('.vue-flow__node.selected')
     if (!canvas || !selectedElements || selectedElements.length < 2) {
@@ -726,7 +731,11 @@ const onCanvasSelectionEnd = () => {
   refreshSelectionOverlay()
 }
 
-watch(selectedCanvasNodes, refreshSelectionOverlay, { deep: true, flush: 'post' })
+watch(() => selectedCanvasNodes.value.map(node => [node.id, node.position?.x, node.position?.y,
+  node.dimensions?.width, node.dimensions?.height, node.parentNode]), refreshSelectionOverlay, { flush: 'post' })
+onBeforeUnmount(() => {
+  if (selectionOverlayFrame !== null) cancelAnimationFrame(selectionOverlayFrame)
+})
 
 watch(showAssetHistoryModal, (isOpen) => {
   if (!isOpen) {
@@ -2433,6 +2442,10 @@ onUnmounted(() => {
 .canvas-flow .vue-flow__node button,
 .canvas-flow .vue-flow__node a { cursor: pointer !important; }
 .canvas-flow .vue-flow__node .vue-flow__handle { cursor: crosshair !important; }
+.canvas-flow .vue-flow__node .group-resize.left,
+.canvas-flow .vue-flow__node .group-resize.right { cursor: ew-resize !important; }
+.canvas-flow .vue-flow__node .group-resize.top,
+.canvas-flow .vue-flow__node .group-resize.bottom { cursor: ns-resize !important; }
 
 .shortcut-modal, .shortcut-modal.n-card { width: min(1120px, 92vw); max-width: 92vw; }
 .shortcut-modal .n-card, .shortcut-modal.n-card { overflow: hidden; border: 1px solid var(--border-color); border-radius: 16px; background: var(--bg-secondary); box-shadow: 0 24px 60px rgb(0 0 0 / 28%); }

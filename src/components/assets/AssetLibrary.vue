@@ -11,6 +11,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NModal, useDialog } from 'naive-ui'
 import AssetThumb from './AssetThumb.vue'
+import AssetFolderManager from './AssetFolderManager.vue'
 import { ASSET_PAGE_BATCH } from '../../config/assets'
 import { acquirePreviewUrl } from '../../services/assetLibrary'
 import { usePreviewImageSizing } from '../../composables/usePreviewImageSizing'
@@ -36,6 +37,7 @@ import { useUIStore } from '../../stores/ui'
 
 const uiStore = useUIStore()
 const dialog = useDialog()
+const showFolderManager = ref(false)
 
 const visibleCount = ref(ASSET_PAGE_BATCH)
 const sentinel = ref(null)
@@ -140,6 +142,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="asset-page">
+    <AssetFolderManager v-model:show="showFolderManager" />
     <div class="asset-toolbar">
       <div class="asset-chips">
         <button
@@ -172,6 +175,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="asset-toolbar__actions">
+        <button type="button" class="asset-rescan" @click="showFolderManager = true">管理目录</button>
         <button
           type="button"
           class="asset-rescan"
@@ -276,6 +280,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.asset-folder-manager-hint { color:var(--text-secondary); font-size:12px; line-height:1.7; margin-bottom:14px; }
+.asset-folder-manager-list { max-height:55vh; overflow:auto; }
+.asset-folder-manager-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid var(--border-color); }
+.asset-folder-manager-row>div { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.asset-folder-manager-row strong { font-size:13px; overflow-wrap:anywhere; }
+.asset-folder-manager-row small { color:var(--text-secondary); font-size:11px; }
+.asset-folder-manager-row button { flex-shrink:0; }
 .asset-page { display: flex; flex-direction: column; gap: 14px; }
 
 .asset-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }

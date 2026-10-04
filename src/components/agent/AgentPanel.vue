@@ -78,9 +78,15 @@
           <button class="agent-icon-btn" title="聊天历史" aria-label="聊天历史" :aria-expanded="showHistory" @click="showHistory = !showHistory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2" /></svg></button>
         </div>
         <div v-if="showHistory" class="agent-chat-history">
-          <div class="agent-history-heading"><strong>聊天历史</strong><button class="agent-icon-btn" aria-label="收起历史" @click="showHistory = false">×</button></div>
-          <p v-if="!agent.historyConversations.length">发送消息后自动保存。关闭标签不会删除记录。</p>
-          <button v-for="chat in agent.historyConversations" :key="chat.id" @click="agent.switchConversation(chat.id); showHistory = false"><span>{{ chat.title }}</span><small>{{ new Date(chat.updatedAt).toLocaleString('zh-CN') }} · {{ chat.messages.filter(message => message.role === 'user').length }} 轮{{ chat.open ? ' · 已打开' : '' }}</small></button>
+          <div class="agent-history-heading"><div class="history-filter"><button :class="{active: !showArchived}" @click="showArchived = false">历史</button><button :class="{active: showArchived}" @click="showArchived = true">已归档</button></div><button class="agent-icon-btn" aria-label="收起历史" @click="showHistory = false">×</button></div>
+          <p v-if="!historyItems.length">{{ showArchived ? '暂无归档记录' : '发送消息后自动保存。关闭标签不会删除记录。' }}</p>
+          <div v-for="chat in historyItems" :key="chat.id" class="agent-history-item">
+            <div class="agent-history-content">
+              <input v-if="renamingId === chat.id" v-model="historyTitle" autofocus maxlength="80" aria-label="对话名称" @keydown.enter.stop.prevent="finishHistoryRename(chat.id)" @keydown.esc.stop.prevent="renamingId = null" @blur="finishHistoryRename(chat.id)" />
+              <button v-else :disabled="showArchived" @click="agent.switchConversation(chat.id); showHistory = false"><span>{{ chat.title }}</span><small>{{ new Date(chat.updatedAt).toLocaleString('zh-CN') }} · {{ chat.messages.filter(message => message.role === 'user').length }} 轮</small></button>
+            </div>
+            <NDropdown trigger="click" :options="historyOptions(chat)" @select="key => manageHistory(key, chat)"><button class="agent-history-manage" :aria-label="`管理对话：${chat.title}`" @click.stop>···</button></NDropdown>
+          </div>
         </div>
         <!-- 待发图片。点了节点上的「发送到智能体」后暂存在这里，补完要求再一起发出 -->
         <div v-if="agent.pendingImages.length" class="agent-attachments">
@@ -142,6 +148,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { NDropdown } from 'naive-ui'
 import { useAgentStore } from '../../stores/agent'
 import { copyAgentText, copySelectionAsPlainText } from '../../utils/agentClipboard'
 const copySelectedText = event => copySelectionAsPlainText(event, window.getSelection()?.toString() || '')
@@ -157,6 +164,21 @@ const emit = defineEmits(['update:show'])
 
 const agent = useAgentStore()
 const showHistory = ref(false)
+const showArchived = ref(false), renamingId = ref(null), historyTitle = ref('')
+const historyItems = computed(() => showArchived.value ? agent.archivedConversations : agent.historyConversations)
+const historyOptions = chat => [{label: '重命名', key: 'rename'}, {label: chat.archived ? '恢复到历史' : '归档', key: 'archive', disabled: !!chat.running}]
+const manageHistory = async (key, chat) => {
+  if (key === 'archive') { agent.archiveConversation(chat.id, !chat.archived); return }
+  renamingId.value = chat.id; historyTitle.value = chat.title
+  await nextTick()
+  const input = document.querySelector('.agent-history-content input')
+  input?.focus(); input?.select()
+}
+const finishHistoryRename = id => {
+  if (renamingId.value !== id) return
+  agent.renameConversation(id, historyTitle.value)
+  renamingId.value = null
+}
 
 const visible = computed({
   get: () => props.show,
@@ -688,6 +710,17 @@ watch(
 .agent-chat-history>button:hover { background:var(--bg-secondary); }
 .agent-chat-history small,.agent-chat-history p { font-size:11px; color:var(--text-secondary); }
 .agent-chat-history span { font-size:12px; }
+.history-filter { display:flex; gap:4px; }
+.history-filter button { padding:4px 8px; border-radius:6px; color:var(--text-secondary); }
+.history-filter button.active { background:var(--bg-secondary); color:var(--text-primary); }
+.agent-history-item { display:flex; align-items:center; gap:6px; border-radius:6px; padding:4px; }
+.agent-history-item:hover { background:var(--bg-secondary); }
+.agent-history-content { flex:1; min-width:0; }
+.agent-history-content>button { display:flex; flex-direction:column; gap:4px; width:100%; padding:6px 4px; text-align:left; color:var(--text-primary); }
+.agent-history-content span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-history-content input { width:100%; padding:6px; border:1px solid var(--border-color); border-radius:5px; color:var(--text-primary); background:var(--bg-secondary); }
+.agent-history-manage { flex-shrink:0; width:28px; height:28px; border-radius:6px; color:var(--text-secondary); font-size:18px; }
+.agent-history-manage:hover { color:var(--text-primary); background:var(--bg-tertiary); }
 .agent-input-box {
   position: relative;
   border: 1px solid var(--border-color);

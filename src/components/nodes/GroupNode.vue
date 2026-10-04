@@ -5,14 +5,19 @@
   <div class="flow-group-node" :style="{ ...(data.color ? { background: `${data.color}26`, borderColor: `${data.color}99` } : {}), ...(data.dragBounds ? { transform: `translate(${data.dragBounds.x}px, ${data.dragBounds.y}px)`, width: `${data.dragBounds.width}px`, height: `${data.dragBounds.height}px` } : {}) }">
     <div v-if="selected" class="group-actions nodrag" @mousedown.stop @click.stop>
       <div class="group-color-control">
-        <button title="组颜色" :style="{ color: data.color || '#888888' }" @click="showColors = !showColors">●</button>
-        <div v-if="showColors" class="group-colors"><button v-for="color in colors" :key="color" :style="{ color }" :title="color" @click="updateNode(id, { color }); showColors = false">●</button></div>
+        <button title="组颜色" aria-label="组颜色" :aria-expanded="showColors" @click="toggleMenu($event, 'colors')"><span class="group-color-ring" :style="{ '--swatch': data.color || '#888888' }"></span></button>
       </div>
-      <select class="nodrag" aria-label="组内布局" @change="layoutGroup($event.target.value); $event.target.value = ''"><option value="">布局</option><option value="row">横向排列</option><option value="column">纵向排列</option></select>
-      <button :disabled="running" @click="executeGroup">{{ running ? '执行中…' : '▶ 整组执行' }}</button>
-      <button :disabled="saving" @click="saveWorkflow">创建工作流</button>
-      <button @click="ungroup">解组</button>
+      <button :class="{ 'is-active': showLayout }" aria-label="组内布局" :aria-expanded="showLayout" @click="toggleMenu($event, 'layout')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>布局<svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg></button>
+      <button :disabled="running" @click="executeGroup"><svg viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></svg>{{ running ? '执行中…' : '整组执行' }}</button>
+      <button :disabled="saving" @click="saveWorkflow"><svg viewBox="0 0 24 24"><path d="M4 3h13l4 4v14H4Z M8 3v6h8V3 M8 21v-8h9v8"/></svg>创建工作流</button>
+      <button @click="ungroup"><svg viewBox="0 0 24 24"><path d="M3 3h7v7H3Z M14 14h7v7h-7Z M14 3h7v7 M3 14v7h7"/></svg>解组</button>
     </div>
+    <Teleport to="body">
+      <div v-if="selected && (showColors || showLayout)" class="group-floating-menu nodrag nopan" :class="{ 'is-colors': showColors }" :style="menuStyle" @pointerdown.stop @mousedown.stop @click.stop>
+        <template v-if="showColors"><button v-for="(color, index) in colors" :key="color" :aria-label="colorNames[index]" :title="colorNames[index]" :aria-pressed="(data.color || '#888888') === color" @click="updateNode(id, { color }); closeMenus()"><span class="group-color-ring" :style="{ '--swatch': color }"></span></button></template>
+        <template v-else><button v-for="item in layouts" :key="item.value" @click="layoutGroup(item.value); closeMenus()"><svg viewBox="0 0 24 24"><path :d="item.path"/></svg>{{ item.label }}</button></template>
+      </div>
+    </Teleport>
     <button v-for="side in selected ? ['left', 'right', 'top', 'bottom'] : []" :key="side" class="group-resize nodrag nopan" :class="side" :title="'拖动调整组大小'" @pointerdown.stop.prevent="startResize($event, side)"></button>
     <div class="flow-group-bar">
       <span
@@ -41,7 +46,7 @@
 </template>
 
 <script setup>
-import { nextTick, ref, onBeforeUnmount } from 'vue'
+import { nextTick, ref, watch, onBeforeUnmount } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import { updateNode, removeNode, nodes, edges, startBatchOperation, endBatchOperation } from '../../stores/canvas'
 import { workflowOrder } from '../../utils/groupWorkflow'
@@ -59,10 +64,44 @@ const props = defineProps({
 })
 const { viewport } = useVueFlow()
 const showColors = ref(false), running = ref(false), saving = ref(false)
+const showLayout = ref(false), menuStyle = ref({})
+const colorNames = ['灰色', '红色', '橙色', '黄色', '绿色', '青色', '蓝色', '紫色']
+const layouts = [{value:'grid',label:'宫格布局',path:'M3 3h7v7H3Z M14 3h7v7h-7Z M3 14h7v7H3Z M14 14h7v7h-7Z'}, {value:'row',label:'水平布局',path:'M2 8h6v8H2Z M9 8h6v8H9Z M16 8h6v8h-6Z'}, {value:'column',label:'垂直布局',path:'M8 2h8v6H8Z M8 9h8v6H8Z M8 16h8v6H8Z'}]
+const closeMenus = () => { showColors.value = false; showLayout.value = false }
+const toggleMenu = (event, kind) => {
+  const wasOpen = kind === 'colors' ? showColors.value : showLayout.value
+  closeMenus()
+  if (wasOpen) return
+  const rect = event.currentTarget.getBoundingClientRect()
+  const height = kind === 'colors' ? 278 : 132, width = kind === 'colors' ? 48 : 160
+  menuStyle.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth-width-8))}px`, top: `${Math.max(8, Math.min(rect.bottom+6, window.innerHeight-height-8))}px` }
+  if (kind === 'colors') showColors.value = true
+  else showLayout.value = true
+}
+const dismissMenus = event => {
+  if (event.type === 'keydown' && event.key !== 'Escape') return
+  if (event.type !== 'keydown' && event.target.closest?.('.group-actions, .group-floating-menu')) return
+  closeMenus()
+}
+window.addEventListener('pointerdown', dismissMenus)
+window.addEventListener('keydown', dismissMenus)
+watch(() => props.selected, selected => { if (!selected) closeMenus() })
+watch(viewport, closeMenus, {deep:true})
+onBeforeUnmount(() => { window.removeEventListener('pointerdown', dismissMenus); window.removeEventListener('keydown', dismissMenus) })
 const colors = ['#888888', '#b64747', '#b8772e', '#aa982b', '#6a943b', '#349396', '#3e71b3', '#8059b5']
 const members = () => nodes.value.filter(node => node.parentNode === props.id)
 const layoutGroup = direction => {
   if (!direction) return
+  if (direction === 'grid') {
+    const list = members(), columns = Math.max(1, Math.ceil(Math.sqrt(list.length)))
+    const width = Math.max(320, ...list.map(node => node.dimensions?.width || 320)) + 28
+    const height = Math.max(240, ...list.map(node => node.dimensions?.height || 240)) + 28
+    const positions = new Map(list.map((node, index) => [node.id, {x:28+(index%columns)*width,y:28+Math.floor(index/columns)*height}]))
+    startBatchOperation()
+    nodes.value = nodes.value.map(node => positions.has(node.id) ? {...node, position:positions.get(node.id)} : node)
+    endBatchOperation()
+    return
+  }
   let offset = 28
   const patches = new Map(members().map(node => {
     const position = direction === 'row' ? { x: offset, y: 28 } : { x: 28, y: offset }
@@ -131,6 +170,10 @@ const startResize = (event, side) => {
   if (event.button !== 0) return
   finishResize?.()
   const group = nodes.value.find(node => node.id === props.id)
+  if (!group) return
+  const cursorStyle = document.createElement('style')
+  cursorStyle.textContent = `html:root:root:root:root:root * { cursor: ${side === 'left' || side === 'right' ? 'ew-resize' : 'ns-resize'} !important; }`
+  document.head.appendChild(cursorStyle)
   const origin = { ...group.position }, width = parseFloat(group.style.width), height = parseFloat(group.style.height)
   const positions = new Map(members().map(node => [node.id, { ...node.position }]))
   const zoom = viewport.value.zoom || 1, sx = event.clientX, sy = event.clientY
@@ -145,6 +188,7 @@ const startResize = (event, side) => {
     nodes.value = nodes.value.map(node => node.id === props.id ? { ...node, position: { x: origin.x + left, y: origin.y + top }, style: { ...node.style, width: `${w}px`, height: `${h}px` }, data: { ...node.data, manualBounds: { x: 0, y: 0, width: w, height: h }, dragBounds: undefined } } : positions.has(node.id) ? { ...node, position: { x: positions.get(node.id).x - left, y: positions.get(node.id).y - top } } : node)
   }
   finishResize = () => {
+    cursorStyle.remove()
     window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finishResize); window.removeEventListener('pointercancel', finishResize)
     updateNode(props.id, { manualResizing: false }); endBatchOperation(); finishResize = null
   }
@@ -185,13 +229,21 @@ const ungroup = () => {
 
 <style scoped>
 .group-actions { position:absolute; bottom:calc(100% + 38px / var(--flow-zoom, 1)); left:50%; transform:translateX(-50%) scale(calc(1 / var(--flow-zoom, 1))); transform-origin:bottom center; display:flex; gap:6px; padding:5px; border:1px solid var(--border-color); border-radius:12px; background:var(--bg-secondary); pointer-events:auto; white-space:nowrap; z-index:10; }
-.group-actions button { padding:6px 10px; border-radius:7px; color:var(--text-primary); font-size:12px; }
+.group-actions button { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid transparent; border-radius:7px; color:var(--text-primary); font-size:12px; }
+.group-actions svg,.group-floating-menu svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.5; }
+.group-actions button.is-active { border-color:var(--border-color); background:var(--bg-tertiary); }
 .group-actions select { background:var(--bg-secondary); color:var(--text-primary); font-size:12px; border-radius:7px; padding:6px; }
 .group-actions button:hover { background:var(--bg-tertiary); }
 .group-actions button:disabled { opacity:.5; }
 .group-color-control { position:relative; }
 .group-colors { position:absolute; top:100%; left:0; display:flex; flex-direction:column; padding:4px; border-radius:8px; background:var(--bg-secondary); border:1px solid var(--border-color); }
-.group-color-control button { font-size:20px; line-height:20px; }
+.group-color-control button { padding:5px 9px; }
+.group-color-ring { display:block; flex-shrink:0; width:22px; height:22px; border:2px solid var(--swatch); border-radius:50%; background:color-mix(in srgb, var(--swatch) 18%, transparent); }
+.group-floating-menu { position:fixed; z-index:10000; display:flex; flex-direction:column; gap:4px; padding:6px; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary); color:var(--text-primary); box-shadow:0 8px 28px rgb(0 0 0 / 18%); }
+.group-floating-menu button { display:flex; align-items:center; gap:9px; border:0; border-radius:6px; background:transparent; padding:9px 10px; text-align:left; font-size:12px; }
+.group-floating-menu button:hover { background:var(--bg-tertiary); }
+.group-floating-menu.is-colors button { padding:3px 5px; }
+.group-floating-menu button[aria-pressed="true"] { background:var(--bg-tertiary); outline:1px solid var(--border-color); }
 .group-resize { position:absolute; background:#4d86da; border-radius:2px; pointer-events:auto; z-index:8; }
 .group-resize.left,.group-resize.right { width:calc(6px / var(--flow-zoom, 1)); height:calc(30px / var(--flow-zoom, 1)); top:50%; transform:translateY(-50%); cursor:ew-resize; }
 .group-resize.left { left:0; } .group-resize.right { right:0; }

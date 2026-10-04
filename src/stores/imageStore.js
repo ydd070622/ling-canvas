@@ -2,7 +2,20 @@
  * IndexedDB image store | IndexedDB 图片存取
  * Persists node images (data URLs) outside localStorage quota | 把节点图片持久化到 IndexedDB，绕开 localStorage 容量限制
  */
-import { blobToDataUrl } from '../utils/imageThumb'
+import { blobToDataUrl, makeThumbDataUrl } from '../utils/imageThumb'
+import { createMediaCache } from '../utils/mediaCache'
+const mediaCache = createMediaCache()
+export const peekImage = key => mediaCache.peek(key)
+export const imagePreviewKey = key => `${key}:__preview__`
+let previewQueue = Promise.resolve()
+const queuePreview = (key, dataUrl) => {
+  if (!String(dataUrl).startsWith('data:image/') || key.endsWith('__thumb__') || key.endsWith('__preview__')) return
+  previewQueue = previewQueue.catch(() => {}).then(async () => {
+    if (peekImage(key) !== dataUrl) return
+    const result = await makeThumbDataUrl(dataUrl, { maxEdge: 768 })
+    if (result && peekImage(key) === dataUrl) await saveImage(imagePreviewKey(key), result.dataUrl)
+  }).catch(error => console.warn('Image preview generation failed:', error))
+}
 
 const DB_NAME = 'ling-canvas-images'
 const STORE_NAME = 'images'
@@ -28,21 +41,28 @@ const openDB = () => new Promise((resolve, reject) => {
 })
 
 export const saveImage = async (key, dataUrl) => {
+  mediaCache.put(key, dataUrl)
   if (isTauriRuntime()) {
     await invokeTauri('save_canvas_media', { key, dataUrl })
+    queuePreview(key, dataUrl)
     return
   }
   const blob = await (await fetch(dataUrl)).blob()
   const db = await openDB()
-  return new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
     tx.objectStore(STORE_NAME).put(blob, key)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
   })
+  queuePreview(key, dataUrl)
 }
 
-export const loadImage = async (key) => {
+export const loadImage = key => mediaCache.load(key, () => readImage(key)).then(value => {
+  if (!peekImage(imagePreviewKey(key))) queuePreview(key, value)
+  return value
+})
+const readImage = async (key) => {
   if (isTauriRuntime()) {
     const dataUrl = await invokeTauri('load_canvas_media', { key })
     if (dataUrl) return dataUrl
@@ -108,6 +128,10 @@ const listBrowserImageKeys = async (prefix = '') => {
 }
 
 export const deleteImage = async (key) => {
+  mediaCache.remove(key)
+  if (!key.endsWith('__preview__') && !key.endsWith('__thumb__')) {
+    await deleteImage(imagePreviewKey(key))
+  }
   if (isTauriRuntime()) {
     await invokeTauri('delete_canvas_media', { key })
     await deleteBrowserImage(key).catch(() => {})

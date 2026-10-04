@@ -77,6 +77,9 @@ assert.equal(saved.handleBounds,undefined)
 assert.deepEqual(saved.position,{x:900,y:59})
 // Use the engine's actual movement and release hooks, including its default
 // change handler, rather than calling the business patch function alone.
+const originalSetNodes = flow.setNodes
+let fullDragSyncs = 0
+flow.setNodes = (...args) => { fullDragSyncs++; return originalSetNodes(...args) }
 for (let i=0;i<30;i++) {
  const position={x:950+i*7,y:120+i*3}
  flow.updateNodePositions([{id:last.id,position,from:flow.findNode(last.id).position}],true,true)
@@ -86,6 +89,9 @@ for (let i=0;i<30;i++) {
  assert.deepEqual(nodes.value.find(n=>n.id===last.id).position,position,'Release retains the final drag position')
  assert.equal(document.querySelector('[data-id="cycle59"]').style.transform,`translate(${position.x}px,${position.y}px)`,'Release does not snap the DOM back')
 }
+assert.equal(fullDragSyncs,0,'Pointer movement must not reconcile the entire graph')
+flow.setNodes = originalSetNodes
+console.log('PASS: 30 engine drag/release cycles with zero full-graph synchronizations')
 
 const {fitNodeGroups,releaseGroupMembers,joinDroppedGroupMembers}=await import('../src/utils/groupBounds.js')
 let groupFrame=null

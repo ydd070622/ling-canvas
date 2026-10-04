@@ -95,15 +95,16 @@ export const useAgentStore = defineStore('agent', () => {
   const pendingImages = ref([])
   const conversations = ref([]), draft = ref(''), historyReady = ref(false)
   const activeConversationId = ref(sessionId.value)
-  const openConversations = computed(() => conversations.value.filter(item => item.open))
-  const historyConversations = computed(() => [...conversations.value].filter(item => item.messages?.length).sort((a,b) => b.updatedAt-a.updatedAt))
+  const openConversations = computed(() => conversations.value.filter(item => item.open && !item.archived))
+  const historyConversations = computed(() => [...conversations.value].filter(item => item.messages?.length && !item.archived).sort((a,b) => b.updatedAt-a.updatedAt))
+  const archivedConversations = computed(() => [...conversations.value].filter(item => item.archived).sort((a,b) => b.updatedAt-a.updatedAt))
   let historyWritable=false, historyTimer=null, historyQueue=Promise.resolve()
   const captureConversation = () => {
     const item=conversations.value.find(item => item.id===activeConversationId.value)
     if (!item) return
     Object.assign(item,{sessionId:sessionId.value,sessionStarted:sessionStarted.value,messages:messages.value,draft:draft.value,attachments:pendingImages.value,error:error.value,running:running.value,requestId:activeRequestId})
     const first=messages.value.find(message => message.role==='user')
-    if (first) item.title=first.content.replace(/\s+/g,' ').slice(0,24)
+    if (first && !item.customTitle) item.title=first.content.replace(/\s+/g,' ').slice(0,24)
   }
   const persistHistory = () => {
     if (!historyWritable) return Promise.resolve(false)
@@ -128,7 +129,7 @@ export const useAgentStore = defineStore('agent', () => {
   const switchConversation = id => {
 
     const item=conversations.value.find(item => item.id===id)
-    if (item) { captureConversation(); activateConversation(item); persistHistory() }
+    if (item && !item.archived) { captureConversation(); activateConversation(item); persistHistory() }
   }
   const closeConversation = id => {
 
@@ -143,10 +144,24 @@ export const useAgentStore = defineStore('agent', () => {
     }
     persistHistory()
   }
+  const renameConversation = (id, title) => {
+    const item = conversations.value.find(item => item.id === id)
+    if (!item || !title.trim()) return
+    item.title = title.trim().slice(0, 80); item.customTitle = true
+    persistHistory()
+  }
+  const archiveConversation = (id, archived = true) => {
+    captureConversation()
+    const item = conversations.value.find(item => item.id === id)
+    if (!item || item.running) return
+    item.archived = archived
+    if (archived) closeConversation(id)
+    persistHistory()
+  }
   loadAgentHistory().then(state => {
     if (state?.conversations?.length) {
       conversations.value=state.conversations.map(item => ({...item,running:false,requestId:null,messages:(item.messages || []).map(message => ({...message,streaming:false,status:''}))}))
-      const item=conversations.value.find(item => item.id===state.activeId && item.open) || openConversations.value[0]
+      const item=conversations.value.find(item => item.id===state.activeId && item.open && !item.archived) || openConversations.value[0]
       if (item) activateConversation(item)
     }
     historyWritable=true; historyReady.value=true
@@ -474,7 +489,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   return {
     conversations, openConversations, historyConversations, activeConversationId, historyReady, draft,
-    newConversation, switchConversation, closeConversation, persistHistory,
+    newConversation, switchConversation, closeConversation, persistHistory, archivedConversations, renameConversation, archiveConversation,
     panelOpen,
     messages,
     running,

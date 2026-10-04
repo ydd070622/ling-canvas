@@ -143,6 +143,7 @@ export const cleanNodeForStorage = (inputNode) => {
   if (!node.data) return node
   
   const cleanedData = { ...node.data }
+  delete cleanedData.previewUrl
   
   // Remove base64 data | 移除 base64 数据
   if (cleanedData.base64) {
@@ -305,7 +306,7 @@ export const updateProject = (id, data) => {
  * @param {string} id - Project ID | 项目ID
  * @param {object} canvasData - Canvas data (nodes, edges, viewport) | 画布数据
  */
-export const updateProjectCanvas = (id, canvasData) => {
+export const updateProjectCanvas = (id, canvasData, previewNodes = canvasData.nodes) => {
   const project = projects.value.find(p => p.id === id)
   if (!project) return false
   
@@ -324,7 +325,7 @@ export const updateProjectCanvas = (id, canvasData) => {
   // 选源、去重、降采样、写文件、清空全部收在 stores/projectThumbnails.js。
   // 它只改内存值 + 入队异步写文件，**不碰 saveProjects** —— 落盘由本函数末尾统一做。
   if (canvasData.nodes) {
-    syncProjectThumbnail(project, canvasData.nodes)
+    syncProjectThumbnail(project, previewNodes)
   }
 
   saveProjects([id])

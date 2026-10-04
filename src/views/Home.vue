@@ -1,5 +1,6 @@
 <script setup>
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, onBeforeUnmount, ref } from 'vue'
+import { warmProjectMedia } from '../stores/mediaWarmup'
 import { useRouter } from 'vue-router'
 import { NButton, NDropdown, NIcon, NInput, NModal, useDialog } from 'naive-ui'
 import {
@@ -196,7 +197,18 @@ const confirmEmptyTrash = () => {
   })
 }
 
-onMounted(initProjectsStore)
+let warmupTimer
+let warmupCancelled = false
+onMounted(async () => {
+  await initProjectsStore()
+  warmupTimer = setTimeout(async () => {
+    for (const project of activeProjects.value.slice(0, 2)) {
+      if (warmupCancelled) break
+      await warmProjectMedia(project, () => warmupCancelled)
+    }
+  }, 250)
+})
+onBeforeUnmount(() => { warmupCancelled = true; clearTimeout(warmupTimer) })
 </script>
 
 <template>
@@ -420,7 +432,6 @@ onMounted(initProjectsStore)
 .home-danger-btn { color: #ef4444; border: 1px solid #fecaca; background: #fff; }
 
 .home-hero__collage { position: relative; min-width: 0; }
-.home-hero__collage::before { content: ''; position: absolute; inset: 0; background-image: radial-gradient(#b9c9e3 1px, transparent 1px); background-size: 16px 16px; opacity: .32; }
 .home-hero__collage img, .collage-plan, .collage-checklist, .collage-memo { position: absolute; object-fit: cover; background: #fff; box-shadow: 0 9px 20px rgba(47, 65, 91, .17); }
 .collage-room { z-index: 3; left: 25%; top: 52px; width: 24%; height: 128px; transform: rotate(4deg); border: 7px solid #fff; border-radius: 6px; }
 .collage-plant { z-index: 4; left: 58%; top: 16px; width: 15%; height: 108px; transform: rotate(-6deg); border: 6px solid #fff; border-radius: 5px; }

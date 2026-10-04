@@ -217,7 +217,22 @@ export const hydrateProjectThumbnails = async (projects, { concurrency = 4 } = {
           // 已经有的值优先（可能是文档里持久化的远端 URL），只在为空时补
           if (project.thumbnail) continue
           const dataUrl = await loadImageAsDataUrl(projectThumbKey(project.id))
-          if (dataUrl) project.thumbnail = dataUrl
+          if (project.thumbnail) continue
+          if (dataUrl) {
+            project.thumbnail = dataUrl
+          } else {
+            // Older saves may have cleared the cover after removing inline
+            // URLs. Recover from media without opening or mutating the canvas.
+            const candidates = (project.canvasData?.nodes || [])
+              .filter(node => node.type === 'image').sort((a, b) => nodeTime(b) - nodeTime(a))
+            for (const node of candidates) {
+              if (project.thumbnail) break
+              const source = node.data?.url || await loadImageAsDataUrl(`${project.id}:${node.id}`)
+              if (!source) continue
+              syncProjectThumbnail(project, [{ ...node, data: { ...node.data, url: source } }])
+              await flushProjectThumbnails()
+            }
+          }
         } catch {
           // 单张失败不该影响其它项目
         }

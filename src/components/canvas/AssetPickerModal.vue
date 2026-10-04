@@ -11,6 +11,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NModal } from 'naive-ui'
 import AssetThumb from '../assets/AssetThumb.vue'
+import AssetFolderManager from '../assets/AssetFolderManager.vue'
 import { ASSET_PAGE_BATCH } from '../../config/assets'
 import { acquirePreviewUrl } from '../../services/assetLibrary'
 import { usePreviewImageSizing } from '../../composables/usePreviewImageSizing'
@@ -20,6 +21,9 @@ import {
   assetRoot,
   assetStatus,
   categories,
+  folders,
+  assetFolder,
+  setAssetFolder,
   filteredAssetEntries,
   loadAssetLibrary,
   rootAssetCount,
@@ -33,6 +37,7 @@ const props = defineProps({
 const emit = defineEmits(['update:show', 'select'])
 
 const query = ref('')
+const showFolderManager = ref(false)
 const selectedPaths = ref([])
 const visibleCount = ref(ASSET_PAGE_BATCH)
 
@@ -49,10 +54,11 @@ const matched = computed(() => {
 const paged = computed(() => matched.value.slice(0, visibleCount.value))
 const hasMore = computed(() => matched.value.length > visibleCount.value)
 
-watch([matched, assetCategory], () => { visibleCount.value = ASSET_PAGE_BATCH })
+watch([matched, assetCategory, assetFolder], () => { visibleCount.value = ASSET_PAGE_BATCH })
 
 watch(() => props.show, value => {
   if (!value) {
+    showFolderManager.value = false
     selectedPaths.value = []
     query.value = ''
     // 关掉选择器就不要再留一张浮在外面的大图
@@ -126,6 +132,7 @@ const confirm = () => {
     @update:show="value => emit('update:show', value)"
   >
     <div class="asset-picker__toolbar">
+      <NButton size="small" @click="showFolderManager = true">管理目录</NButton>
       <input v-model="query" class="asset-picker__search" type="text" placeholder="按文件名或路径筛选" />
       <span class="asset-picker__count">已选 {{ selectedPaths.length }} 张</span>
     </div>
@@ -159,6 +166,11 @@ const confirm = () => {
       >
         根目录散图<em>{{ rootAssetCount }}</em>
       </button>
+    </div>
+
+    <div v-if="folders.length" class="asset-picker__chips asset-picker__chips--sub" aria-label="子文件夹筛选">
+      <button type="button" class="asset-picker__chip" :class="{ 'asset-picker__chip--active': !assetFolder }" @click="setAssetFolder('')">全部</button>
+      <button v-for="item in folders" :key="item.name" type="button" class="asset-picker__chip" :class="{ 'asset-picker__chip--active': assetFolder === item.name }" @click="setAssetFolder(item.name)">{{ item.name }}<em>{{ item.count }}</em></button>
     </div>
 
     <div class="asset-picker__body">
@@ -228,6 +240,7 @@ const confirm = () => {
       <span class="asset-preview__path">{{ previewEntry?.relativePath }}</span>
     </template>
   </n-modal>
+  <AssetFolderManager v-model:show="showFolderManager" />
 </template>
 
 <style scoped>
@@ -245,6 +258,8 @@ const confirm = () => {
 .asset-picker__count { flex: none; color: #94a3b8; font-size: 12px; }
 
 .asset-picker__chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.asset-picker__chips--sub { gap:6px; max-height:120px; overflow-y:auto; }
+.asset-picker__chips--sub .asset-picker__chip { padding:4px 10px; font-size:12px; }
 .asset-picker__chip {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px; border-radius: 999px;

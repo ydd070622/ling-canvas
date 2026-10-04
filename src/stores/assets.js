@@ -37,9 +37,33 @@ let inflight = null
 let scanEpoch = 0
 
 const byNatural = (a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true })
+const HIDDEN_FOLDERS_KEY = 'ling-canvas-hidden-asset-folders'
+const readHiddenFolders = () => {
+  try {
+    const value = JSON.parse(localStorage.getItem(HIDDEN_FOLDERS_KEY) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch { return {} }
+}
+const hiddenByRoot = ref(readHiddenFolders())
+const rootKey = computed(() => assetRoot.value.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase())
+export const hiddenAssetCategories = computed(() => {
+  const list = hiddenByRoot.value[rootKey.value]
+  return Array.isArray(list) ? list : []
+})
+export const setAssetCategoryHidden = (name, hidden) => {
+  if (!name || !rootKey.value) return
+  const list = new Set(hiddenAssetCategories.value)
+  if (hidden) list.add(name)
+  else list.delete(name)
+  const next = {...hiddenByRoot.value, [rootKey.value]: [...list]}
+  try { localStorage.setItem(HIDDEN_FOLDERS_KEY, JSON.stringify(next)) }
+  catch { window.$message?.error('目录显示设置保存失败'); return }
+  hiddenByRoot.value = next
+  if (hidden && assetCategory.value === name) setAssetCategory('')
+}
 
 /** 顶层分类及其图片数。一张图都没有的分类（例如「03-提示词」）不进列表 */
-export const categories = computed(() => {
+export const allAssetCategories = computed(() => {
   const counts = new Map()
   for (const entry of assetEntries.value) {
     if (!entry.category) continue
@@ -47,6 +71,7 @@ export const categories = computed(() => {
   }
   return [...counts.entries()].map(([name, count]) => ({ name, count })).sort(byNatural)
 })
+export const categories = computed(() => allAssetCategories.value.filter(item => !hiddenAssetCategories.value.includes(item.name)))
 
 /** 当前分类下的二级目录 */
 export const folders = computed(() => {
@@ -68,6 +93,7 @@ export const filteredAssetEntries = computed(() => {
   const category = assetCategory.value
   const folder = assetFolder.value
   return assetEntries.value.filter(entry => {
+    if (hiddenAssetCategories.value.includes(entry.category)) return false
     if (category === '__root__') return !entry.category
     if (category && entry.category !== category) return false
     if (folder && entry.folder !== folder) return false
