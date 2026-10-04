@@ -751,7 +751,7 @@ const clearProviderConfiguration = provider => {
 .model-row { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid var(--border-color); border-radius: 10px; }
 .model-row:hover { background: var(--bg-tertiary); }
 .model-type-icon { display: flex; height: 32px; width: 32px; align-items: center; justify-content: center; border-radius: 9px; background: #eef2ff; color: #6366f1; }
-.model-type-icon.image { background: #ecfdf5; color: #10b981; }
+.model-type-icon.image { background: var(--bg-tertiary); color: var(--text-secondary); }
 .model-type-icon.video { background: #fff7ed; color: #f97316; }
 .model-info { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .model-display-name { width: 100%; min-width: 0; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; padding: 0 0 2px; color: var(--text-primary); font: inherit; font-size: 13px; font-weight: 650; text-overflow: ellipsis; }

@@ -1,0 +1,12 @@
+const home = document.createElement('div');
+home.className='home-preview';
+home.innerHTML=`<aside><small class="mini">个人</small><button class="selected">⌂　全部画布　　1</button><button>▦　模板中心</button><button>♡　灵感收藏</button><button>◇　素材库</button><button>▤　回收站</button><hr style="width:100%;border:0;border-top:1px solid var(--line)"><small class="mini">本地空间</small><button>▱　我的项目</button><button>▱　家居设计</button><button>▱　参考资料</button><button>＋　创建文件夹</button><div style="margin-top:auto"><button id="homeTheme">◐　主题</button><button id="homeSettings">⚙　设置</button></div></aside><main><section class="hero"><div><small class="mini" style="letter-spacing:4px">LING CANVAS</small><h1>在无限画布上，<br>让空间灵感自由发生</h1><p>收集灵感 · 整理素材 · 构思方案 · 展现你的理想空间</p><button class="primary" id="newCanvas">＋ 新建画布</button> <button>▦ 浏览模板</button></div><div class="collage"><img src="scene01.jpeg" alt="空间参考"><img src="shot01.jpeg" alt="室内参考"></div></section><h2>最近的画布 ›</h2><div class="recent"><article class="project"><img src="workflow01.jpeg" alt="画布示例"><div><strong>20261004_意式极简</strong><br><small>1 分钟前</small></div></article><button class="new-project" id="newCanvas2"><span>＋</span>新建画布<small class="mini">在无限画布上开始创作</small></button></div><div class="explore">${['模板中心','灵感收藏','素材库'].map((s,i)=>`<article><strong>${s} ›</strong><p>${['从专业模板开始，快速搭建创作空间','收藏喜欢的图片、材质与灵感','管理图片、材质、家具等设计素材'][i]}</p><div class="placeholder">${['暂无模板','暂无收藏','浏览本地素材库'][i]}</div></article>`).join('')}</div></main>`;
+document.body.append(home);
+const controls=document.createElement('div');controls.className='preview-controls';controls.innerHTML='<button id="showHome">主页</button><button id="showSettings">设置</button><button id="globalTheme">切换浅 / 深色</button>';
+document.querySelector('.appbar .preview').replaceWith(controls);
+const showHome=()=>{home.style.display='grid';document.querySelector('.stage').style.display='none'};
+const showSettings=()=>{home.style.display='none';document.querySelector('.stage').style.display='block'};
+document.getElementById('showHome').onclick=showHome;document.getElementById('showSettings').onclick=showSettings;document.getElementById('homeSettings').onclick=showSettings;
+document.getElementById('globalTheme').onclick=document.getElementById('homeTheme').onclick=()=>document.getElementById('themeTop').click();
+document.getElementById('newCanvas').onclick=document.getElementById('newCanvas2').onclick=()=>toast('配色预览：不创建真实画布');
+document.body.classList.add('light');syncTheme();showHome();

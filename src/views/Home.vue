@@ -496,4 +496,12 @@ onBeforeUnmount(() => { warmupCancelled = true; clearTimeout(warmupTimer) })
 @media (max-width: 1180px) {
   .home-dashboard { padding-inline: 16px; }.home-project-grid { grid-template-columns: repeat(min(var(--home-recent-columns, 4), 4),minmax(0,1fr)); }.home-project-grid > :nth-child(4) { display: none; }.home-explore-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.home-explore-grid > :last-child { display: none; }.home-hero { grid-template-columns: 43% 57%; }.home-hero__note { display: none; }
 }
+
+/* Neutral controls; illustrations and application logo keep their original colors. */
+.home-hero, .dark .home-hero { background: var(--bg-secondary); border-color: var(--border-color); }
+.home-primary-btn { background: var(--accent-color); color: var(--accent-on); box-shadow: 0 8px 18px #00000012; }
+.home-section-head > button { color: var(--text-secondary); }
+.home-new-card, .dark .home-new-card { border-color: var(--border-color); color: var(--text-primary); }
+.home-new-card:hover, .dark .home-new-card:hover { border-color: var(--text-secondary); color: var(--text-primary); background: var(--bg-tertiary); }
+.home-new-card > span { color: var(--text-primary); background: var(--bg-tertiary); }
 </style>

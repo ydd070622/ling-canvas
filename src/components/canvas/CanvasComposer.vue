@@ -8,12 +8,6 @@
   <Teleport to="body" :disabled="!composerExpanded">
   <div class="composer-wrap" :class="{ 'is-expanded': composerExpanded, 'is-hidden': !composerVisible }" @keydown="onComposerEscape">
     <div v-if="composerExpanded" class="compose-backdrop" @click="toggleComposerExpanded(false)"></div>
-    <div v-if="contextChips.length === 1" class="context-strip">
-      <div v-for="chip in contextChips" :key="chip.id" class="context-chip">
-        <span class="context-chip-name">{{ chip.label }}</span>
-        <button class="context-chip-x" type="button" title="从上下文移除" @click="deselect(chip.id)">×</button>
-      </div>
-    </div>
 
     <div class="composer" :role="composerExpanded ? 'dialog' : undefined" :aria-modal="composerExpanded ? true : undefined" :aria-label="composerExpanded ? '编辑提示词' : undefined">
       <button v-if="!isParamlessNode" class="compose-expand" type="button"
@@ -270,15 +264,6 @@ const isParamlessNode = computed(() => isRenderNode.value || isCompareNode.value
  * 常驻底部只会挡住画布下方。新建节点走双击空白 / 端口菜单，不依赖它。
  */
 const composerVisible = computed(() => selectedNodes.value.length > 0)
-
-const contextChips = computed(() => selectedNodes.value.map(node => ({
-  id: node.id,
-  label: `${node.data?.label || KIND_TITLE[node.type] || NODE_DEFINITIONS[node.type]?.label || node.type}`
-})))
-
-const deselect = (id) => {
-  nodes.value = nodes.value.map(node => (String(node.id) === String(id) ? { ...node, selected: false } : node))
-}
 
 /* ------------------------------------------------------------------ 选项
    参数只有这一处（卡片上的参数控件已全部撤掉）。编辑模式下这些值会**立即写回**
@@ -894,32 +879,6 @@ const viewportCenter = () => {
   .composer-wrap { transition: none; }
 }
 
-/* ---- 上下文 chip ---- */
-.context-strip { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 12px 8px; }
-.context-chip {
-  display: flex;
-  height: 32px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  border: 1px solid var(--border-color);
-  border-radius: 9px;
-  background: var(--bg-secondary);
-  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.05);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.context-chip-x {
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0;
-}
-.context-chip-x:hover { color: var(--text-primary); }
-
 /* ---- 主体 ---- */
 .composer {
   position: relative;
@@ -958,8 +917,8 @@ const viewportCenter = () => {
 .compose-main { display: flex; align-items: flex-end; gap: 6px; }
 .compose-input {
   min-width: 0;
-  height: 120px;
-  min-height: 120px;
+  height: 96px;
+  min-height: 96px;
   max-height: 240px;
   overflow-y: auto;
   flex: 1;
@@ -1211,7 +1170,6 @@ const viewportCenter = () => {
 .compose-expand:hover { color: var(--text-primary); background: var(--bg-tertiary); }
 .composer-wrap.is-expanded { position: fixed; inset: 0; left: 0; bottom: 0; width: 100%; height: 100%; transform: none; z-index: 250; display: flex; align-items: center; justify-content: center; padding: 26px; }
 .compose-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 48%); backdrop-filter: blur(3px); }
-.is-expanded .context-strip { display: none; }
 .is-expanded .composer { display: flex; flex-direction: column; width: min(840px, 100%); height: min(720px, calc(100dvh - 52px)); min-height: 0; padding: 22px 14px 10px; border-radius: 16px; box-shadow: 0 20px 80px rgb(0 0 0 / 25%); }
 .is-expanded .compose-expand { top: 10px; right: 12px; }
 .is-expanded .prompt-references { padding-right: 38px; flex-shrink: 0; }

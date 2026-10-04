@@ -33,8 +33,15 @@ const MessageBridge = defineComponent({
 const theme = computed(() => isDark.value ? darkTheme : null)
 
 // Global theme overrides | 全局主题覆盖
-const themeOverrides = {
+const themeOverrides = computed(() => ({
   common: {
+    primaryColor: isDark.value ? '#e5e5e5' : '#292929',
+    primaryColorHover: isDark.value ? '#ffffff' : '#404040',
+    primaryColorPressed: isDark.value ? '#cccccc' : '#161616',
+    primaryColorSuppl: isDark.value ? '#ffffff' : '#404040',
+    textColorBase: isDark.value ? '#ededed' : '#242424',
+    borderColor: isDark.value ? '#383838' : '#e2e2e2',
+    bodyColor: isDark.value ? '#202020' : '#ffffff',
     borderRadius: '12px',
     borderRadiusSmall: '8px'
   },
@@ -54,14 +61,19 @@ const themeOverrides = {
     borderRadiusMedium: '10px',
     borderRadiusSmall: '8px',
     borderRadiusLarge: '12px',
+    textColorPrimary: isDark.value ? '#202020' : '#ffffff',
+    textColorHoverPrimary: isDark.value ? '#202020' : '#ffffff',
+    textColorPressedPrimary: isDark.value ? '#202020' : '#ffffff',
     heightMedium: '36px',
     paddingMedium: '0 16px'
   },
+  Switch: { buttonColor: isDark.value ? '#202020' : '#ffffff' },
+  Checkbox: { checkMarkColor: isDark.value ? '#202020' : '#ffffff' },
   Input: {
     borderRadius: '10px',
     heightMedium: '36px'
   }
-}
+}))
 </script>
 
 <template>

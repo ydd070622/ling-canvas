@@ -29,26 +29,28 @@ html, body, #app {
 
 /* Light mode variables | 浅色模式变量 */
 :root {
-  --bg-primary: #f8fafc;
+  --bg-primary: #f7f7f7;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f5f9;
-  --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --border-color: #e2e8f0;
-  --accent-color: #22c55e;
-  --accent-hover: #16a34a;
+  --bg-tertiary: #eeeeee;
+  --text-primary: #242424;
+  --text-secondary: #737373;
+  --border-color: #e2e2e2;
+  --accent-color: #292929;
+  --accent-hover: #404040;
+  --accent-on: #ffffff;
 }
 
 /* Dark mode variables | 深色模式变量 */
 .dark {
-  --bg-primary: #090909;
+  --bg-primary: #161616;
   --bg-secondary: #161616;
   --bg-tertiary: #242424;
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --border-color: #334155;
-  --accent-color: #4ade80;
-  --accent-hover: #22c55e;
+  --text-primary: #eeeeee;
+  --text-secondary: #a0a0a0;
+  --border-color: #383838;
+  --accent-color: #e5e5e5;
+  --accent-hover: #ffffff;
+  --accent-on: #202020;
 }
 
 body {

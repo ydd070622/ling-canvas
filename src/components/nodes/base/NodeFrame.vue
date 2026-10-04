@@ -227,9 +227,11 @@ const typeLabel = computed(() => NODE_DEFINITIONS[props.tone]?.label || '')
 /** 正文 chrome 是否铺开。常驻展开的节点与选中状态无关，但工具条仍只在选中时出现 */
 const expanded = computed(() => props.alwaysExpanded)
 
-const cardStyle = computed(() => (
-  props.cardWidth ? { '--flow-card-width': `${props.cardWidth}px` } : null
-))
+const cardStyle = computed(() => ({
+  ...(props.cardWidth ? { '--flow-card-width': `${props.cardWidth}px` } : {}),
+  '--flow-selection-width': `${2 / Math.max(0.1, canvasViewport.value?.zoom || 1)}px`,
+  '--flow-selection-gap': `${5 / Math.max(0.1, canvasViewport.value?.zoom || 1)}px`
+}))
 
 /**
  * 拖动右下角改大小 | Resize by dragging the bottom-right grip

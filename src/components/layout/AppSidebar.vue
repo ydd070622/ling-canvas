@@ -308,4 +308,7 @@ const handleFolderAction = (key, name) => {
 .home-sidebar__footer-btn :deep(svg) { width: 18px; height: 18px; }
 .home-sidebar__nav::-webkit-scrollbar { width: 4px; }
 .home-sidebar__nav::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(148, 163, 184, 0.35); }
+
+.home-sidebar__item--active, .home-sidebar__item--active:hover, .dark .home-sidebar__item--active { background: var(--bg-tertiary); color: var(--text-primary); }
+.home-sidebar__item--active .home-sidebar__count { color: var(--text-secondary); }
 </style>

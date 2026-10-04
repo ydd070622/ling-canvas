@@ -1784,3 +1784,23 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   color: var(--flow-text-mid) !important; box-shadow: 0 1px 4px rgb(0 0 0 / 8%) !important;
 }
 .flow-node-render .vue-flow__handle.flow-port { opacity: 1; pointer-events: auto; }
+
+/* Image selection stays two screen pixels wide without changing node geometry. */
+.flow-node-image:is(.is-focused, .is-multi) .flow-stage {
+  outline: var(--flow-selection-width, 2px) solid #438bfa;
+  outline-offset: var(--flow-selection-gap, 5px);
+}
+
+/* Image stage shadow must outrank the compact-state fallback. */
+.flow-node-outer.flow-node-image .flow-stage:has(img) {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .14), 0 16px 26px -3px rgba(0, 0, 0, .32);
+}
+.flow-node-outer.flow-node-image:is(.is-focused, .is-multi) .flow-stage:has(img) {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .20), 0 24px 40px -4px rgba(0, 0, 0, .42);
+}
+.dark .flow-node-outer.flow-node-image .flow-stage:has(img) {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .35), 0 16px 26px -3px rgba(0, 0, 0, .55);
+}
+.dark .flow-node-outer.flow-node-image:is(.is-focused, .is-multi) .flow-stage:has(img) {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .45), 0 24px 40px -4px rgba(0, 0, 0, .70);
+}

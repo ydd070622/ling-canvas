@@ -2498,7 +2498,7 @@ onUnmounted(() => {
 .history-batch-actions b { color: var(--accent-color); font-size: 13px; }
 .history-batch-actions button { border: 1px solid var(--border-color); border-radius: 7px; padding: 5px 9px; color: var(--text-secondary); font-size: 12px; }
 .history-batch-actions button:hover:not(:disabled) { border-color: var(--text-secondary); color: var(--text-primary); }
-.history-batch-actions button.primary { border-color: var(--accent-color); background: var(--accent-color); color: white; }
+.history-batch-actions button.primary { border-color: var(--accent-color); background: var(--accent-color); color: var(--accent-on); }
 .history-batch-actions button.danger { border-color: #ef4444; color: #ef4444; }
 .history-batch-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .history-date { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--text-secondary); font-size: 14px; }
@@ -2510,7 +2510,7 @@ onUnmounted(() => {
 .history-image-card img { display: block; aspect-ratio: 1 / 1; width: 100%; object-fit: cover; }
 .history-select-mark { position: absolute; right: 8px; top: 8px; display: flex; height: 22px; width: 22px; align-items: center; justify-content: center; border: 1px solid var(--border-color); border-radius: 50%; background: rgb(0 0 0 / 48%); color: transparent; font-size: 13px; }
 .history-image-card { position: relative; }
-.history-image-card.selected .history-select-mark { border-color: var(--accent-color); background: var(--accent-color); color: white; }
+.history-image-card.selected .history-select-mark { border-color: var(--accent-color); background: var(--accent-color); color: var(--accent-on); }
 .history-empty { display: flex; height: 100%; min-height: 180px; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 14px; }
 @media (max-width: 760px) { .history-image-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 

@@ -325,10 +325,10 @@ onBeforeUnmount(() => {
 /* 错误态的主行动：选目录比重试更可能是用户真正要做的事 */
 .asset-rescan--primary {
   border-color: var(--accent-color, #22c55e);
-  background: var(--accent-color, #22c55e);
-  color: #fff;
+  background: var(--accent-color, #292929);
+  color: var(--accent-on);
 }
-.asset-rescan--primary:hover:not(:disabled) { background: var(--accent-color, #22c55e); color: #fff; filter: brightness(1.06); }
+.asset-rescan--primary:hover:not(:disabled) { background: var(--accent-color, #292929); color: var(--accent-on); filter: brightness(1.06); }
 
 .asset-grid {
   display: grid;
