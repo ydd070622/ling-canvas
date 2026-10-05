@@ -77,7 +77,7 @@ const renumberOrders = (edges) => {
       .sort((a, b) => (Number(a.data?.order) || 0) - (Number(b.data?.order) || 0))
       .forEach((edge, index) => orderById.set(edge.id, index + 1))
   })
-  return edges.map(edge => ({ ...edge, data: { order: orderById.get(edge.id) || 1 } }))
+  return edges.map(edge => ({ ...edge, data: { ...(edge.data || {}), order: orderById.get(edge.id) || 1 } }))
 }
 
 /**
@@ -211,7 +211,7 @@ export const migrateCanvasDocument = (document = {}) => {
       sourceHandle: OUTPUT_HANDLE,
       targetHandle: INPUT_HANDLE,
       type: 'flowEdge',
-      data: { order: Number(edge.data?.order ?? edge.data?.promptOrder ?? edge.data?.imageOrder) || 1 }
+      data: { order: Number(edge.data?.order ?? edge.data?.promptOrder ?? edge.data?.imageOrder) || 1, ...(Number.isInteger(edge.data?.referenceIndex) && edge.data.referenceIndex > 0 ? { referenceIndex: edge.data.referenceIndex } : {}) }
     }]
   })
   // 同源同目标只留一条

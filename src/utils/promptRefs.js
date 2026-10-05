@@ -2,7 +2,7 @@
  * Prompt references | 提示词里的上游引用
  *
  * 全显式引用模型：连了线不等于用了上游素材，必须在正文里写 `@图片1` / `@文本2`
- * 才会生效。编号 = 该类型入边按 `edge.data.order` 升序的位次。
+ * 才会生效。编号默认按入边位次分配；拖动后用 referenceIndex 保留名称，order 只决定排列。
  *
  * token 字面量与绑定键同名（`@图片1` ↔ key `图片1`），统一由 `refKey()` 产出，
  * 不要在别处手拼这个格式。
@@ -66,6 +66,12 @@ export const computeSlots = (node, nodes, edges) => {
   const slots = []
   const idle = []
 
+  const reserved = {}
+  inbound.forEach((edge, i) => {
+    const kind = sources[i]?.type, index = Number(edge.data?.referenceIndex)
+    if (Number.isInteger(index) && index > 0) (reserved[kind] ||= new Set()).add(index)
+  })
+  const assigned = {}
   inbound.forEach((edge, i) => {
     const src = sources[i]
     if (!src || !isReferenceableType(src.type)) return
@@ -77,13 +83,20 @@ export const computeSlots = (node, nodes, edges) => {
       return
     }
     used[kind] = taken + 1
+    const assignedKind = assigned[kind] ||= new Set()
+    let index = Number(edge.data?.referenceIndex)
+    if (!Number.isInteger(index) || index < 1 || assignedKind.has(index)) {
+      index = 1
+      while (assignedKind.has(index) || reserved[kind]?.has(index)) index++
+    }
+    assignedKind.add(index)
     slots.push({
       edge,
       src,
       kind,
-      index: taken + 1,
-      code: KIND_CODE[kind] + (taken + 1),
-      token: makeToken(kind, taken + 1),
+      index,
+      code: KIND_CODE[kind] + index,
+      token: makeToken(kind, index),
       role: getSlotRole(node, kind, taken, sourceKinds)
     })
   })
@@ -103,7 +116,7 @@ export const resolveRefs = (node, nodes, edges) => {
       const hit = slots.find(s => s.edge.id === binding)
       return hit ? { ...token, status: 'ok', slot: hit } : { ...token, status: 'orphan' }
     }
-    const nth = byKind[token.kind]?.[token.index - 1]
+    const nth = byKind[token.kind]?.find(slot => slot.index === token.index)
     return nth ? { ...token, status: 'ok', slot: nth } : { ...token, status: 'beyond' }
   })
 }

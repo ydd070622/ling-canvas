@@ -1,161 +1,65 @@
 <template>
-  <!-- 提示词预设画廊 | Prompt preset gallery
-       预设是整套方案的模板，不是几个词 —— 所以用带封面的卡片画廊来挑，而不是下拉/列表：
-       默认 / 收藏 / 自定义三个页签，能收藏、能自己建。
-
-       选中后**只把预设本身记到节点上**（不往输入框灌文本），具体文本生成时才展开。 -->
   <Teleport to="body">
-    <div v-if="visible" class="preset-overlay" @click.self="emit('close')">
-      <section class="preset-dialog" role="dialog" aria-modal="true" aria-label="提示词预设">
-        <header>
-          <div>
-            <strong>提示词预设</strong>
-            <small>{{ subtitle }}</small>
+    <div v-if="visible" class="preset-overlay" @click.self="emit('close')" @keydown.esc="emit('close')">
+      <section class="preset-dialog" role="dialog" aria-modal="true" aria-label="自定义提示词预设">
+        <header><div><strong>提示词预设</strong><small>{{ subtitle }} · 自定义</small></div><button type="button" title="关闭" @click="emit('close')">×</button></header>
+        <form class="custom-editor" @submit.prevent="saveCustom">
+          <div class="editor-heading"><strong>{{ editingId ? '编辑预设' : '新建预设' }}</strong><div class="editor-heading-actions"><button v-if="editingId" type="button" class="quiet-button" @click="resetDraft">取消编辑</button><button type="submit" class="save-button" :disabled="coverBusy || !draftTitle.trim() || !draftPrompt.trim()">{{ editingId ? '保存修改' : '保存预设' }}</button></div></div>
+          <div class="editor-fields">
+            <div class="cover-editor"><button type="button" class="cover-upload" :disabled="coverBusy" @click="coverInput.click()"><img v-if="draftCover" :src="draftCover" alt="封面预览" /><span v-else>＋<small>添加封面</small></span><span v-if="draftCover" class="cover-change">更换封面</span></button><button v-if="draftCover" type="button" class="cover-remove" title="移除封面" aria-label="移除封面" @click="draftCover = ''">×</button></div>
+            <div class="text-fields"><input v-model="draftTitle" aria-label="预设名称" placeholder="预设名称" maxlength="80" /><textarea v-model="draftPrompt" aria-label="完整提示词" placeholder="输入完整提示词，可随时编辑修改…" /></div>
           </div>
-          <button title="关闭" @click="emit('close')">×</button>
-        </header>
-
-        <nav>
-          <button
-            v-for="item in TABS"
-            :key="item.key"
-            :class="{ active: tab === item.key }"
-            type="button"
-            @click="tab = item.key"
-          >{{ item.label }}</button>
-        </nav>
-
-        <div v-if="tab === 'custom'" class="preset-create">
-          <input v-model="draftTitle" placeholder="预设名称" />
-          <textarea v-model="draftPrompt" placeholder="输入要保存的完整提示词…" />
-          <button type="button" :disabled="!draftTitle.trim() || !draftPrompt.trim()" @click="addCustom">保存预设</button>
-        </div>
-
+          <input ref="coverInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="uploadCover" />
+          <div v-if="error || coverBusy" class="editor-footer"><span class="editor-error" role="status">{{ error || '正在处理封面…' }}</span></div>
+        </form>
         <div class="preset-grid">
-          <article
-            v-for="item in visiblePresets"
-            :key="item.id"
-            class="preset-card"
-            :class="{ 'is-active': selectedId && item.id === selectedId }"
-            @click="emit('select', item)"
-          >
-            <div class="preset-cover" :style="{ background: item.cover }">
-              <span>{{ item.icon }}</span>
-              <button
-                v-if="item.source !== 'custom'"
-                class="preset-favorite"
-                :class="{ active: favorites.includes(item.id) }"
-                type="button"
-                :title="favorites.includes(item.id) ? '取消收藏' : '收藏'"
-                @click.stop="toggleFavorite(item.id)"
-              >★</button>
-            </div>
-            <div class="preset-meta">
-              <strong>{{ item.title }}</strong>
-              <small>{{ item.description }}</small>
-            </div>
-            <button
-              v-if="item.source === 'custom'"
-              class="preset-delete"
-              type="button"
-              title="删除"
-              @click.stop="removeCustom(item.id)"
-            >×</button>
+          <article v-for="item in customPresets" :key="item.id" class="preset-card" :class="{ 'is-active': selectedId === item.id }">
+            <button type="button" class="preset-pick" :aria-label="'使用预设：' + item.title" @click="emit('select', item)"><div class="preset-cover" :style="{ background: item.cover }"><img v-if="item.coverImage" :src="item.coverImage" alt="" /><span v-else>✎</span></div></button>
+            <div class="preset-card-footer"><button type="button" class="preset-title" :title="item.title" @click="emit('select', item)">{{ item.title }}</button><div class="card-actions"><button type="button" @click="editCustom(item)">编辑</button><button type="button" class="delete-button" @click="removeCustom(item.id)">删除</button></div></div>
           </article>
         </div>
-
-        <div v-if="!visiblePresets.length" class="preset-empty">
-          {{ tab === 'favorite' ? '还没有收藏的预设，点卡片右上角的 ★ 收藏' : '这里还没有预设' }}
-        </div>
+        <div v-if="!customPresets.length" class="preset-empty">还没有自定义预设，在上方保存第一条提示词</div>
       </section>
     </div>
   </Teleport>
 </template>
-
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { DEFAULT_PRESETS } from '../../config/promptPresets'
-
-const props = defineProps({
-  visible: { type: Boolean, default: false },
-  /** 当前生效的预设 id，用来高亮那张卡 */
-  selectedId: { type: String, default: '' },
-  /** 面板右上角的小字，说明这份预设是给哪类产出用的 */
-  subtitle: { type: String, default: '' }
-})
-
-const emit = defineEmits(['select', 'close'])
-
+import { ref, watch } from 'vue'
+const props = defineProps({ visible: { type: Boolean, default: false }, selectedId: { type: String, default: '' }, subtitle: { type: String, default: '' } })
+const emit = defineEmits(['select', 'update', 'close'])
 const STORAGE_CUSTOM = 'ling-canvas-image-prompt-presets'
-const STORAGE_FAVORITES = 'ling-canvas-image-prompt-favorites'
-const TABS = [
-  { key: 'default', label: '默认' },
-  { key: 'favorite', label: '收藏' },
-  { key: 'custom', label: '自定义' }
-]
-
-const readStored = (key, fallback) => {
-  try {
-    return JSON.parse(localStorage.getItem(key) || '') || fallback
-  } catch {
-    return fallback
-  }
-}
-
-const tab = ref('default')
-const customPresets = ref(readStored(STORAGE_CUSTOM, []))
-const favorites = ref(readStored(STORAGE_FAVORITES, []))
-const draftTitle = ref('')
-const draftPrompt = ref('')
-
-const visiblePresets = computed(() => {
-  if (tab.value === 'favorite') return DEFAULT_PRESETS.filter(item => favorites.value.includes(item.id))
-  if (tab.value === 'custom') return customPresets.value
-  return DEFAULT_PRESETS
-})
-
-const toggleFavorite = (id) => {
-  favorites.value = favorites.value.includes(id)
-    ? favorites.value.filter(item => item !== id)
-    : [...favorites.value, id]
-  localStorage.setItem(STORAGE_FAVORITES, JSON.stringify(favorites.value))
-}
-
-const persistCustom = () => localStorage.setItem(STORAGE_CUSTOM, JSON.stringify(customPresets.value))
-
-const addCustom = () => {
-  if (!draftTitle.value.trim() || !draftPrompt.value.trim()) return
+const readCustom = () => { try { const value = JSON.parse(localStorage.getItem(STORAGE_CUSTOM) || '[]'); return Array.isArray(value) ? value : [] } catch { return [] } }
+const customPresets = ref(readCustom())
+const draftTitle = ref(''), draftPrompt = ref(''), draftCover = ref(''), editingId = ref(''), error = ref(''), coverBusy = ref(false), coverInput = ref(null)
+let coverRequest = 0
+const resetDraft = () => { coverRequest++; draftTitle.value = ''; draftPrompt.value = ''; draftCover.value = ''; editingId.value = ''; error.value = ''; coverBusy.value = false }
+const persistCustom = (items) => { try { localStorage.setItem(STORAGE_CUSTOM, JSON.stringify(items)); customPresets.value = items; return true } catch { error.value = '保存失败，本地存储空间不足。请移除封面或删除不需要的预设后重试。'; return false } }
+const saveCustom = () => {
+  if (coverBusy.value || !draftTitle.value.trim() || !draftPrompt.value.trim()) return
+  const previous = customPresets.value.find(item => item.id === editingId.value)
   const text = draftPrompt.value.trim()
-  customPresets.value.unshift({
-    id: `custom-${Date.now()}`,
-    title: draftTitle.value.trim(),
-    description: '自定义提示词',
-    icon: '✎',
-    cover: 'linear-gradient(135deg,#33343a,#737783)',
-    prompt: text,
-    // 节点上存的是 { id, title, text } 这个整体，所以这里也带上 text
-    text,
-    source: 'custom'
-  })
-  draftTitle.value = ''
-  draftPrompt.value = ''
-  persistCustom()
+  const item = { ...previous, id: editingId.value || 'custom-' + crypto.randomUUID(), title: draftTitle.value.trim(), description: '', icon: '✎', cover: previous?.cover || 'linear-gradient(135deg,#33343a,#737783)', coverImage: draftCover.value, prompt: text, text, source: 'custom' }
+  const items = editingId.value ? customPresets.value.map(existing => existing.id === editingId.value ? item : existing) : [item, ...customPresets.value]
+  if (!persistCustom(items)) return
+  if (props.selectedId === item.id) emit('update', item)
+  resetDraft()
 }
-
-const removeCustom = (id) => {
-  customPresets.value = customPresets.value.filter(item => item.id !== id)
-  persistCustom()
+const editCustom = (item) => { resetDraft(); editingId.value = item.id; draftTitle.value = item.title; draftPrompt.value = item.prompt || item.text || ''; draftCover.value = item.coverImage || '' }
+const removeCustom = (id) => { if (!persistCustom(customPresets.value.filter(item => item.id !== id))) return; if (editingId.value === id) resetDraft(); if (props.selectedId === id) emit('update', null) }
+const uploadCover = async (event) => {
+  const file = event.target.files?.[0]; event.target.value = ''; if (!file) return
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { error.value = '请选择 PNG、JPG 或 WebP 图片'; return }
+  if (file.size > 20 * 1024 * 1024) { error.value = '封面图片请小于 20 MB'; return }
+  const request = ++coverRequest; coverBusy.value = true; error.value = ''
+  const url = URL.createObjectURL(file)
+  try {
+    const image = new Image(); image.src = url; await image.decode()
+    const scale = Math.min(1, 640 / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale)); const ctx = canvas.getContext('2d'); ctx.fillStyle = '#242427'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+    if (request === coverRequest) draftCover.value = canvas.toDataURL('image/jpeg', .82)
+  } catch { if (request === coverRequest) error.value = '无法读取这张图片，请更换封面' } finally { URL.revokeObjectURL(url); if (request === coverRequest) coverBusy.value = false }
 }
-
-// 每次打开回到「默认」，别把上次停留的页签留给下一次
-watch(() => props.visible, (open) => {
-  if (!open) return
-  tab.value = 'default'
-  draftTitle.value = ''
-  draftPrompt.value = ''
-})
+watch(() => props.visible, (open) => { resetDraft(); if (open) customPresets.value = readCustom() })
 </script>
-
 <style scoped>
 /* 深色画廊：封面是深色渐变，放在浅色底上会显得脏 */
 .preset-overlay {
@@ -190,35 +94,6 @@ watch(() => props.visible, (open) => {
 .preset-dialog header button { border: 0; background: transparent; color: #8d8d93; cursor: pointer; font-size: 26px; }
 .preset-dialog header button:hover { color: #fff; }
 
-.preset-dialog nav {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  margin: 0 20px 18px;
-  padding: 4px;
-  border-radius: 9px;
-  background: #29292c;
-}
-.preset-dialog nav button { height: 38px; border: 0; border-radius: 7px; background: transparent; color: #aaaab0; cursor: pointer; font-family: inherit; font-size: 13px; }
-.preset-dialog nav button.active { background: #48484c; color: #fff; }
-
-.preset-create { display: grid; grid-template-columns: 190px 1fr auto; gap: 10px; margin: 0 20px 18px; }
-.preset-create input,
-.preset-create textarea {
-  min-width: 0;
-  padding: 9px 11px;
-  border: 1px solid #3c3c40;
-  border-radius: 8px;
-  outline: none;
-  background: #242427;
-  color: #eee;
-  font: inherit;
-  resize: none;
-}
-.preset-create textarea { height: 38px; }
-.preset-create button { padding: 0 16px; border: 0; border-radius: 8px; background: var(--flow-accent-deep, #397cf0); color: #fff; cursor: pointer; font-family: inherit; font-size: 13px; }
-.preset-create button:disabled { cursor: not-allowed; opacity: 0.4; }
-
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -250,32 +125,17 @@ watch(() => props.visible, (open) => {
   font-size: 34px;
 }
 
-.preset-favorite {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 27px;
-  height: 27px;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.35);
-  color: rgba(255, 255, 255, 0.55);
-  cursor: pointer;
-}
-.preset-favorite.active { color: #ffca55; }
-
 .preset-meta { display: flex; flex-direction: column; gap: 4px; padding: 11px 12px 13px; }
 .preset-meta strong { font-size: 13px; }
 .preset-meta small { overflow: hidden; color: #898990; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-
-.preset-delete { position: absolute; right: 7px; bottom: 7px; border: 0; background: transparent; color: #888; cursor: pointer; font-size: 18px; }
-.preset-delete:hover { color: #f87171; }
 
 .preset-empty { display: flex; flex: 1; align-items: center; justify-content: center; color: #777; font-size: 13px; }
 
 @media (max-width: 760px) {
   .preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .preset-create { grid-template-columns: 1fr; }
-  .preset-create textarea { height: 70px; }
 }
+</style>
+
+<style scoped>
+.custom-editor{margin:0 20px 20px;padding:16px;border:1px solid #38383c;border-radius:12px;background:#222225}.editor-heading,.editor-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}.editor-heading{margin-bottom:12px;font-size:13px}.editor-heading-actions{display:flex;align-items:center;gap:14px}.editor-fields{--cover-size:144px;display:grid;grid-template-columns:var(--cover-size) minmax(0,1fr);gap:14px;align-items:start}.cover-editor{position:relative;width:var(--cover-size);height:var(--cover-size)}.cover-remove{position:absolute;top:6px;right:6px;width:22px;height:22px;border:0;border-radius:5px;background:#0009;color:#eee;font-size:16px;cursor:pointer}.cover-upload{position:relative;display:grid;place-items:center;width:100%;height:100%;aspect-ratio:1;padding:0;overflow:hidden;border:1px dashed #56565f;border-radius:8px;background:#29292e;color:#a5a5ad;cursor:pointer}.cover-upload span{font-size:24px}.cover-upload small{display:block;font-size:12px;margin-top:5px}.cover-upload img,.preset-cover img{width:100%;height:100%;object-fit:cover}.cover-upload .cover-change{position:absolute;bottom:0;left:0;right:0;background:#0008;color:#fff;font-size:11px;padding:5px}.text-fields{display:grid;grid-template-rows:40px minmax(0,1fr);gap:8px;height:var(--cover-size)}.text-fields input,.text-fields textarea{width:100%;min-width:0;border:1px solid #3c3c40;border-radius:8px;padding:9px 11px;background:#242427;color:#eee;font:inherit;outline:none}.text-fields input:focus,.text-fields textarea:focus{border-color:#7c8da9}.text-fields textarea{height:100%;min-height:0;resize:none;line-height:1.5}.quiet-button{border:0;background:none;color:#a7a7af;cursor:pointer;font-size:12px;padding:6px 0}.editor-footer{margin-top:12px}.editor-error{font-size:12px;color:#dca291}.save-button{padding:9px 16px;border:0;border-radius:8px;background:var(--flow-accent-deep,#397cf0);color:#fff;cursor:pointer;white-space:nowrap}.save-button:disabled{opacity:.4;cursor:not-allowed}.preset-grid{min-height:0}.preset-pick{display:block;width:100%;padding:0;border:0;background:none;color:inherit;text-align:left;cursor:pointer}.preset-meta strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preset-card-footer{display:flex;align-items:center;gap:8px;padding:10px 12px}.preset-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:inherit;text-align:left;font:inherit;font-size:13px;font-weight:600;cursor:pointer}.card-actions{display:flex;flex-shrink:0;gap:8px}.card-actions button{border:0;background:none;color:#acb8cf;font:inherit;font-size:12px;cursor:pointer;padding:3px}.card-actions .delete-button{color:#97979f}.card-actions .delete-button:hover{color:#f87171}.preset-empty{padding:20px}.custom-editor{flex-shrink:0}@media(max-width:760px){.editor-fields{--cover-size:120px;gap:10px}.custom-editor{padding:12px}}@media(max-height:650px){.preset-dialog{overflow-y:auto}.preset-grid{overflow:visible;flex-shrink:0}}
 </style>

@@ -6,24 +6,33 @@
        - 其余情况 = **创建模式**：发送会建一个 AI 任务节点（收下选中 + @ 引用的上游），
          再按张数在右侧建输出节点。 -->
   <Teleport to="body" :disabled="!composerExpanded">
-  <div class="composer-wrap" :class="{ 'is-expanded': composerExpanded, 'is-hidden': !composerVisible }" @keydown="onComposerEscape">
+  <div class="composer-wrap" :style="{ '--composer-height': composerHeight + 'px' }" :class="{ 'is-expanded': composerExpanded, 'is-collapsed': composerCollapsed }" @keydown="onComposerEscape">
     <div v-if="composerExpanded" class="compose-backdrop" @click="toggleComposerExpanded(false)"></div>
 
-    <div class="composer" :role="composerExpanded ? 'dialog' : undefined" :aria-modal="composerExpanded ? true : undefined" :aria-label="composerExpanded ? '编辑提示词' : undefined">
+    <button v-if="!composerExpanded" class="compose-collapse" type="button"
+      :title="composerCollapsed ? '展开提示词输入框' : '收起提示词输入框'"
+      :aria-label="composerCollapsed ? '展开提示词输入框' : '收起提示词输入框'"
+      :aria-expanded="!composerCollapsed" aria-controls="canvas-composer-panel" @click="toggleComposerCollapsed">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5" /></svg>
+    </button>
+    <div ref="composerPanel" id="canvas-composer-panel" class="composer" :inert="composerCollapsed" :role="composerExpanded ? 'dialog' : undefined" :aria-modal="composerExpanded ? true : undefined" :aria-label="composerExpanded ? '编辑提示词' : undefined">
       <button v-if="!isParamlessNode" class="compose-expand" type="button"
         :title="composerExpanded ? '收起提示词' : '展开提示词'" :aria-label="composerExpanded ? '收起提示词' : '展开提示词'"
         :aria-expanded="composerExpanded" @click="toggleComposerExpanded(!composerExpanded)">
         <svg v-if="composerExpanded" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" /></svg>
       </button>
-      <div v-if="mentionRefs.length" class="prompt-references">
-        <div v-for="ref in mentionRefs" :key="ref.id" class="prompt-ref">
-          <img v-if="ref.thumb" :src="ref.thumb" alt="" />
+      <TransitionGroup v-if="mentionRefs.length" name="reference-sort" tag="div" class="prompt-references">
+        <div v-for="ref in mentionRefs" :key="ref.nodeId" class="prompt-ref"
+          :class="{ 'is-dragging': referenceDragId === String(ref.nodeId) }" :data-reference-id="String(ref.nodeId)"
+          title="长按拖动调整顺序" @pointerdown="startReferencePress($event, ref)" @contextmenu.prevent>
+          <img v-if="ref.thumb" :src="ref.thumb" alt="" draggable="false" />
           <span v-else class="prompt-ref-thumb"></span>
-          <span>{{ ref.token }}</span>
-          <button type="button" class="prompt-ref-x" @click="removeMention(ref)">×</button>
+          <span class="prompt-ref-label">{{ ref.token.replace(/^@/, '') }}</span>
+          <button type="button" class="prompt-ref-x" @pointerdown.stop @click="removeMention(ref)">×</button>
         </div>
-      </div>
+      </TransitionGroup>
+      <Teleport to="body"><div v-if="referenceGhost" class="reference-drag-ghost" :style="{ left: referenceGhost.x + 'px', top: referenceGhost.y + 'px' }"><img v-if="referenceGhost.thumb" :src="referenceGhost.thumb" alt="" /><span>{{ referenceGhost.token.replace(/^@/, '') }}</span></div></Teleport>
 
       <div class="compose-main">
         <!-- 这两类节点没有"提示词"这回事，正文框换成一句说明 -->
@@ -33,10 +42,12 @@
         <p v-else-if="isCompareNode" class="compose-note">
           图片对比不用生成：连入两张图片后，在卡片里拖中间的滑块看前后差异。
         </p>
-        <textarea
+        <InlinePromptEditor
           v-else
           ref="inputRef"
           v-model="text"
+          :preset="preset" :preset-position="presetPosition"
+          @update:preset-position="updatePresetPosition" @remove-preset="removeSelectedPreset" @open-preset="openPresetGallery"
           class="compose-input"
           placeholder=""
           title="Enter 发送 · Shift+Enter 换行"
@@ -44,7 +55,7 @@
           @keydown="onKeydown"
           @click="updateMention"
           @blur="closeMention"
-        ></textarea>
+        ></InlinePromptEditor>
 
       </div>
 
@@ -85,7 +96,7 @@
             :class="{ 'is-empty': !preset }"
             type="button"
             :title="preset ? `提示词预设：${preset.title}` : '选择提示词预设'"
-            @click="presetOpen = true"
+            @mousedown.prevent @click="openPresetGallery"
           >
             <span class="preset-glyph">✦</span>{{ preset ? preset.title : '预设' }}
           </button>
@@ -126,6 +137,7 @@
       :selected-id="preset?.id || ''"
       :subtitle="presetSubtitle"
       @select="selectPreset"
+      @update="selectPreset($event, false)"
       @close="presetOpen = false"
     />
 
@@ -174,7 +186,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   nodes, edges, addNode, addEdge, updateNode, editNode, editField,
-  startBatchOperation, endBatchOperation, renumberNodeRefs
+  startBatchOperation, endBatchOperation, renumberNodeRefs, reorderNodeEdges, removeEdge
 } from '../../stores/canvas'
 import { useModelStore } from '../../stores/pinia'
 import {
@@ -187,6 +199,7 @@ import ParamPanel from './ParamPanel.vue'
 import OptionPanel from './OptionPanel.vue'
 import { normalizePreset, toStoredPreset } from '../../config/promptPresets'
 import PresetGallery from './PresetGallery.vue'
+import InlinePromptEditor from './InlinePromptEditor.vue'
 import { selectedNodeIds } from '../../composables/useFocusMode'
 import { runNode, cancelNode } from '../../composables/useNodeRunBridge'
 
@@ -215,7 +228,14 @@ const FALLBACK_RATIOS = [
 
 const inputRef = ref(null)
 const text = ref('')
+const composerPanel = ref(null)
+const composerHeight = ref(165)
+let composerResizeObserver
+const measureComposer = () => { if (!composerExpanded.value && composerPanel.value) composerHeight.value = composerPanel.value.offsetHeight }
+onMounted(() => { composerResizeObserver = new ResizeObserver(measureComposer); if (composerPanel.value) composerResizeObserver.observe(composerPanel.value); measureComposer() })
+onBeforeUnmount(() => composerResizeObserver?.disconnect())
 const composerExpanded = ref(false)
+watch(composerExpanded, () => nextTick(measureComposer))
 const toggleComposerExpanded = async (expanded) => {
   const input = inputRef.value
   const selection = [input?.selectionStart || 0, input?.selectionEnd || 0]
@@ -237,6 +257,11 @@ const targetType = ref('image')
 const ratio = ref('auto')
 const count = ref(1)
 const preset = ref(null)
+const presetPosition = ref(0)
+let presetInsertionPosition = 0
+const openPresetGallery = () => { presetInsertionPosition = inputRef.value?.selectionStart ?? text.value.length; presetOpen.value = true }
+const updatePresetPosition = position => { presetPosition.value = position; if (editingNode.value && editingNode.value.data?.presetPosition !== position) editField(editingNode.value.id, 'presetPosition', position) }
+const removeSelectedPreset = () => { preset.value = null; if (editingNode.value) editNode(editingNode.value.id, { preset: null }); nextTick(() => inputRef.value?.focus()) }
 
 /* ------------------------------------------------------------------ 选中上下文 */
 const selectedNodes = computed(() => nodes.value.filter(node => selectedNodeIds.value.includes(String(node.id))))
@@ -258,12 +283,12 @@ const isCompareNode = computed(() => isEditing.value && editingNode.value.type =
 /** 这两类节点的可编辑面都在卡片上，composer 只说明、不编辑 */
 const isParamlessNode = computed(() => isRenderNode.value || isCompareNode.value)
 
-/**
- * 有选中节点时才升起来。
- * 这条栏本质是「选中节点的提示词编辑器」—— 没有选中 = 没有编辑对象，
- * 常驻底部只会挡住画布下方。新建节点走双击空白 / 端口菜单，不依赖它。
- */
-const composerVisible = computed(() => selectedNodes.value.length > 0)
+/** 底部输入栏默认显示，只由箭头手动折叠；折叠不清空提示词与参数。 */
+const composerCollapsed = ref(false)
+const toggleComposerCollapsed = () => {
+  composerCollapsed.value = !composerCollapsed.value
+  if (!composerCollapsed.value) nextTick(() => inputRef.value?.focus())
+}
 
 /* ------------------------------------------------------------------ 选项
    参数只有这一处（卡片上的参数控件已全部撤掉）。编辑模式下这些值会**立即写回**
@@ -503,17 +528,22 @@ const presetSubtitle = computed(() => `${KIND_TITLE[effectiveTarget.value] || ''
  * **不往输入框里灌内容** —— 那段是固定的套路话，灌进去用户还得在一堆模板腔里找自己写的那句。
  * 真正的文本在生成时由 useNodeRefs 的 buildPrompt 拼在最前面。
  */
-const selectPreset = (item) => {
+const selectPreset = (item, close = true) => {
+  if (close && item) presetPosition.value = presetInsertionPosition
   preset.value = toStoredPreset(item)
-  presetOpen.value = false
+  if (close) {
+    presetOpen.value = false
+    nextTick(() => { inputRef.value?.focus(); inputRef.value?.setSelectionRange(presetPosition.value) })
+  }
   const node = editingNode.value
   if (!node) return
-  editNode(node.id, { preset: preset.value })
+  editNode(node.id, { preset: preset.value, presetPosition: presetPosition.value })
 }
 
 // 预设跟着节点走：换节点时读它自己的那份
 watch(editingNode, (node) => {
   preset.value = node ? normalizePreset(node.data?.preset) : preset.value
+  if (node) presetPosition.value = Number(node.data?.presetPosition) || 0
 }, { immediate: true })
 
 // 编辑模式下改预设直接写回节点（上面 selectPreset 已经写了；这里兜住别处改动预设的情况）
@@ -610,10 +640,69 @@ const mentionCandidates = computed(() => {
 
 const mentionQuery = ref('')
 
-const mentionRefs = computed(() => mentioned.value.map((item) => {
-  const node = nodes.value.find(n => String(n.id) === String(item.nodeId))
-  return { ...item, thumb: node?.data?.url || '' }
-}))
+const referenceDragId = ref('')
+const referenceGhost = ref(null)
+const referenceOrder = ref([])
+let referencePress = null
+let referenceTimer = null
+const mentionRefs = computed(() => {
+  const linked = editingNode.value ? computeSlots(editingNode.value, nodes.value, edges.value).slots.map(slot => ({ nodeId: slot.src.id, token: slot.token, edgeId: slot.edge.id, thumb: slot.src.data?.url || '' })) : []
+  const list = [...linked, ...mentioned.value.filter(item => !linked.some(ref => String(ref.nodeId) === String(item.nodeId))).map(item => ({ ...item, thumb: nodes.value.find(n => String(n.id) === String(item.nodeId))?.data?.url || '' }))]
+  if (!referenceOrder.value.length) return list
+  const positions = new Map(referenceOrder.value.map((id, index) => [id, index]))
+  return list.sort((a, b) => (positions.get(String(a.nodeId)) ?? 999) - (positions.get(String(b.nodeId)) ?? 999))
+})
+const stopReferencePress = (event) => {
+  const commit = referenceDragId.value && event?.type === 'pointerup'
+  if (commit) {
+    const list = mentionRefs.value
+    const linked = list.filter(item => item.edgeId).map(item => item.edgeId)
+    if (editingNode.value && linked.length) reorderNodeEdges(editingNode.value.id, linked, true)
+    const positions = new Map(list.map((item, index) => [String(item.nodeId), index]))
+    mentioned.value = [...mentioned.value].sort((a, b) => (positions.get(String(a.nodeId)) ?? 999) - (positions.get(String(b.nodeId)) ?? 999))
+  }
+  clearTimeout(referenceTimer); referencePress = null; referenceDragId.value = ''; referenceGhost.value = null; referenceOrder.value = []
+  window.removeEventListener('pointermove', moveReference); window.removeEventListener('pointerup', stopReferencePress); window.removeEventListener('pointercancel', stopReferencePress)
+}
+const moveReference = (event) => {
+  if (!referencePress || event.pointerId !== referencePress.pointerId) return
+  if (!referenceDragId.value) {
+    if (Math.hypot(event.clientX - referencePress.x, event.clientY - referencePress.y) > 12) stopReferencePress()
+    return
+  }
+  event.preventDefault()
+  referenceGhost.value = { ...referenceGhost.value, x: event.clientX - referencePress.offsetX, y: event.clientY - referencePress.offsetY }
+  const strip = referencePress.strip
+  const stripRect = strip.getBoundingClientRect()
+  if (event.clientX < stripRect.left + 30) strip.scrollLeft -= 12
+  if (event.clientX > stripRect.right - 30) strip.scrollLeft += 12
+  const list = mentionRefs.value
+  const from = list.findIndex(item => String(item.nodeId) === referenceDragId.value)
+  if (from < 0) return
+  const center = referenceGhost.value.x + 27
+  let target = from
+  const cards = [...strip.querySelectorAll('[data-reference-id]')]
+  for (let i = 0; i < cards.length; i++) {
+    const rect = cards[i].getBoundingClientRect()
+    if ((i > from && center > rect.left + rect.width / 2 + 3) || (i < from && center < rect.left + rect.width / 2 - 3)) target = i
+  }
+  if (target === from || !list[target]) return
+  const ordered = [...list]; ordered.splice(target, 0, ordered.splice(from, 1)[0])
+  referenceOrder.value = ordered.map(item => String(item.nodeId))
+}
+const startReferencePress = (event, item) => {
+  if (event.button !== 0) return
+  stopReferencePress()
+  const card = event.currentTarget, rect = card.getBoundingClientRect()
+  referencePress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, strip: card.parentElement }
+  referenceTimer = setTimeout(() => {
+    referenceOrder.value = mentionRefs.value.map(item => String(item.nodeId)); referenceDragId.value = String(item.nodeId)
+    referenceGhost.value = { thumb: item.thumb, token: item.token, x: rect.left, y: rect.top }
+  }, 220)
+  window.addEventListener('pointermove', moveReference, { passive: false }); window.addEventListener('pointerup', stopReferencePress); window.addEventListener('pointercancel', stopReferencePress)
+}
+onBeforeUnmount(stopReferencePress)
+watch(() => editingNode.value?.id, stopReferencePress)
 
 const updateMention = () => {
   const el = inputRef.value
@@ -635,12 +724,9 @@ const insertMention = (candidate) => {
   if (!node) return
   const caret = el?.selectionStart ?? text.value.length
   const from = mentionFrom.value >= 0 ? mentionFrom.value : caret
-  // 先按同类第几号给个占位，发送时按真实槽位改写成最终编号
-  const sameKind = mentioned.value.filter(item => {
-    const other = nodes.value.find(n => String(n.id) === String(item.nodeId))
-    return other?.type === node.type
-  }).length
-  const token = tokenFor(node, sameKind + 1)
+  const existing = mentionRefs.value.find(item => String(item.nodeId) === String(node.id))
+  const numbers = mentionRefs.value.filter(item => nodes.value.find(n => String(n.id) === String(item.nodeId))?.type === node.type).map(item => Number(item.token.match(/\d+$/)?.[0]) || 0)
+  const token = existing?.token || tokenFor(node, Math.max(0, ...numbers) + 1)
   const next = `${text.value.slice(0, from)}${token} ${text.value.slice(caret)}`
   text.value = next
   if (!mentioned.value.some(item => String(item.nodeId) === String(node.id))) {
@@ -656,13 +742,15 @@ const insertMention = (candidate) => {
 }
 
 const removeMention = (ref_) => {
+  if (ref_.edgeId) removeEdge(ref_.edgeId)
   mentioned.value = mentioned.value.filter(item => item.token !== ref_.token)
-  text.value = text.value.replace(ref_.token, '').replace(/\s{2,}/g, ' ')
+  text.value = text.value.replace(new RegExp(ref_.token + '(?![0-9])', 'g'), '').replace(/\s{2,}/g, ' ')
   if (isEditing.value) editField(editingNode.value.id, 'prompt', text.value)
 }
 
 /* ------------------------------------------------------------------ 发送 */
 const onKeydown = (event) => {
+  if (event.isComposing || event.keyCode === 229) return
   if (event.key === 'Escape') { closeMention(); return }
   if (event.key !== 'Enter' || event.shiftKey) return
   event.preventDefault()
@@ -683,15 +771,15 @@ const resolveTokens = (targetId, prompt) => {
   if (!target) return { prompt, refBindings: {} }
   const { slots } = computeSlots(target, nodes.value, edges.value)
   const bindings = {}
-  let next = prompt
+  const replacements = new Map()
   mentioned.value.forEach((item) => {
     const slot = slots.find(s => String(s.src.id) === String(item.nodeId))
     if (!slot) return
     const real = slot.token
-    if (real !== item.token) next = next.split(item.token).join(real)
+    replacements.set(item.token, real)
     bindings[refKey(slot.kind, slot.index)] = slot.edge.id
   })
-  return { prompt: next, refBindings: bindings }
+  return { prompt: prompt.replace(/@(文本|图片|视频|音频)\d+/g, token => replacements.get(token) || token), refBindings: bindings }
 }
 
 /**
@@ -712,8 +800,8 @@ watch([() => editingNode.value?.id, targetType], () => {
  * 模型 / 参数 / 预设面板是拎到触发按钮旁边渲染的，栏一往下降，锚点就在动，
  * 留着它们会悬在半空跟着飘。mention 候选同理。
  */
-watch(composerVisible, (visible) => {
-  if (visible) return
+watch(composerCollapsed, (collapsed) => {
+  if (!collapsed) return
   paramOpen.value = false
   modelOpen.value = false
   presetOpen.value = false
@@ -756,7 +844,7 @@ const send = async () => {
     ...mentioned.value.map(item => String(item.nodeId))
   ])].filter(id => nodes.value.some(node => String(node.id) === id))
 
-  if (!text.value.trim() && !sourceIds.length) {
+  if (!text.value.trim() && !sourceIds.length && !preset.value?.text) {
     window.$message?.warning('先写点什么，或者选中一些节点当上下文')
     return
   }
@@ -769,6 +857,7 @@ const send = async () => {
     prompt: text.value,
     targetType: targetType.value,
     preset: preset.value,
+    presetPosition: presetPosition.value,
     ...desiredParams()
   })
   // 2) 上游连线。先连被 @ 的（顺序决定编号），再连其余选中的
@@ -786,7 +875,7 @@ const send = async () => {
       sourceHandle: OUTPUT_HANDLE,
       targetHandle: INPUT_HANDLE,
       type: 'flowEdge',
-      data: { order: index + 1 }
+      data: { order: index + 1, ...(mentioned.value.find(item => String(item.nodeId) === String(sourceId)) ? { referenceIndex: Number(mentioned.value.find(item => String(item.nodeId) === String(sourceId)).token.match(/\d+$/)[0]) } : {}) }
     })
   })
 
@@ -823,6 +912,7 @@ const send = async () => {
 
 /* 节点工具栏上的「编辑」按钮 → 把光标送进输入框（节点此时已被选中，模式已经对了） */
 const onFocusComposer = () => {
+  composerCollapsed.value = false
   nextTick(() => {
     const el = inputRef.value
     if (!el) return
@@ -857,63 +947,64 @@ const viewportCenter = () => {
 
 <style scoped>
 .composer-wrap {
-  position: absolute;
+  position: fixed;
   left: 50%;
   bottom: 20px;
   z-index: 120;
   width: min(840px, calc(100vw - 190px));
   transform: translateX(-50%);
-  transition: transform 0.34s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.24s ease;
+  height: var(--composer-height, 165px);
+  transition: height .65s cubic-bezier(.22,.7,.2,1);
   will-change: transform;
 }
 
-/* 没选中节点时收下去：整条向下移出自己的高度 + 底部留白，再淡出。
-   它 teleport 在 body 上、body 是 overflow:hidden，多出来的部分被裁掉，不会撑出滚动条。 */
-.composer-wrap.is-hidden {
-  transform: translate(-50%, calc(100% + 28px));
-  opacity: 0;
-  pointer-events: none;
+.compose-collapse {
+  position: absolute; bottom: calc(100% - 1px); left: 50%; transform: translateX(-50%);
+  width: 32px; height: 18px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--border-color); border-bottom: 0; border-radius: 8px 8px 0 0;
+  background: var(--bg-secondary); color: var(--text-tertiary); cursor: pointer;
 }
+.compose-collapse:hover { color: var(--text-secondary); }
+.compose-collapse:focus-visible { outline: 2px solid var(--text-tertiary); outline-offset: 3px; }
+.compose-collapse svg { width: 12px; height: 12px; transition: transform .65s ease; }
+.composer-wrap.is-collapsed .composer {
+  clip-path: inset(0 0 100% 0 round 12px); opacity: 0; pointer-events: none;
+}
+.composer-wrap.is-collapsed { height: 0; }
+.composer > * { filter: blur(0); opacity: 1; transform: translateY(0); transition: filter .65s ease, opacity .65s ease, transform .65s cubic-bezier(.22,.7,.2,1); }
+.is-collapsed .composer > * { filter: blur(8px); opacity: 0; transform: translateY(-9px); }
+.is-collapsed .compose-collapse { bottom: 0; height: 22px; border-bottom: 1px solid var(--border-color); border-radius: 8px; }
+.is-collapsed .compose-collapse svg { transform: rotate(180deg); }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer-wrap { transition: none; }
+  .composer-wrap, .composer, .composer > *, .compose-collapse svg { transition: none; }
 }
 
 /* ---- 主体 ---- */
 .composer {
-  position: relative;
+  clip-path: inset(0 0 0 0 round 12px);
+  transition: clip-path .65s cubic-bezier(.22,.7,.2,1), opacity .65s ease;
+  position: absolute; top: 0; width: 100%;
   padding: 11px 11px 8px;
   border: 1px solid var(--border-color);
-  border-radius: 22px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--bg-secondary) 97%, transparent);
   box-shadow: 0 16px 48px rgba(19, 23, 30, 0.14), 0 1px 2px rgba(19, 23, 30, 0.05);
   backdrop-filter: blur(22px);
 }
 
-.prompt-references { display: flex; flex-wrap: wrap; gap: 6px; padding: 3px 7px 7px; }
-.prompt-ref {
-  display: flex;
-  height: 34px;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 7px 3px 3px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.prompt-ref img, .prompt-ref-thumb {
-  display: block;
-  width: 27px;
-  height: 27px;
-  object-fit: cover;
-  border-radius: 7px;
-  background: linear-gradient(145deg, #d9d4ce, #858b92);
-}
-.prompt-ref-x { border: 0; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 15px; padding: 0; }
+.prompt-references { display: flex; gap: 8px; padding: 6px 38px 8px 7px; overflow-x: auto; }
+.prompt-ref { position: relative; flex-shrink: 0; width: 54px; height: 54px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-tertiary); user-select: none; touch-action: none; cursor: grab; overflow: hidden; }
+.prompt-ref img, .prompt-ref-thumb { display: block; width: 100%; height: 100%; object-fit: cover; background: linear-gradient(145deg,#d9d4ce,#858b92); }
+.prompt-ref-label { position: absolute; bottom: 0; left: 0; right: 0; padding: 2px 3px; background: #0009; color: white; font-size: 10px; text-align: center; }
+.prompt-ref-x { position: absolute; right: 1px; top: 1px; width: 16px; height: 16px; border: 0; border-radius: 4px; background: #0008; color: white; cursor: pointer; padding: 0; font-size: 12px; }
+.prompt-ref.is-dragging { opacity: .22; outline: 2px solid #ac8be0; outline-offset: -2px; cursor: grabbing; }
 
 /* 输入区保留多行编辑空间，发送按钮位于底部参数栏。 */
+.reference-sort-move { transition: transform .18s ease; }
+.reference-drag-ghost { position: fixed; z-index: 11000; width: 54px; height: 54px; border: 1px solid #b496df; border-radius: 7px; overflow: hidden; box-shadow: 0 8px 22px #0006; transform: scale(1.08); pointer-events: none; background: #333; }
+.reference-drag-ghost img { width: 100%; height: 100%; object-fit: cover; }
+.reference-drag-ghost span { position: absolute; bottom: 0; left: 0; right: 0; color: #fff; background: #0009; font-size: 10px; text-align: center; padding: 2px; }
 .compose-main { display: flex; align-items: flex-end; gap: 6px; }
 .compose-input {
   min-width: 0;
@@ -1170,7 +1261,7 @@ const viewportCenter = () => {
 .compose-expand:hover { color: var(--text-primary); background: var(--bg-tertiary); }
 .composer-wrap.is-expanded { position: fixed; inset: 0; left: 0; bottom: 0; width: 100%; height: 100%; transform: none; z-index: 250; display: flex; align-items: center; justify-content: center; padding: 26px; }
 .compose-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 48%); backdrop-filter: blur(3px); }
-.is-expanded .composer { display: flex; flex-direction: column; width: min(840px, 100%); height: min(720px, calc(100dvh - 52px)); min-height: 0; padding: 22px 14px 10px; border-radius: 16px; box-shadow: 0 20px 80px rgb(0 0 0 / 25%); }
+.is-expanded .composer { position: relative; clip-path: none; transition: none; max-height: none; display: flex; flex-direction: column; width: min(840px, 100%); height: min(720px, calc(100dvh - 52px)); min-height: 0; padding: 22px 14px 10px; border-radius: 16px; box-shadow: 0 20px 80px rgb(0 0 0 / 25%); }
 .is-expanded .compose-expand { top: 10px; right: 12px; }
 .is-expanded .prompt-references { padding-right: 38px; flex-shrink: 0; }
 .is-expanded .compose-main { flex: 1; min-height: 0; margin-top: 18px; }

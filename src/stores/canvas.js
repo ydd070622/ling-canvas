@@ -379,10 +379,12 @@ export const cutEdge = (edgeId) => {
 }
 
 /** 重排某节点的入边顺序（拖拽引用顺序浮层时用），一次算一步撤销 */
-export const reorderNodeEdges = (nodeId, orderedEdgeIds) => {
+export const reorderNodeEdges = (nodeId, orderedEdgeIds, keepNames = false) => {
+  const node = findNode(nodeId)
+  const indices = new Map(keepNames ? computeSlots(node, nodes.value, edges.value).slots.map(slot => [slot.edge.id, slot.index]) : [])
   const orderById = new Map(orderedEdgeIds.map((id, index) => [id, index + 1]))
   edges.value = edges.value.map(edge => orderById.has(edge.id)
-    ? { ...edge, data: { ...(edge.data || {}), order: orderById.get(edge.id) } }
+    ? { ...edge, data: { ...(edge.data || {}), order: orderById.get(edge.id), ...(indices.has(edge.id) ? { referenceIndex: indices.get(edge.id) } : {}) } }
     : edge)
   renumberNodeRefs(nodeId)
   saveToHistory(true)

@@ -6,7 +6,8 @@
        以前这里是 CSS 里写死的 4:3，任何比例的图都会被 `object-fit: cover` 裁掉一块。 -->
   <div class="flow-media" :class="{ 'is-wide': tone === 'video' }" :style="mediaStyle">
     <template v-if="loading">
-      <div class="flow-media-overlay">
+      <GenerationLoader v-if="tone === 'image'" :label="loadingText === '生成中…' ? '图片生成中' : loadingText" />
+      <div v-else class="flow-media-overlay">
         <div class="flow-spinner"></div>
         <span style="font-size: 10.5px; color: var(--flow-text-mid)">{{ loadingText }}</span>
       </div>
@@ -53,6 +54,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import GenerationLoader from './GenerationLoader.vue'
 
 const props = defineProps({
   tone: { type: String, default: 'image' },
