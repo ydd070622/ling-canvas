@@ -11,8 +11,7 @@
 //! 2. **关进程要树杀**。杀掉 cmd.exe 不会带走孙子 node.exe，得 `taskkill /T`。
 //! 3. **不弹黑框**。没有 `CREATE_NO_WINDOW` 的话每次对话都会闪一个控制台窗口。
 //!
-//! 工具只开放 Skill 与 Read/Glob/Grep，让本地技能可以读取其配套资料。
-//! 不开放写文件和 Bash；技能中的脚本执行仍不支持。
+//! 使用默认工具集，预批准本地技能、命令执行、文件编辑和检索。
 //!
 //! 命令行里能出现的东西也都是 uuid / 字面量这类绝对安全的值：用户提示词走 stdin、
 //! 系统提示词走 `--append-system-prompt-file` 落文件，两者都不必转义。
@@ -29,6 +28,38 @@ use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
+#[derive(serde::Serialize)]
+pub struct LocalSkill {
+    name: String,
+    description: String,
+}
+
+#[tauri::command]
+pub fn list_agent_skills() -> Result<Vec<LocalSkill>, String> {
+    let home = std::env::var("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("USERPROFILE").map(|value| std::path::PathBuf::from(value).join(".claude")))
+        .map_err(|_| "无法定位 Claude 技能目录".to_string())?;
+    let root = home.join("skills");
+    if !root.exists() { return Ok(Vec::new()); }
+    let entries = std::fs::read_dir(root).map_err(|error| format!("读取技能目录失败：{error}"))?;
+    let mut skills = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path().join("SKILL.md");
+        let Ok(source) = std::fs::read_to_string(path) else { continue };
+        let mut name = entry.file_name().to_string_lossy().to_string();
+        let mut description = String::new();
+        if source.trim_start().starts_with("---") {
+            for line in source.trim_start().lines().skip(1).take_while(|line| line.trim() != "---") {
+                if let Some(value) = line.strip_prefix("name:") { name = value.trim().trim_matches(['\'', '"']).to_string(); }
+                if let Some(value) = line.strip_prefix("description:") { description = value.trim().trim_matches(['\'', '"']).to_string(); }
+            }
+        }
+        if !name.is_empty() { skills.push(LocalSkill { name, description }); }
+    }
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -42,10 +73,39 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub enum AgentEvent {
     /// 命令行 stdout 的一整行（NDJSON，由前端解析）
     Line { line: String },
-    /// 进程往 stderr 写的内容（鉴权失败、参数错误等都从这里冒出来）
+    /// 进程失败时的诊断；成功进程的 stderr 可能只是警告。
     Err { message: String },
     /// 进程退出。`code` 为 None 表示被信号杀掉（比如用户点了「停止」）
     Done { code: Option<i32> },
+}
+
+fn process_error(code: Option<i32>, stderr: &str) -> Option<String> {
+    match code {
+        Some(value) if value != 0 => Some(if stderr.trim().is_empty() {
+            format!("Claude Code 进程异常退出（退出码 {value}），请重试。")
+        } else {
+            stderr.trim().to_string()
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::process_error;
+
+    #[test]
+    fn successful_reply_can_have_model_diagnostics() {
+        assert_eq!(process_error(Some(0), "[claude-code:unrecognized_model] {\"model\":\"deepseek-v4-flash[1m]\"}"), None);
+        assert_eq!(process_error(None, "cancelled"), None);
+    }
+
+    #[test]
+    fn failed_process_preserves_diagnostics_or_reports_exit_code() {
+        assert_eq!(process_error(Some(1), " authentication failed\n"), Some("authentication failed".into()));
+        assert!(process_error(Some(1), "").unwrap().contains("退出码 1"));
+        assert!(process_error(Some(1), "[claude-code:unrecognized_model]").is_some());
+    }
 }
 
 /// request_id → pid。用来在「停止」和窗口关闭时找到并杀掉对应的进程树。
@@ -55,13 +115,14 @@ pub struct AgentProcessState {
 }
 
 impl AgentProcessState {
-    fn insert(&self, request_id: &str, pid: u32) {
+    pub(crate) fn has(&self, request_id: &str) -> bool { self.pids.lock().map(|m|m.contains_key(request_id)).unwrap_or(false) }
+    pub(crate) fn insert(&self, request_id: &str, pid: u32) {
         if let Ok(mut map) = self.pids.lock() {
             map.insert(request_id.to_string(), pid);
         }
     }
 
-    fn remove(&self, request_id: &str) {
+    pub(crate) fn remove(&self, request_id: &str) {
         if let Ok(mut map) = self.pids.lock() {
             map.remove(request_id);
         }
@@ -80,7 +141,7 @@ impl AgentProcessState {
 }
 
 /// 树杀。`/T` 是关键：带走路 cmd.exe spawn 出来的 node.exe 孙子进程。
-fn kill_pid_tree(pid: u32) {
+pub(crate) fn kill_pid_tree(pid: u32) {
     #[cfg(windows)]
     {
         let _ = Command::new("taskkill")
@@ -143,6 +204,9 @@ pub async fn agent_send(
     resume: bool,
     cli_path: String,
     system_prompt: String,
+    cwd: Option<String>,
+    model: Option<String>,
+    permission: Option<String>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     let cli = if cli_path.trim().is_empty() {
@@ -168,17 +232,18 @@ pub async fn agent_send(
             .map_err(|err| format!("写入系统提示词失败：{err}"))?;
     }
 
-    let mut command = Command::new("cmd");
-    command.arg("/c").arg(&cli);
+    let mut command = crate::codex_agent::cli_command(&cli)?;
     command.arg("-p");
     command.arg("--output-format").arg("stream-json");
     command.arg("--verbose");
     command.arg("--include-partial-messages");
     // 输入格式：一行 JSONL（content blocks），图片作为 base64 block 走这条路
     command.arg("--input-format").arg("stream-json");
-    // Skill 只加载入口，配套资料还需要 Read；非交互会话预批准只读工具。
-    command.arg("--tools").arg("Skill,Read,Glob,Grep");
-    command.arg("--allowedTools").arg("Skill,Read,Glob,Grep");
+    // 非交互会话预批准实际技能执行需要的工具，保留正常权限机制。
+    command.arg("--tools").arg("default");
+    command.arg("--permission-mode").arg(if permission.as_deref() == Some("readOnly") {"plan"} else {"acceptEdits"});
+    if let Some(model)=model.filter(|v|!v.trim().is_empty()){command.arg("--model").arg(model);}
+    command.arg("--allowedTools").arg("Skill,Read,Glob,Grep,Write,Edit,Bash,PowerShell,WebFetch,WebSearch,Agent,Task,TodoWrite");
     if has_system_prompt {
         command.arg("--append-system-prompt-file").arg(&system_prompt_file);
     }
@@ -187,7 +252,9 @@ pub async fn agent_send(
     } else {
         command.arg("--session-id").arg(&session_id);
     }
-    command.current_dir(&work_dir);
+    let cwd = cwd.filter(|v| !v.trim().is_empty()).map(std::path::PathBuf::from).unwrap_or(work_dir.clone());
+    if !cwd.is_absolute() || !cwd.is_dir(){return Err("工作目录不存在，请重新选择".into());}
+    command.current_dir(&cwd);
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -247,10 +314,11 @@ pub async fn agent_send(
 
     state.remove(&request_id);
 
-    let trimmed = stderr_text.trim();
-    if !trimmed.is_empty() {
+    // stderr 也是 CLI 的诊断通道，不能仅凭有输出就判定请求失败。
+    // 模型别名等警告可以伴随正常回复；真实失败仍由退出码和 result.is_error 判断。
+    if let Some(message) = process_error(code, &stderr_text) {
         let _ = on_event.send(AgentEvent::Err {
-            message: trimmed.to_string(),
+            message,
         });
     }
     let _ = std::fs::remove_file(&system_prompt_file);

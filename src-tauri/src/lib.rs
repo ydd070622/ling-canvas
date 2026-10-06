@@ -15,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 mod agent;
+mod codex_agent;
 
 const MAX_DROPPED_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
 /// 单个 multipart 文件上限（参考图/首帧图解码后）
@@ -83,6 +84,69 @@ fn project_document_path(dir: &Path, project_id: &str) -> Result<PathBuf, String
     Ok(dir.join(format!("{project_id}.json")))
 }
 
+static MEDIA_STORAGE_LOCK: Mutex<()> = Mutex::new(());
+fn media_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("media-storage.json"))
+}
+fn media_storage_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let config = media_config_path(app)?;
+    if config.exists() {
+        let path: String = serde_json::from_slice(&fs::read(config).map_err(|e| e.to_string())?).map_err(|e| format!("图片存储配置无效: {e}"))?;
+        return Ok(PathBuf::from(path));
+    }
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(MEDIA_STORAGE_DIR))
+}
+fn copy_media_tree(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|e| e.to_string())?;
+    if !source.exists() { return Ok(()); }
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_symlink() { return Err("图片目录包含链接，无法迁移".into()); }
+        let destination = target.join(entry.file_name());
+        if kind.is_dir() { copy_media_tree(&entry.path(), &destination)?; }
+        else if kind.is_file() {
+            let bytes = fs::read(entry.path()).map_err(|e| e.to_string())?;
+            if destination.exists() {
+                if fs::read(&destination).map_err(|e| e.to_string())? != bytes { return Err("目标目录存在同名不同内容的图片，请选择其他文件夹".into()); }
+            } else {
+                fs::write(&destination, &bytes).map_err(|e| e.to_string())?;
+                sync_file(&destination)?;
+            }
+            if fs::read(&destination).map_err(|e| e.to_string())? != bytes { return Err("迁移校验失败".into()); }
+        }
+    }
+    Ok(())
+}
+#[tauri::command]
+async fn get_media_storage_root(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(media_storage_root(&app)?.to_string_lossy().to_string())
+}
+#[tauri::command]
+async fn pick_media_storage_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = app.dialog().file().set_title("选择原图与预览图存储文件夹").blocking_pick_folder();
+        let Some(picked) = picked else { return Ok(None); };
+        let selected = picked.into_path().map_err(|e| e.to_string())?;
+        let target = selected.join("LingCanvas-media");
+        fs::create_dir_all(&target).map_err(|e| format!("无法创建存储文件夹: {e}"))?;
+        let target = fs::canonicalize(target).map_err(|e| e.to_string())?;
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
+        let source = media_storage_root(&app)?;
+        let source = if source.exists() { fs::canonicalize(source).map_err(|e| e.to_string())? } else { source };
+        if source == target { return Ok(Some(target.to_string_lossy().to_string())); }
+        if target.starts_with(&source) || source.starts_with(&target) { return Err("新旧存储文件夹不能相互包含".into()); }
+        copy_media_tree(&source, &target)?;
+        let config = media_config_path(&app)?;
+        let temp = config.with_extension("json.tmp");
+        let bytes = serde_json::to_vec(&target.to_string_lossy().to_string()).map_err(|e| e.to_string())?;
+        fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+        sync_file(&temp)?;
+        commit_project_temp(&temp, &config, &config.with_extension("json.bak"))?;
+        Ok(Some(target.to_string_lossy().to_string()))
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn media_storage_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, String> {
     let (project_id, media_id) = key
         .split_once(':')
@@ -92,14 +156,7 @@ fn media_storage_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, Stri
         return Err("图片存储键无效".into());
     }
     let encoded_id = URL_SAFE_NO_PAD.encode(media_id.as_bytes());
-    app.path()
-        .app_data_dir()
-        .map(|path| {
-            path.join(MEDIA_STORAGE_DIR)
-                .join(project_id)
-                .join(format!("{encoded_id}.media"))
-        })
-        .map_err(|err| format!("无法定位图片存储目录: {err}"))
+    Ok(media_storage_root(app)?.join(project_id).join(format!("{encoded_id}.media")))
 }
 
 fn media_key_from_path(project_id: &str, path: &Path) -> Option<String> {
@@ -291,6 +348,7 @@ async fn delete_project_documents(
     project_ids: Vec<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
         let dir = project_storage_dir(&app)?;
         fs::create_dir_all(&dir).map_err(|err| format!("无法创建项目目录: {err}"))?;
         for project_id in project_ids {
@@ -305,12 +363,7 @@ async fn delete_project_documents(
                         .map_err(|err| format!("删除项目文件失败 ({}): {err}", path.display()))?;
                 }
             }
-            let media_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|err| format!("无法定位图片存储目录: {err}"))?
-                .join(MEDIA_STORAGE_DIR)
-                .join(&project_id);
+            let media_dir = media_storage_root(&app)?.join(&project_id);
             if media_dir.exists() {
                 fs::remove_dir_all(&media_dir)
                     .map_err(|err| format!("删除项目图片失败 ({}): {err}", media_dir.display()))?;
@@ -329,6 +382,7 @@ async fn save_canvas_media(
     data_url: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
         if !data_url.starts_with("data:") || data_url.len() > MAX_MEDIA_DATA_URL_BYTES {
             return Err("图片数据无效或超过 300MB 限制".into());
         }
@@ -351,6 +405,7 @@ async fn save_canvas_media(
 #[tauri::command]
 async fn load_canvas_media(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
         let path = media_storage_path(&app, &key)?;
         if !path.exists() {
             return Ok(None);
@@ -373,13 +428,9 @@ async fn list_canvas_media_keys(
     project_id: String,
 ) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
         validate_project_id(&project_id)?;
-        let dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|err| format!("无法定位图片存储目录: {err}"))?
-            .join(MEDIA_STORAGE_DIR)
-            .join(&project_id);
+        let dir = media_storage_root(&app)?.join(&project_id);
         if !dir.exists() {
             return Ok(Vec::new());
         }
@@ -404,6 +455,7 @@ async fn list_canvas_media_keys(
 #[tauri::command]
 async fn delete_canvas_media(app: tauri::AppHandle, key: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = MEDIA_STORAGE_LOCK.lock().map_err(|_| "图片存储锁不可用".to_string())?;
         let path = media_storage_path(&app, &key)?;
         for candidate in [
             path.clone(),
@@ -1468,11 +1520,19 @@ fn get_asset_root(state: State<'_, AssetRootState>) -> Result<String, String> {
 /// 路径自始至终没有经过前端：前端只拿到「最终生效的路径字符串」用于展示。
 /// 取消时返回 `Ok(None)`，前端据此不做任何副作用。
 #[tauri::command]
+async fn pick_agent_work_dir(app:tauri::AppHandle)->Result<Option<String>,String>{
+    tauri::async_runtime::spawn_blocking(move||{
+        let picked=app.dialog().file().set_title("选择智能体工作目录").blocking_pick_folder();
+        picked.map(|p|p.into_path().map(|p|p.to_string_lossy().into_owned()).map_err(|e|e.to_string())).transpose()
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
 async fn pick_agent_cli_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("选择 Claude Code 程序")
+            .set_title("选择智能体程序")
             .add_filter("程序文件", &["exe", "cmd", "bat"])
             .blocking_pick_file()
     })
@@ -1749,6 +1809,7 @@ pub fn run() {
         .manage(HttpRequestState::default())
         .manage(AssetRootState::default())
         .manage(agent::AgentProcessState::default())
+        .manage(codex_agent::CodexBridgeState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -1763,12 +1824,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<agent::AgentProcessState>().kill_all();
+                window.state::<codex_agent::CodexBridgeState>().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
             load_project_documents,
             write_project_document,
             delete_project_documents,
+            get_media_storage_root,
+            pick_media_storage_root,
             save_canvas_media,
             load_canvas_media,
             list_canvas_media_keys,
@@ -1785,7 +1849,13 @@ pub fn run() {
             get_asset_root,
             pick_asset_root,
             pick_agent_cli_path,
+            pick_agent_work_dir,
             agent::detect_agent_cli_path,
+            agent::list_agent_skills,
+            codex_agent::probe_local_agent,
+            codex_agent::codex_capabilities,
+            codex_agent::codex_send,
+            codex_agent::codex_respond,
             agent::agent_send,
             agent::agent_cancel
         ])

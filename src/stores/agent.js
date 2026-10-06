@@ -8,25 +8,30 @@
  * 之后用 `--resume` 续接。所以本 store 只需要记住「这一串对话的 session_id」和
  * 「它是不是已经建立过了」—— 后者决定下一轮该 `--session-id` 还是 `--resume`。
  *
- * 这一版智能体**只读**：工具白名单只放行 `Skill`（起标题/写文案时调 xhs-ti），
- * 文件、命令、网络全关 —— 它改不了画布、也碰不到文件系统。
+ * 智能体可以执行本地技能、命令和文件操作；结构化动作接入画布生成。
  * 它能看到的东西全部由 utils/agentContext.js 打包进系统提示词。
  */
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { codexErrorText } from '../utils/codexError'
+import { agentSettings, activeAgentName, saveAgentSettings } from './agentSettings'
+import { computed, ref, watch, nextTick } from 'vue'
 import { loadAgentHistory, saveAgentHistory } from './agentHistory'
 import { invoke, Channel } from '@tauri-apps/api/core'
-import { nodes, edges } from './canvas'
+import { nodes, edges, addNode, addEdge, updateNode, startBatchOperation, endBatchOperation } from './canvas'
+import { parseAgentPrompts, agentPromptRatio } from '../utils/agentPrompts'
+import { runNodeAndWait } from '../composables/useNodeRunBridge'
+import { parseCanvasActions } from '../utils/agentCanvasActions'
 import { currentProject } from './projects'
 import { selectedNodeIds } from '../composables/useFocusMode'
 import { buildAgentSystemPrompt } from '../utils/agentContext'
 import { buildAgentInputLine, resolveAgentImage } from '../utils/agentImage'
 import { isCopyRequest, copyRequestPrompt, cleanCopyOutput } from '../utils/agentCopyOutput'
+import { cleanAgentDiagnostic } from '../utils/agentDiagnostics'
 
 const SESSION_ID_KEY = 'ling-canvas-agent-session'
 const SESSION_STARTED_KEY = 'ling-canvas-agent-session-started'
 const TOOL_PROFILE_KEY = 'ling-canvas-agent-tool-profile'
-const TOOL_PROFILE = 'skill-read-v2'
+const TOOL_PROFILE = 'full-execution-v3'
 const CLI_PATH_KEY = 'ling-canvas-claude-cli-path'
 const PANEL_WIDTH_KEY = 'ling-canvas-agent-panel-width'
 
@@ -81,6 +86,9 @@ export const useAgentStore = defineStore('agent', () => {
     safeSet(SESSION_STARTED_KEY, '')
     safeSet(TOOL_PROFILE_KEY, TOOL_PROFILE)
   }
+  const approvalRequests = ref([])
+  const anyRunning = computed(() => running.value || conversations.value.some(item => item.running))
+  const activeProvider = computed(() => agentSettings.active)
   const availableTools = ref([])
   /** 空串 = 走 PATH 里的 claude */
   const cliPath = ref(safeGet(CLI_PATH_KEY))
@@ -116,14 +124,15 @@ export const useAgentStore = defineStore('agent', () => {
   const activateConversation = item => {
     activeConversationId.value=item.id; sessionId.value=item.sessionId; sessionStarted.value=!!item.sessionStarted
     messages.value=item.messages || []; running.value=!!item.running; activeRequestId=item.requestId || null
-    draft.value=item.draft || ''; pendingImages.value=(item.attachments || []).filter(item => !item.loading); error.value=item.error || ''
+    draft.value=item.draft || ''; pendingImages.value=(item.attachments || []).filter(item => !item.loading); error.value=cleanAgentDiagnostic(item.error)
+    item.provider ||= 'claude'
     item.open=true; persistSession()
   }
   const newConversation = () => {
     if (!historyReady.value) return
     captureConversation()
     const id=newSessionId(),now=Date.now()
-    const item={id,sessionId:id,sessionStarted:false,title:'新对话',open:true,messages:[],draft:'',attachments:[],createdAt:now,updatedAt:now}
+    const item={id,provider:agentSettings.active,sessionId:id,sessionStarted:false,title:'新对话',open:true,messages:[],draft:'',attachments:[],createdAt:now,updatedAt:now}
     conversations.value.push(item); activateConversation(item); persistHistory()
   }
   const switchConversation = id => {
@@ -144,6 +153,14 @@ export const useAgentStore = defineStore('agent', () => {
     }
     persistHistory()
   }
+  const deleteConversation = id => {
+    captureConversation()
+    const item = conversations.value.find(item => item.id === id)
+    if (!item || item.running) return
+    closeConversation(id)
+    conversations.value = conversations.value.filter(item => item.id !== id)
+    persistHistory()
+  }
   const renameConversation = (id, title) => {
     const item = conversations.value.find(item => item.id === id)
     if (!item || !title.trim()) return
@@ -160,7 +177,7 @@ export const useAgentStore = defineStore('agent', () => {
   }
   loadAgentHistory().then(state => {
     if (state?.conversations?.length) {
-      conversations.value=state.conversations.map(item => ({...item,running:false,requestId:null,messages:(item.messages || []).map(message => ({...message,streaming:false,status:''}))}))
+      conversations.value=state.conversations.map(item => ({...item,error:cleanAgentDiagnostic(item.error),running:false,requestId:null,messages:(item.messages || []).map(message => ({...message,streaming:false,status:''}))}))
       const item=conversations.value.find(item => item.id===state.activeId && item.open && !item.archived) || openConversations.value[0]
       if (item) activateConversation(item)
     }
@@ -205,6 +222,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   const setCliPath = (value) => {
     cliPath.value = String(value || '').trim()
+    agentSettings.claude.path = cliPath.value; saveAgentSettings()
     safeSet(CLI_PATH_KEY, cliPath.value)
   }
 
@@ -309,7 +327,7 @@ export const useAgentStore = defineStore('agent', () => {
     const visible=conversations.value.find(item => item.id===activeConversationId.value)
     activeConversationId.value=id; sessionId.value=target.sessionId; sessionStarted.value=!!target.sessionStarted
     messages.value=target.messages || []; draft.value=target.draft || ''; pendingImages.value=target.attachments || []
-    error.value=target.error || ''; running.value=!!target.running; activeRequestId=target.requestId || null
+    error.value=cleanAgentDiagnostic(target.error); running.value=!!target.running; activeRequestId=target.requestId || null
     try { action(); captureConversation() }
     finally {
       if (visible) activateConversation(visible)
@@ -381,6 +399,42 @@ export const useAgentStore = defineStore('agent', () => {
 
     if (payload.type === 'result') {
       const bubble = currentAssistant()
+      if (!payload.is_error && typeof payload.result==='string' && bubble) {
+        const parsed=parseAgentPrompts(payload.result)
+        if(parsed.prompts.length){bubble.prompts=parsed.prompts;payload.result=parsed.text || '提示词已整理完成。'}
+      }
+      if (!payload.is_error && typeof payload.result === 'string') {
+        try {
+          const parsed = parseCanvasActions(payload.result)
+          if (parsed.actions.length) {
+            payload.result = parsed.text || '正在执行画布生成任务。'
+            const conversationId = activeConversationId.value
+            const project = currentProject.value?.id
+            const execute = async () => {
+              for (const action of parsed.actions) {
+                if (currentProject.value?.id !== project) throw new Error('项目已切换，画布操作已停止')
+                let id = action.nodeId
+                if (action.type === 'create_image') {
+                  const sources = (action.references || []).map(id => nodes.value.find(node => node.id === id)).filter(Boolean)
+                  const anchor = sources[0] || nodes.value.at(-1)
+                  id = addNode('image', { x: (anchor?.position?.x || 100) + 380, y: anchor?.position?.y || 100 }, {
+                    label: action.title || '图片生成', prompt: action.prompt,
+                    count: Math.max(1, Math.min(4, Number(action.count) || 1)), ratio: action.ratio || '4:3'
+                  })
+                  for (const source of sources) addEdge({ source: source.id, target: id })
+                  await nextTick(); await new Promise(resolve => requestAnimationFrame(resolve))
+                } else if (!nodes.value.some(node => node.id === id && ['image','video','render','task'].includes(node.type))) {
+                  throw new Error('找不到可运行的画布节点')
+                }
+                if (bubble) bubble.nodeIds = [...new Set([...(bubble.nodeIds || []), id])]
+                await runNodeAndWait(id)
+                if (nodes.value.find(node => node.id === id)?.data?.error) throw new Error(nodes.value.find(node => node.id === id).data.error)
+              }
+            }
+            execute().catch(err => inConversation(conversationId, () => { error.value = `画布执行失败：${err.message}` }))
+          }
+        } catch (err) { error.value = `画布动作解析失败：${err.message}` }
+      }
       if (bubble && bubble.role === 'assistant') {
         if (typeof payload.result === 'string') bubble.content = bubble.copyOnly && !payload.is_error ? cleanCopyOutput(payload.result) : payload.result
         bubble.status = ''
@@ -400,25 +454,59 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  const handleEvent = (event) => {
+  const respondCodexRequest = async (request, result) => {
+    try { await invoke('codex_respond', { requestId:request.requestId, rpcId:request.rpcId, result }); approvalRequests.value=approvalRequests.value.filter(item => item !== request) }
+    catch (e) { window.$message?.error(String(e)) }
+  }
+  const enableProvider = provider => {
+    if (anyRunning.value) throw new Error('请等待当前任务结束再切换智能体')
+    if (!historyReady.value) throw new Error('聊天历史正在加载，请稍后重试')
+    if (agentSettings.active === provider) return
+    agentSettings.active = provider; saveAgentSettings(); newConversation()
+  }
+  const handleCodexLine = line => {
+    let value; try { value=JSON.parse(line) } catch { return }
+    if (value.type === 'codex_request') { value.answers={}; approvalRequests.value.push(value); setStatus('等待确认操作…'); return }
+    const method=value.method, params=value.params || {}, bubble=messages.value.at(-1)
+    if (method === 'item/agentMessage/delta') { if (bubble?.role==='assistant') bubble.content += params.delta || ''; clearStatus(); return }
+    if (method === 'item/completed' && params.item?.type === 'agentMessage') { if (bubble?.role==='assistant' && !bubble.content) bubble.content=params.item.text || ''; return }
+    if (method === 'item/started') {
+      const kind=params.item?.type
+      if (kind !== 'agentMessage') setStatus(kind === 'commandExecution' ? '正在执行命令…' : kind === 'fileChange' ? '正在修改文件…' : '正在处理任务…')
+      return
+    }
+    if (method === 'serverRequest/resolved') { approvalRequests.value=approvalRequests.value.filter(item => String(item.rpcId) !== String(params.requestId)); return }
+    if (method === 'turn/completed') {
+      const turn=params.turn || {}, failed=turn.status === 'failed'
+      if (turn.status === 'interrupted') { clearStatus(); return }
+      handleLine(JSON.stringify({type:'result',is_error:failed,result:failed ? codexErrorText(turn.error?.message) : bubble?.content || ''})); return
+    }
+    if (value.type) handleLine(line)
+  }
+  const handleEvent = (event, provider = 'claude') => {
     if (event?.kind === 'line') {
-      handleLine(event.line)
+      if (provider === 'codex') handleCodexLine(event.line)
+      else handleLine(event.line)
       return
     }
     if (event?.kind === 'err') {
-      const text = String(event.message || '').trim()
+      const text = provider==='codex' ? codexErrorText(event.message) : cleanAgentDiagnostic(event.message)
       if (text) error.value = text
       return
     }
     if (event?.kind === 'done') {
+      approvalRequests.value=approvalRequests.value.filter(item => item.requestId !== activeRequestId)
       finishTurn()
     }
   }
 
   /** 发一条消息 */
-  const send = async (text) => {
+  const send = async (text, skill = '') => {
     const prompt = String(text || '').trim()
     if (!prompt || running.value || !historyReady.value) return
+    const provider=agentSettings.active, settings={...agentSettings[provider]}
+    const conversation=conversations.value.find(item => item.id===activeConversationId.value)
+    if ((conversation?.provider || 'claude') !== provider) { window.$message?.warning('这段历史属于另一个智能体，请新建对话后发送'); return }
 
     // 还没转换完的 chip 这一轮先不发：留给下一轮，别把半截数据写进会话
     const attachments = pendingImages.value.filter(item => !item.loading && item.dataBase64)
@@ -427,12 +515,14 @@ export const useAgentStore = defineStore('agent', () => {
     messages.value.push({
       id: newSessionId(),
       role: 'user',
+      createdAt: Date.now(),
       content: prompt,
+      skill,
       streaming: false,
       // 记下当时发的图（用降采样后的小图当缩略图，不为 60px 展示去解码大图）
       images: attachments.map(item => item.previewUrl)
     })
-    messages.value.push({ id: newSessionId(), role: 'assistant', content: '', streaming: true, status: '', copyOnly: isCopyRequest(prompt) })
+    messages.value.push({ id: newSessionId(), role: 'assistant', createdAt: Date.now(), projectId:currentProject.value?.id, referenceNodeIds:[...new Set([...attachments.map(item=>item.nodeId).filter(Boolean),...selectedNodeIds.value.filter(id=>nodes.value.some(node=>node.id===id && node.type==='image'))])], nodeIds: [...new Set([...selectedNodeIds.value, ...attachments.map(item => item.nodeId).filter(Boolean)])], content: '', streaming: true, status: '', copyOnly: isCopyRequest(prompt) })
     running.value = true
 
     const requestId = newSessionId()
@@ -445,27 +535,37 @@ export const useAgentStore = defineStore('agent', () => {
       nodes: nodes.value,
       edges: edges.value,
       selectedIds: selectedNodeIds.value,
+      provider, permission:settings.permission,
       projectName: currentProject.value?.title || currentProject.value?.name || ''
     })
 
     // 有图无图同一条路径：无附件时 content 里就只有一个文字块
-    const input = buildAgentInputLine({ text: copyRequestPrompt(prompt), images: attachments })
+    const input = buildAgentInputLine({ text: skill
+      ? `用户明确选择了本地技能「${skill}」。请先使用 Skill 工具调用该技能，再按技能完成以下需求：\n${prompt}`
+      : copyRequestPrompt(prompt), images: attachments })
 
     const channel = new Channel()
-    channel.onmessage = event => inConversation(conversationId,() => handleEvent(event))
+    channel.onmessage = event => inConversation(conversationId,() => handleEvent(event, provider))
 
     try {
-      await invoke('agent_send', {
+      if (provider === 'codex') {
+        const skillInfo=settings.skills?.find(item => item.name===skill)
+        const inputs=[...attachments.map(item => ({type:'image',url:`data:${item.mime};base64,${item.dataBase64}`})),{type:'text',text:copyRequestPrompt(prompt)}]
+        if (skill && !skillInfo?.path) throw new Error('技能列表已变化，请重新选择技能')
+        if (skillInfo?.path) inputs.push({type:'skill',name:skillInfo.name,path:skillInfo.path})
+        await invoke('codex_send', { requestId, input:inputs, sessionId:sessionId.value, resume:sessionStarted.value, cliPath:settings.path, systemPrompt, cwd:settings.cwd, model:settings.model, permission:settings.permission, onEvent:channel })
+      } else await invoke('agent_send', {
         requestId,
         input,
         sessionId: sessionId.value,
         resume: sessionStarted.value,
-        cliPath: cliPath.value,
+        cliPath: settings.path,
+        cwd:settings.cwd, model:settings.model, permission:settings.permission,
         systemPrompt,
         onEvent: channel
       })
     } catch (err) {
-      inConversation(conversationId,() => { error.value=String(err?.message || err || '启动智能体失败') })
+      inConversation(conversationId,() => { error.value=provider==='codex' ? codexErrorText(err?.message || err) : String(err?.message || err || '启动智能体失败') })
     } finally {
       // done 事件通常已经收尾；这里兜底，防止 invoke 直接抛错时状态卡住
       inConversation(conversationId,() => { if (activeRequestId===requestId) finishTurn() })
@@ -473,6 +573,7 @@ export const useAgentStore = defineStore('agent', () => {
 
     // 图已随会话进了 Claude Code 的历史，后续追问靠 --resume，不重发。
     // 只清掉这一轮真发出去的；仍在转换的 chip 留着，下一轮还能用。
+    if (conversations.value.find(item=>item.id===conversationId)?.error) return
     const sentIds = new Set(attachments.map(item => item.id))
     inConversation(conversationId,() => { pendingImages.value=pendingImages.value.filter(item => !sentIds.has(item.id)) })
   }
@@ -487,9 +588,41 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  const sendPromptsToCanvas = (message, indices) => {
+    if(message.projectId!==currentProject.value?.id) throw new Error('请打开生成这条提示词时的画布')
+    const references=message.referenceNodeIds || []
+    const sources=references.map(id=>nodes.value.find(node=>node.id===id))
+    if(sources.some(node=>!node)) throw new Error('部分参考图已删除，请恢复参考图后再发送')
+    const ids=[]
+    const right=Math.max(100,...sources.map(node=>(node.position?.x || 0)+(node.dimensions?.width || 280)))
+    const top=Math.min(...sources.map(node=>node.position?.y || 0),sources.length?Infinity:100)
+    startBatchOperation()
+    try {
+      for(const index of indices){
+        const item=message.prompts?.[index];if(!item)continue
+        const existing=nodes.value.find(node=>node.id===item.nodeId)
+        if(existing){
+          const ratio=agentPromptRatio(item)
+          if(ratio && !existing.data?.ratio && !existing.data?.size) updateNode(existing.id,{ratio})
+          ids.push(item.nodeId);continue
+        }
+        let y=top
+        while(nodes.value.some(node=>Math.abs((node.position?.x || 0)-(right+120))<300 && Math.abs((node.position?.y || 0)-y)<360))y+=400
+        const id=addNode('image',{x:right+120,y},{label:[item.group,item.title].filter(Boolean).join(' · '),prompt:item.prompt,ratio:agentPromptRatio(item)})
+        sources.forEach(source=>addEdge({source:source.id,target:id}))
+        item.nodeId=id;ids.push(id)
+      }
+    } finally {endBatchOperation()}
+    selectedNodeIds.value=ids
+    message.nodeIds=[...new Set([...(message.nodeIds || []),...ids])]
+    persistHistory()
+    return ids
+  }
   return {
+    sendPromptsToCanvas,
+    activeProvider, activeAgentName, enableProvider, anyRunning, approvalRequests, respondCodexRequest,
     conversations, openConversations, historyConversations, activeConversationId, historyReady, draft,
-    newConversation, switchConversation, closeConversation, persistHistory, archivedConversations, renameConversation, archiveConversation,
+    newConversation, switchConversation, closeConversation, deleteConversation, persistHistory, archivedConversations, renameConversation, archiveConversation,
     panelOpen,
     messages,
     running,

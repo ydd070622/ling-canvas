@@ -1,6 +1,5 @@
 <script setup>
 import { computed, h, onMounted, onBeforeUnmount, ref } from 'vue'
-import { warmProjectMedia } from '../stores/mediaWarmup'
 import { useRouter } from 'vue-router'
 import { NButton, NDropdown, NIcon, NInput, NModal, useDialog } from 'naive-ui'
 import {
@@ -197,18 +196,6 @@ const confirmEmptyTrash = () => {
   })
 }
 
-let warmupTimer
-let warmupCancelled = false
-onMounted(async () => {
-  await initProjectsStore()
-  warmupTimer = setTimeout(async () => {
-    for (const project of activeProjects.value.slice(0, 2)) {
-      if (warmupCancelled) break
-      await warmProjectMedia(project, () => warmupCancelled)
-    }
-  }, 250)
-})
-onBeforeUnmount(() => { warmupCancelled = true; clearTimeout(warmupTimer) })
 </script>
 
 <template>

@@ -5,7 +5,8 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
-import { initProjectsStore } from './stores/projects'
+import { startMediaWarmup } from './stores/mediaWarmup'
+import { projects, initProjectsStore } from './stores/projects'
 import './style.css'
 import './styles/flow-nodes.css'
 
@@ -48,5 +49,6 @@ app.use(router)
 const bootstrap = async () => {
   await initProjectsStore()
   app.mount('#app')
+  startMediaWarmup(projects, router)
 }
 bootstrap().catch(error => showFatal(`[bootstrap]\n${error?.stack || error?.message || String(error)}`))

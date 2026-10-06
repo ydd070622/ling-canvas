@@ -24,13 +24,13 @@
       />
     </template>
 
-    <template v-else-if="url">
-      <img
+    <template v-else-if="url || previewUrl">
+      <CanvasPreviewImage
         class="flow-media-fill"
-        :src="url"
+        :src="previewUrl || url"
         :alt="alt"
         @dblclick.stop="$emit('preview')"
-        @load="measure($event.target.naturalWidth, $event.target.naturalHeight)"
+        @dimensions="measure(originalDimensions?.width || $event.width, originalDimensions?.height || $event.height)"
       />
     </template>
 
@@ -54,11 +54,14 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import CanvasPreviewImage from './CanvasPreviewImage.vue'
 import GenerationLoader from './GenerationLoader.vue'
 
 const props = defineProps({
   tone: { type: String, default: 'image' },
   url: { type: String, default: '' },
+  previewUrl: { type: String, default: '' },
+  originalDimensions: { type: Object, default: null },
   loading: { type: Boolean, default: false },
   alt: { type: String, default: '' },
   meta: { type: String, default: '' },
@@ -86,6 +89,7 @@ const measure = (width, height) => {
   emit('ratio', ratio.value)
 }
 watch(() => props.url, () => {
+  if (props.previewUrl) return
   ratio.value = 0
   emit('ratio', 0)
   emit('dimensions', null)

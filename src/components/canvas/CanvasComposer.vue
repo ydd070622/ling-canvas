@@ -6,7 +6,7 @@
        - 其余情况 = **创建模式**：发送会建一个 AI 任务节点（收下选中 + @ 引用的上游），
          再按张数在右侧建输出节点。 -->
   <Teleport to="body" :disabled="!composerExpanded">
-  <div class="composer-wrap" :style="{ '--composer-height': composerHeight + 'px' }" :class="{ 'is-expanded': composerExpanded, 'is-collapsed': composerCollapsed }" @keydown="onComposerEscape">
+  <div class="composer-wrap" :style="{ '--composer-height': composerHeight + 'px', '--agent-width': agentWidth + 'px' }" :class="{ 'is-expanded': composerExpanded, 'is-collapsed': composerCollapsed, 'is-agent-open': agentOpen }" @keydown="onComposerEscape">
     <div v-if="composerExpanded" class="compose-backdrop" @click="toggleComposerExpanded(false)"></div>
 
     <button v-if="!composerExpanded" class="compose-collapse" type="button"
@@ -23,14 +23,20 @@
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" /></svg>
       </button>
       <TransitionGroup v-if="mentionRefs.length" name="reference-sort" tag="div" class="prompt-references">
-        <div v-for="ref in mentionRefs" :key="ref.nodeId" class="prompt-ref"
+        <NPopover v-for="ref in mentionRefs" :key="ref.nodeId" trigger="hover" :placement="composerExpanded ? 'bottom' : 'top'" :flip="true" :delay="180" :disabled="!!referenceDragId || !ref.thumb" :show-arrow="false" raw>
+          <template #trigger><div class="prompt-ref"
           :class="{ 'is-dragging': referenceDragId === String(ref.nodeId) }" :data-reference-id="String(ref.nodeId)"
-          title="长按拖动调整顺序" @pointerdown="startReferencePress($event, ref)" @contextmenu.prevent>
+          title="Ctrl + 点击插入图片引用；长按拖动调整顺序" @pointerdown="startReferencePress($event, ref)" @contextmenu.prevent>
           <img v-if="ref.thumb" :src="ref.thumb" alt="" draggable="false" />
           <span v-else class="prompt-ref-thumb"></span>
           <span class="prompt-ref-label">{{ ref.token.replace(/^@/, '') }}</span>
           <button type="button" class="prompt-ref-x" @pointerdown.stop @click="removeMention(ref)">×</button>
-        </div>
+        </div></template>
+          <div class="prompt-reference-preview">
+            <CanvasPreviewImage :src="ref.thumb" :alt="ref.token.replace(/^@/, '')" />
+            <button type="button" @click="openMediaViewer({ url: ref.thumb, kind: 'image', alt: ref.token.replace(/^@/, '') })">查看原图</button>
+          </div>
+        </NPopover>
       </TransitionGroup>
       <Teleport to="body"><div v-if="referenceGhost" class="reference-drag-ghost" :style="{ left: referenceGhost.x + 'px', top: referenceGhost.y + 'px' }"><img v-if="referenceGhost.thumb" :src="referenceGhost.thumb" alt="" /><span>{{ referenceGhost.token.replace(/^@/, '') }}</span></div></Teleport>
 
@@ -46,7 +52,7 @@
           v-else
           ref="inputRef"
           v-model="text"
-          :preset="preset" :preset-position="presetPosition"
+          :preset="preset" :preset-position="presetPosition" :reference-tokens="mentionRefs.map(item => item.token)"
           @update:preset-position="updatePresetPosition" @remove-preset="removeSelectedPreset" @open-preset="openPresetGallery"
           class="compose-input"
           placeholder=""
@@ -183,6 +189,9 @@
 </template>
 
 <script setup>
+import { NPopover } from 'naive-ui'
+import CanvasPreviewImage from '../nodes/base/CanvasPreviewImage.vue'
+import { openMediaViewer } from '../../composables/useMediaViewer'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   nodes, edges, addNode, addEdge, updateNode, editNode, editField,
@@ -205,10 +214,12 @@ import { runNode, cancelNode } from '../../composables/useNodeRunBridge'
 
 const props = defineProps({
   /** 由 Canvas 注入的屏幕→flow 坐标换算（见 viewportCenter 的说明） */
-  screenToFlow: { type: Function, default: null }
+  screenToFlow: { type: Function, default: null },
+  agentOpen: { type: Boolean, default: false },
+  agentWidth: { type: Number, default: 420 }
 })
 
-const emit = defineEmits(['attach'])
+const emit = defineEmits(['attach', 'visibility-change'])
 
 const modelStore = useModelStore()
 
@@ -679,7 +690,7 @@ const moveReference = (event) => {
   const list = mentionRefs.value
   const from = list.findIndex(item => String(item.nodeId) === referenceDragId.value)
   if (from < 0) return
-  const center = referenceGhost.value.x + 27
+  const center = referenceGhost.value.x + 18
   let target = from
   const cards = [...strip.querySelectorAll('[data-reference-id]')]
   for (let i = 0; i < cards.length; i++) {
@@ -693,6 +704,13 @@ const moveReference = (event) => {
 const startReferencePress = (event, item) => {
   if (event.button !== 0) return
   stopReferencePress()
+  if (event.ctrlKey) {
+    event.preventDefault()
+    event.stopPropagation()
+    mentionFrom.value = -1
+    insertMention({ id: item.nodeId })
+    return
+  }
   const card = event.currentTarget, rect = card.getBoundingClientRect()
   referencePress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, strip: card.parentElement }
   referenceTimer = setTimeout(() => {
@@ -740,6 +758,13 @@ const insertMention = (candidate) => {
     inputRef.value?.focus()
   })
 }
+
+const addImageReference = nodeId => {
+  composerCollapsed.value = false
+  mentionFrom.value = -1
+  insertMention({ id: nodeId })
+}
+defineExpose({ addImageReference })
 
 const removeMention = (ref_) => {
   if (ref_.edgeId) removeEdge(ref_.edgeId)
@@ -800,6 +825,16 @@ watch([() => editingNode.value?.id, targetType], () => {
  * 模型 / 参数 / 预设面板是拎到触发按钮旁边渲染的，栏一往下降，锚点就在动，
  * 留着它们会悬在半空跟着飘。mention 候选同理。
  */
+watch(() => props.agentOpen, open => {
+  if (!open) return
+  composerExpanded.value = false
+  composerCollapsed.value = true
+  paramOpen.value = false
+  modelOpen.value = false
+  presetOpen.value = false
+  closeMention()
+}, { immediate: true })
+
 watch(composerCollapsed, (collapsed) => {
   if (!collapsed) return
   paramOpen.value = false
@@ -808,6 +843,7 @@ watch(composerCollapsed, (collapsed) => {
   closeMention()
   composerExpanded.value = false
 })
+watch(composerCollapsed, collapsed => emit('visibility-change', !collapsed), { immediate: true })
 
 const send = async () => {
   // 室内渲染：只借用这颗按钮当作开始 / 停止。必须在 resolveTokens / editNode 之前拦下 ——
@@ -949,14 +985,18 @@ const viewportCenter = () => {
 .composer-wrap {
   position: fixed;
   left: 50%;
-  bottom: 20px;
+  bottom: 12px;
   z-index: 120;
-  width: min(840px, calc(100vw - 190px));
+  width: min(700px, calc(100vw - 190px));
   transform: translateX(-50%);
   height: var(--composer-height, 165px);
-  transition: height .65s cubic-bezier(.22,.7,.2,1);
+  transition: height .48s cubic-bezier(.2,.85,.2,1.08), width .48s cubic-bezier(.2,.85,.2,1.08);
   will-change: transform;
 }
+.composer-wrap.is-agent-open:not(.is-expanded) {
+  width: min(700px, calc(100vw - max(190px, var(--agent-width) * 2 + 48px)));
+}
+
 
 .compose-collapse {
   position: absolute; bottom: calc(100% - 1px); left: 50%; transform: translateX(-50%);
@@ -966,12 +1006,12 @@ const viewportCenter = () => {
 }
 .compose-collapse:hover { color: var(--text-secondary); }
 .compose-collapse:focus-visible { outline: 2px solid var(--text-tertiary); outline-offset: 3px; }
-.compose-collapse svg { width: 12px; height: 12px; transition: transform .65s ease; }
+.compose-collapse svg { width: 12px; height: 12px; transition: transform .18s ease; }
 .composer-wrap.is-collapsed .composer {
   clip-path: inset(0 0 100% 0 round 12px); opacity: 0; pointer-events: none;
 }
 .composer-wrap.is-collapsed { height: 0; }
-.composer > * { filter: blur(0); opacity: 1; transform: translateY(0); transition: filter .65s ease, opacity .65s ease, transform .65s cubic-bezier(.22,.7,.2,1); }
+.composer > * { filter: blur(0); opacity: 1; transform: translateY(0); transition: filter .18s ease, opacity .18s ease, transform .18s cubic-bezier(.22,.7,.2,1); }
 .is-collapsed .composer > * { filter: blur(8px); opacity: 0; transform: translateY(-9px); }
 .is-collapsed .compose-collapse { bottom: 0; height: 22px; border-bottom: 1px solid var(--border-color); border-radius: 8px; }
 .is-collapsed .compose-collapse svg { transform: rotate(180deg); }
@@ -983,7 +1023,7 @@ const viewportCenter = () => {
 /* ---- 主体 ---- */
 .composer {
   clip-path: inset(0 0 0 0 round 12px);
-  transition: clip-path .65s cubic-bezier(.22,.7,.2,1), opacity .65s ease;
+  transition: clip-path .18s cubic-bezier(.22,.7,.2,1), opacity .18s ease;
   position: absolute; top: 0; width: 100%;
   padding: 11px 11px 8px;
   border: 1px solid var(--border-color);
@@ -993,8 +1033,12 @@ const viewportCenter = () => {
   backdrop-filter: blur(22px);
 }
 
-.prompt-references { display: flex; gap: 8px; padding: 6px 38px 8px 7px; overflow-x: auto; }
-.prompt-ref { position: relative; flex-shrink: 0; width: 54px; height: 54px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-tertiary); user-select: none; touch-action: none; cursor: grab; overflow: hidden; }
+.prompt-reference-preview { width: 220px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary); box-shadow: 0 8px 30px #0004; }
+.prompt-reference-preview :deep(img) { display: block; width: 100%; height: 280px; max-height: calc(100dvh - 120px); object-fit: contain; }
+.prompt-reference-preview button { display: block; width: 100%; padding: 8px; border: 0; border-top: 1px solid var(--border-color); color: var(--text-primary); background: var(--bg-secondary); cursor: pointer; }
+.prompt-reference-preview button:hover { background: var(--bg-tertiary); }
+.prompt-references { display: flex; gap: 6px; padding: 2px 38px 2px 7px; overflow-x: auto; }
+.prompt-ref { position: relative; flex-shrink: 0; width: 36px; height: 36px; border: 1px solid var(--border-color); border-radius: 7px; background: var(--bg-tertiary); user-select: none; touch-action: none; cursor: grab; overflow: hidden; }
 .prompt-ref img, .prompt-ref-thumb { display: block; width: 100%; height: 100%; object-fit: cover; background: linear-gradient(145deg,#d9d4ce,#858b92); }
 .prompt-ref-label { position: absolute; bottom: 0; left: 0; right: 0; padding: 2px 3px; background: #0009; color: white; font-size: 10px; text-align: center; }
 .prompt-ref-x { position: absolute; right: 1px; top: 1px; width: 16px; height: 16px; border: 0; border-radius: 4px; background: #0008; color: white; cursor: pointer; padding: 0; font-size: 12px; }
@@ -1002,7 +1046,7 @@ const viewportCenter = () => {
 
 /* 输入区保留多行编辑空间，发送按钮位于底部参数栏。 */
 .reference-sort-move { transition: transform .18s ease; }
-.reference-drag-ghost { position: fixed; z-index: 11000; width: 54px; height: 54px; border: 1px solid #b496df; border-radius: 7px; overflow: hidden; box-shadow: 0 8px 22px #0006; transform: scale(1.08); pointer-events: none; background: #333; }
+.reference-drag-ghost { position: fixed; z-index: 11000; width: 36px; height: 36px; border: 1px solid #b496df; border-radius: 7px; overflow: hidden; box-shadow: 0 8px 22px #0006; transform: scale(1.08); pointer-events: none; background: #333; }
 .reference-drag-ghost img { width: 100%; height: 100%; object-fit: cover; }
 .reference-drag-ghost span { position: absolute; bottom: 0; left: 0; right: 0; color: #fff; background: #0009; font-size: 10px; text-align: center; padding: 2px; }
 .compose-main { display: flex; align-items: flex-end; gap: 6px; }
@@ -1014,7 +1058,7 @@ const viewportCenter = () => {
   overflow-y: auto;
   flex: 1;
   resize: none;
-  padding: 10px 38px 10px 8px;
+  padding: 4px 38px 10px 8px;
   border: 0;
   outline: 0;
   background: transparent;
@@ -1264,7 +1308,7 @@ const viewportCenter = () => {
 .is-expanded .composer { position: relative; clip-path: none; transition: none; max-height: none; display: flex; flex-direction: column; width: min(840px, 100%); height: min(720px, calc(100dvh - 52px)); min-height: 0; padding: 22px 14px 10px; border-radius: 16px; box-shadow: 0 20px 80px rgb(0 0 0 / 25%); }
 .is-expanded .compose-expand { top: 10px; right: 12px; }
 .is-expanded .prompt-references { padding-right: 38px; flex-shrink: 0; }
-.is-expanded .compose-main { flex: 1; min-height: 0; margin-top: 18px; }
-.is-expanded .compose-input { height: 100%; min-height: 0; max-height: none; padding: 8px; line-height: 1.65; }
+.is-expanded .compose-main { flex: 1; min-height: 0; margin-top: 0; }
+.is-expanded .compose-input { height: 100%; min-height: 0; max-height: none; padding: 4px 8px 8px; line-height: 1.65; }
 .is-expanded .compose-options { flex-shrink: 0; padding-top: 12px; }
 </style>

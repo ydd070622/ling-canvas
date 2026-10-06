@@ -176,6 +176,8 @@ export const cleanNodeForStorage = (inputNode) => {
   // 运行期瞬态字段不落盘：loading 一旦存下来，下次启动就会变成一个没有任何
   // 请求在跑的「永远生成中」僵尸（生成中关掉应用即复现）；autoExecute 是
   // 创建节点时的一次性触发开关，落盘会让节点在下次打开时自己跑一次生成。
+  delete cleanedData.generationUrls
+  delete cleanedData.generationCount
   delete cleanedData.loading
   delete cleanedData.autoExecute
 

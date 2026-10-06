@@ -83,8 +83,8 @@ export function useNodeRefs(nodeId) {
         usedEdges.add(r.slot.edge.id)
         if (r.kind === 'text') out += String(r.slot.src.data?.content || '').trim()
         else out += r.kind === 'image' ? `参考图${r.slot.index}` : `参考视频${r.slot.index}`
-      } else {
-        out += r.raw // 失效引用保持原样，让上游模型也看出这里有问题
+      } else if (r.kind !== 'image') {
+        out += r.raw
       }
       last = r.to
     })

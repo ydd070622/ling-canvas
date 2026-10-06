@@ -45,6 +45,9 @@ export const joinUrl = (baseUrl, path) => {
   if (/\/v1$/i.test(base) && /^\/v1beta\//i.test(suffix)) {
     return `${base.replace(/\/v1$/i, '')}${suffix}`
   }
+  if (/\/v1$/i.test(base) && /^\/volcengine\//i.test(suffix)) {
+    return `${base.replace(/\/v1$/i, '')}${suffix}`
+  }
   if (/\/v1$/i.test(base) && /^\/v1\//i.test(suffix)) {
     suffix = suffix.replace(/^\/v1/i, '')
   }
@@ -100,6 +103,9 @@ export const describeUpstreamError = (status, json, text) => {
     .map(normalizeStringValue)
     .find(value => value && value !== '[object Object]')
   const head = status ? `HTTP ${status}` : '请求失败'
+  if (status === 502 && /<(?:!doctype|html|head|body)\b/i.test(detail || '')) {
+    return 'HTTP 502：中转站网关未收到正常的上游响应，本次未返回图片。请稍后重试，持续失败请联系渠道客服。'
+  }
   if (!detail) return head
   return `${head}: ${detail.slice(0, 400)}`
 }

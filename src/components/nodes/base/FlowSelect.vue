@@ -2,7 +2,7 @@
   <!-- 自定义药丸下拉 | Custom pill dropdown -->
   <span
     ref="pillRef"
-    class="flow-pill flow-select-pill"
+    class="flow-pill flow-select-pill nodrag nopan"
     :class="{ 'fs-open': open }"
     role="button"
     tabindex="0"

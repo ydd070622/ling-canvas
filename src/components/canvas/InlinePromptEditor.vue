@@ -4,7 +4,7 @@
 </template>
 <script setup>
 import { ref, watch, onMounted, nextTick } from 'vue'
-const props = defineProps({ modelValue: { type: String, default: '' }, preset: { type: Object, default: null }, presetPosition: { type: Number, default: 0 } })
+const props = defineProps({ modelValue: { type: String, default: '' }, preset: { type: Object, default: null }, presetPosition: { type: Number, default: 0 }, referenceTokens: { type: Array, default: () => [] } })
 const emit = defineEmits(['update:modelValue', 'update:presetPosition', 'input', 'remove-preset', 'open-preset'])
 const editor = ref(null)
 let composing = false, savedStart = 0, savedEnd = 0
@@ -33,18 +33,26 @@ const setSelectionRange = (start, end = start) => {
   const point = index => { let remaining = Math.max(0, index); for (const node of textNodes) { if (remaining <= node.length) return [node, remaining]; remaining -= node.length } return [editor.value, editor.value.childNodes.length] }
   const range = document.createRange(); range.setStart(...point(start)); range.setEnd(...point(end)); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); savedStart = start; savedEnd = end
 }
+const appendPromptText = value => {
+  const tokens = new Set(props.referenceTokens)
+  for (const part of value.split(/(@(?:图片|视频|音频)\d+)/g)) {
+    if (tokens.has(part)) {
+      const span = document.createElement('span'); span.className = 'inline-reference-token'; span.textContent = part; editor.value.append(span)
+    } else editor.value.append(document.createTextNode(part))
+  }
+}
 const render = () => {
   if (!editor.value || composing) return
   const focused = document.activeElement === editor.value; if (focused) rememberSelection()
   const position = Math.min(props.modelValue.length, Math.max(0, props.presetPosition))
-  editor.value.replaceChildren(document.createTextNode(props.modelValue.slice(0, position)))
+  editor.value.replaceChildren(); appendPromptText(props.modelValue.slice(0, position))
   if (props.preset) {
     const chip = document.createElement('span'); chip.className = 'inline-preset-chip'; chip.contentEditable = 'false'; chip.setAttribute('data-preset-chip', '')
     const title = document.createElement('button'); title.type = 'button'; title.className = 'inline-preset-title'; title.textContent = '✦ ' + props.preset.title; title.title = '当前预设：' + props.preset.title; title.onmousedown = event => event.preventDefault(); title.onclick = () => emit('open-preset')
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'inline-preset-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', '移除预设：' + props.preset.title); remove.onmousedown = event => event.preventDefault(); remove.onclick = () => emit('remove-preset')
     chip.append(title, remove); editor.value.append(chip)
   }
-  editor.value.append(document.createTextNode(props.modelValue.slice(position)))
+  appendPromptText(props.modelValue.slice(position))
   if (focused) setSelectionRange(Math.min(savedStart, props.modelValue.length), Math.min(savedEnd, props.modelValue.length))
 }
 const syncInput = event => {
@@ -63,17 +71,19 @@ const insertText = value => {
 const beforeInput = event => { if (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak') { event.preventDefault(); insertText('\n') } }
 const pasteText = event => { event.preventDefault(); insertText(event.clipboardData.getData('text/plain')) }
 const finishComposition = event => { composing = false; syncInput(event); nextTick(render) }
-watch(() => [props.modelValue, props.preset?.id, props.preset?.title, props.presetPosition], () => {
+watch(() => [props.modelValue, props.preset?.id, props.preset?.title, props.presetPosition, props.referenceTokens.join('|')], () => {
   const chip = editor.value?.querySelector('[data-preset-chip]')
   let position = -1
   if (chip) { const range = document.createRange(); range.selectNodeContents(editor.value); range.setEndBefore(chip); position = plainText(range.cloneContents()).length }
-  if (editor.value && plainText(editor.value) === props.modelValue && !!chip === !!props.preset && (!chip || (chip.querySelector('.inline-preset-title')?.textContent === '✦ ' + props.preset.title && position === props.presetPosition))) return
+  if (!props.referenceTokens.length && editor.value && plainText(editor.value) === props.modelValue && !!chip === !!props.preset && (!chip || (chip.querySelector('.inline-preset-title')?.textContent === '✦ ' + props.preset.title && position === props.presetPosition))) return
   render()
 }, { flush: 'post' })
 onMounted(render)
 defineExpose({ focus: options => editor.value?.focus(options), setSelectionRange, get selectionStart() { rememberSelection(); return savedStart }, get selectionEnd() { rememberSelection(); return savedEnd }, get value() { return props.modelValue }, get scrollTop() { return editor.value?.scrollTop || 0 }, set scrollTop(value) { if (editor.value) editor.value.scrollTop = value } })
 </script>
 <style scoped>
+.inline-prompt-editor :deep(.inline-reference-token) { color: #777b00; font-weight: 600; }
+:global(.dark) .inline-prompt-editor :deep(.inline-reference-token) { color: #d6df4b; }
 .inline-prompt-editor { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
 .inline-prompt-editor :deep(.inline-preset-chip) { display: inline-flex; vertical-align: baseline; align-items: center; margin: 0 5px 0 0; padding: 1px 4px 1px 7px; border: 1px solid #8b6bc83b; border-radius: 6px; background: #8b6bc814; color: #7750b2; white-space: nowrap; user-select: none; }
 :global(.dark) .inline-prompt-editor :deep(.inline-preset-chip) { color: #c6a4f4; border-color: #b08be040; background: #a47bd91c; }

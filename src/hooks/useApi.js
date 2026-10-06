@@ -209,7 +209,8 @@ export const useImageGeneration = () => {
           requestOptions.onProgress?.(done, total)
         },
         // 扇出时部分请求失败：结果照收，失败原因交给节点去说
-        onPartialFailure: errors => requestOptions.onPartialFailure?.(errors)
+        onPartialFailure: errors => requestOptions.onPartialFailure?.(errors),
+        onImage: (items, index) => requestOptions.onImage?.(items, index)
       })
 
       if (runVersion !== generationVersion) {

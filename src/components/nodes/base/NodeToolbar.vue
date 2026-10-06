@@ -1,6 +1,6 @@
 <template>
   <!-- 药丸悬浮工具栏 | Pill-shaped floating toolbar -->
-  <div class="flow-toolbar" @mousedown.stop @click.stop>
+  <div class="flow-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop @click.stop>
     <slot />
   </div>
 </template>

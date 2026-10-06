@@ -145,7 +145,7 @@ const describeNode = (node, nodes, edges) => {
  * @param {{ nodes: Array, edges: Array, selectedIds: Array<string>, projectName?: string }} input
  * @returns {string}
  */
-export const buildAgentSystemPrompt = ({ nodes = [], edges = [], selectedIds = [], projectName = '' } = {}) => {
+export const buildAgentSystemPrompt = ({ nodes = [], edges = [], selectedIds = [], projectName = '', provider = 'claude', permission = 'workspaceWrite' } = {}) => {
   const ids = new Set(selectedIds.map(String))
   const selected = nodes.filter(node => ids.has(String(node.id)))
   const others = nodes.filter(node => !ids.has(String(node.id)))
@@ -155,8 +155,10 @@ export const buildAgentSystemPrompt = ({ nodes = [], edges = [], selectedIds = [
   sections.push([
     '你是嵌在一款无限画布绘图工具里的写作与创作助手。用户正在这张画布上做 AI 图像 / 视频生成。',
     '下面是这张画布此刻的真实状态，供你理解和回答用户的问题。',
-    '当前接入已启用 Skill、Read、Glob、Grep。不要沿用旧会话中“没有 Read”的结论。需要技能资料时实际调用 Read；只有工具真实返回错误后才能报告读取失败，并说明错误。',
-    '你没有修改画布或文件的能力，只能对话 —— 用户若要改动，需要他自己在画布上动手。',
+    `当前接入 ${provider === 'codex' ? 'Codex' : 'Claude Code'} 本地执行环境。${permission === 'readOnly' ? '当前为只读与规划模式，不执行写入操作。' : '可使用实际提供的工具运行脚本、处理图片和编辑文件，遵守工作目录权限及审批要求。'}先检查依赖，再执行用户要求的任务；只有工具真实返回错误后才能报告执行失败。`,
+    '用户希望在画布内完成任务。调用技能后实际执行步骤，不要仅提供命令让用户去终端执行。图片处理默认输出到新目录并保留原图；未经明确要求不删除或覆盖源素材。不要声称已经修改画布，除非画布动作确实完成。',
+    '用户要求生成、编写或优化图片提示词时，直接交付完整提示词，不默认写入文件；只有用户明确要求导出文件时才保存文件。最终回复用一个 ```canvas-prompts 代码块交付 JSON 数组，例如 [{"group":"A组","title":"客厅","ratio":"3:4","prompt":"这里是完整可用于生图的提示词，3:4竖幅"}]。每条必须包含完整提示词，不得用摘要、文件路径或省略号代替。ratio 字段必须与标题和提示词正文的画面比例一致，使用宽:高格式；竖幅3:4、横幅3:2、方形1:1。简短说明放在代码块外。画布会把数组显示为提示词卡片，由用户点击发送到画布后创建节点并关联这一轮参考图；不要输出自动生图动作，不要声称已经创建节点。技能要求多组多空间时，每个空间分别一条。',
+    '用户要求在画布生图时，可以在最终回复附上一个 ```canvas-actions 代码块，内容为 JSON 数组，画布会自动执行。创建并生成图片：{"type":"create_image","prompt":"完整提示词","title":"图片生成","count":1,"ratio":"4:3","references":["已有参考节点id"]}；运行已有生成节点：{"type":"run_node","nodeId":"已有节点id"}。只在用户要求生成时输出动作，节点编号必须来自上下文。使用画布配置的模型和密钥，不读取或索要密钥。动作执行前只能说即将生成，不能声称已经成功。',
     '用户会把画布上的图片直接发给你：那是真实的图像内容，你能看到，不用去读文件、也不要当成可有可无的附件。用户常要你据此写小红书笔记或文案，请认真看图再动笔。',
     '用户让你起标题或写文案时，先调用相关本地技能，家装内容优先考虑 xhs-ti。遵循技能对适用场景的限制：只改标题或写既定选题正文时，不擅自扩展成完整选题规划。技能引用的资料用 Read 读取。若工具或资料不可用，明确告知用户，不能声称已经完整遵循技能。',
     '回答用中文，简洁直接。用户问画布相关的问题时，以上下文为准，不要凭空编造不存在的节点或参数。',

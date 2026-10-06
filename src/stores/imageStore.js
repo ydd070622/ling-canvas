@@ -2,6 +2,7 @@
  * IndexedDB image store | IndexedDB 图片存取
  * Persists node images (data URLs) outside localStorage quota | 把节点图片持久化到 IndexedDB，绕开 localStorage 容量限制
  */
+import { canvasPreview } from '../utils/canvasPreview'
 import { blobToDataUrl, makeThumbDataUrl } from '../utils/imageThumb'
 import { createMediaCache } from '../utils/mediaCache'
 const mediaCache = createMediaCache()
@@ -12,8 +13,8 @@ const queuePreview = (key, dataUrl) => {
   if (!String(dataUrl).startsWith('data:image/') || key.endsWith('__thumb__') || key.endsWith('__preview__')) return
   previewQueue = previewQueue.catch(() => {}).then(async () => {
     if (peekImage(key) !== dataUrl) return
-    const result = await makeThumbDataUrl(dataUrl, { maxEdge: 768 })
-    if (result && peekImage(key) === dataUrl) await saveImage(imagePreviewKey(key), result.dataUrl)
+    const result = await canvasPreview(dataUrl)
+    if (result && peekImage(key) === dataUrl) await saveImage(imagePreviewKey(key), await blobToDataUrl(result.blob))
   }).catch(error => console.warn('Image preview generation failed:', error))
 }
 

@@ -74,7 +74,7 @@ const props = defineProps({
   selected: Boolean
 })
 
-const { viewport, screenToFlowCoordinate } = useVueFlow()
+const { viewport, screenToFlowCoordinate, findNode } = useVueFlow()
 const hovered = ref(false)
 const isRunning = computed(() => isEdgeRunning(
   nodes.value.find(node => node.id === props.source), nodes.value.find(node => node.id === props.target)
@@ -112,6 +112,18 @@ const OUTWARD = { left: -1, right: 1 }
 const pullInsideCard = (x, position) => (
   Number.isFinite(x) ? x - (OUTWARD[position] || 0) * PORT_ENDPOINT_INSET : x
 )
+// 优先使用 Vue Flow 的绝对节点边界，避免端口外移、尺寸覆盖或缩放测量
+// 与固定补偿量不一致。保留端口的 y，兼容渲染节点的多个不同高度输入口。
+const cardEndpointX = (id, x, position) => {
+  const node = findNode(id)
+  const left = node?.computedPosition?.x
+  const width = node?.dimensions?.width
+  if (Number.isFinite(left) && Number.isFinite(width) && width > 0) {
+    if (position === 'left') return left
+    if (position === 'right') return left + width
+  }
+  return pullInsideCard(x, position)
+}
 
 /**
  * `getBezierPath` 顺手把**曲线自身的中点**算出来了（labelX / labelY）。
@@ -120,9 +132,9 @@ const pullInsideCard = (x, position) => (
  * 想点它得先离开线，鼠标一离开剪刀就没了。
  */
 const geometry = computed(() => getBezierPath({
-  sourceX: pullInsideCard(props.sourceX, props.sourcePosition),
+  sourceX: cardEndpointX(props.source, props.sourceX, props.sourcePosition),
   sourceY: props.sourceY,
-  targetX: pullInsideCard(props.targetX, props.targetPosition),
+  targetX: cardEndpointX(props.target, props.targetX, props.targetPosition),
   targetY: props.targetY,
   sourcePosition: props.sourcePosition,
   targetPosition: props.targetPosition,

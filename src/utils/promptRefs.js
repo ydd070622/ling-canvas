@@ -188,7 +188,7 @@ export const checkGenerate = (node, nodes, edges) => {
   const refs = resolveRefs(node, nodes, edges)
   const prompt = String(node?.data?.prompt || '').trim()
 
-  const orphan = refs.find(r => r.status === 'orphan')
+  const orphan = refs.find(r => r.status === 'orphan' && r.kind !== 'image')
   if (orphan) {
     return {
       ok: false, code: 'E_ORPHAN', refs, slots,
@@ -196,7 +196,7 @@ export const checkGenerate = (node, nodes, edges) => {
     }
   }
 
-  const beyond = refs.find(r => r.status === 'beyond')
+  const beyond = refs.find(r => r.status === 'beyond' && r.kind !== 'image')
   if (beyond) {
     const count = slots.filter(s => s.kind === beyond.kind).length
     const what = KIND_TITLE[beyond.kind] || '内容'

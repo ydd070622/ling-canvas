@@ -5,6 +5,8 @@
     <div
       class="flex-1 relative overflow-hidden"
       :style="{ '--flow-zoom': zoomLevel }"
+      @click.capture="onReferenceClick"
+      @pointerdown.capture="onReferencePointerDown"
       @dragover.prevent="onDragOver"
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
@@ -45,6 +47,11 @@
         class="canvas-flow"
       >
       </VueFlow>
+
+      <div class="canvas-alignment-guides" aria-hidden="true">
+        <div v-for="guide in alignmentLines" :key="guide.axis" :class="`alignment-line-${guide.axis}`"
+          :style="guide.axis === 'x' ? { left: `${guide.position}px` } : { top: `${guide.position}px` }" />
+      </div>
 
       <div v-if="isDragOverCanvas" class="canvas-drop-overlay">
         <div class="canvas-drop-hint">
@@ -229,7 +236,7 @@
     <WorkflowPanel v-model:show="showWorkflowPanel" @add-workflow="handleAddWorkflow" />
 
     <!-- Agent Panel | 智能体抽屉：左侧栏图标 / Alt+A 打开 -->
-    <AgentPanel v-model:show="agent.panelOpen" />
+    <AgentPanel v-model:show="agent.panelOpen" :panel-width="agentDisplayWidth" @locate-nodes="locateAgentNodes" />
 
     <!-- Canvas search | 画布搜索 -->
     <n-modal v-model:show="showSearchModal" preset="card" :closable="false" :mask-closable="true" class="canvas-search-modal">
@@ -348,7 +355,7 @@
     <AssetPickerModal v-model:show="showAssetPicker" @select="handleAssetPick" />
 
     <!-- 底部 composer：选中的节点自动成为上下文 -->
-    <CanvasComposer v-show="!agent.panelOpen" :screen-to-flow="screenToFlowCoordinate" @attach="handleComposerAttach" />
+    <CanvasComposer ref="composerRef" :agent-open="agent.panelOpen" :agent-width="agentDisplayWidth" :screen-to-flow="screenToFlowCoordinate" @visibility-change="composerVisible = $event" @attach="handleComposerAttach" />
 
     <!-- 全屏查看图片 / 视频 / 音频（全局唯一一个） -->
     <MediaViewer />
@@ -362,6 +369,7 @@
  */
 import { useCanvasFlowSync } from '../composables/useCanvasFlowSync'
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, nextTick, markRaw } from 'vue'
+import { alignmentGuides } from '../utils/alignmentGuides'
 import { fitNodeGroups, releaseGroupMembers, joinDroppedGroupMembers } from '../utils/groupBounds'
 import { handleAgentShortcut } from '../utils/agentShortcut'
 import { agentShortcut, agentShortcutLabel } from '../stores/agentShortcut'
@@ -521,7 +529,8 @@ onBeforeUnmount(() => {
   if (groupFitFrame !== null) cancelAnimationFrame(groupFitFrame)
 })
 const { viewport, zoomIn, zoomOut, fitView, updateNodeInternals, screenToFlowCoordinate } = canvasFlow
-const { onNodesChange: onFlowNodesChange, onEdgeSelectionChange } = useCanvasFlowSync(nodes, edges, canvasFlow)
+const { onNodesChange: syncFlowNodesChange, onEdgeSelectionChange } = useCanvasFlowSync(nodes, edges, canvasFlow)
+const onFlowNodesChange = changes => syncFlowNodesChange(snapDragChanges(changes))
 
 // Register custom node types | 注册自定义节点类型
 const nodeTypes = {
@@ -973,6 +982,26 @@ const deleteSelectedHistoryAssets = async () => {
   selectedHistoryIds.value = []
 }
 
+const locateAgentNodes = async ids => {
+  const targets = nodes.value.filter(node => ids.includes(node.id))
+  if (!targets.length) return
+  nodes.value = nodes.value.map(node => ({ ...node, selected: ids.includes(node.id) }))
+  await nextTick()
+  const surface = document.querySelector('.vue-flow')?.getBoundingClientRect()
+  if (!surface) return
+  const panel = document.querySelector('.agent-panel')?.getBoundingClientRect()
+  const bounds = targets.map(node => {
+    const live = canvasFlow.findNode(node.id) || node
+    const position = live.computedPosition || live.position
+    return { x:position.x, y:position.y, width:live.dimensions?.width || 320, height:live.dimensions?.height || 240 }
+  })
+  const left = Math.min(...bounds.map(item => item.x)), top = Math.min(...bounds.map(item => item.y))
+  const right = Math.max(...bounds.map(item => item.x + item.width)), bottom = Math.max(...bounds.map(item => item.y + item.height))
+  const visibleLeft = 90, visibleRight = Math.max(visibleLeft + 100, (panel ? panel.left : surface.right) - surface.left - 24)
+  const visibleTop = 64, visibleBottom = Math.max(visibleTop + 100, surface.height - 80)
+  const zoom = Math.max(0.1, Math.min(1.2, (visibleRight - visibleLeft) / (right - left + 120), (visibleBottom - visibleTop) / (bottom - top + 120)))
+  canvasFlow.setViewport({ x:(visibleLeft + visibleRight) / 2 - (left + right) / 2 * zoom, y:(visibleTop + visibleBottom) / 2 - (top + bottom) / 2 * zoom, zoom }, { duration:320 })
+}
 const focusSearchNode = async (node) => {
   nodes.value = nodes.value.map(item => ({ ...item, selected: item.id === node.id }))
   showSearchModal.value = false
@@ -1492,6 +1521,32 @@ const onConnect = (params) => {
     data: { order: nextOrder }
   })
 }
+const composerRef = ref(null)
+const composerVisible = ref(false)
+const canvasWindowWidth = ref(window.innerWidth)
+// 临时让位不写入 panelWidth，收起输入框后自然恢复用户保存的宽度。
+const agentDisplayWidth = computed(() => {
+  if (!agent.panelOpen || !composerVisible.value) return agent.panelWidth
+  const composerWidth = Math.min(700, canvasWindowWidth.value - 190)
+  return Math.min(agent.panelWidth, Math.max(330, (canvasWindowWidth.value - composerWidth) / 2 - 24))
+})
+const referenceNodeForEvent = event => {
+  if (!event.ctrlKey || event.target?.closest?.('button, input, textarea, .vue-flow__handle')) return null
+  const id = event.target?.closest?.('.vue-flow__node')?.getAttribute('data-id')
+  return nodes.value.find(node => String(node.id) === id && node.type === 'image' && node.data?.url)
+}
+const onReferencePointerDown = event => {
+  if (event.button !== 0) return
+  const node = referenceNodeForEvent(event)
+  if (!node) return
+  event.preventDefault(); event.stopPropagation()
+  composerRef.value?.addImageReference(node.id)
+}
+const onReferenceClick = event => {
+  const node = referenceNodeForEvent(event)
+  if (!node) return
+  event.preventDefault(); event.stopPropagation()
+}
 const onNodeClick = (event) => {
   // 点端口（`+`）只是"从这里建节点"，不该改变选中。
   // 否则卡片会从内容态展开、位置补偿一动，端口就跑掉了 —— 菜单看着像在跳，也很难点。
@@ -1525,7 +1580,86 @@ const handleViewportChange = (newViewport) => {
   refreshSelectionOverlay()
 }
 
-const handleNodeDragStart = ({ node, nodes: draggedNodes }) => {
+const alignmentLines = ref([])
+let alignmentMovingIds = new Set()
+let alignmentAlt = false
+const trackAlignmentAlt = event => { alignmentAlt = event.altKey }
+const snapDragChanges = changes => {
+  if (!alignmentMovingIds.size || alignmentAlt) return changes
+  const positions = changes.filter(change => change.type === 'position' && change.position && alignmentMovingIds.has(change.id))
+  if (!positions.length) return changes
+  const container = document.querySelector('.canvas-flow')
+  if (!container) return changes
+  const zoom = viewport.value.zoom || 1
+  const moving = [], stationary = []
+  for (const element of container.querySelectorAll('.vue-flow__node')) {
+    const id = element.getAttribute('data-id')
+    const node = nodes.value.find(item => item.id === id)
+    if (!node) continue
+    const box = (element.querySelector('.flow-card') || element).getBoundingClientRect()
+    const change = positions.find(item => item.id === id)
+    const dx = change ? (change.position.x - node.position.x) * zoom : 0
+    const dy = change ? (change.position.y - node.position.y) * zoom : 0
+    const rect = { left: box.left + dx, right: box.right + dx, top: box.top + dy, bottom: box.bottom + dy }
+    if (alignmentMovingIds.has(id)) {
+      if (change && !alignmentMovingIds.has(node.parentNode)) moving.push(rect)
+    } else stationary.push(rect)
+  }
+  const guides = alignmentGuides(moving, stationary, 10)
+  const dx = (guides.find(guide => guide.axis === 'x')?.offset || 0) / zoom
+  const dy = (guides.find(guide => guide.axis === 'y')?.offset || 0) / zoom
+  return changes.map(change => {
+    const node = nodes.value.find(item => item.id === change.id)
+    return positions.includes(change) && !alignmentMovingIds.has(node?.parentNode)
+      ? { ...change, position: { x: change.position.x + dx, y: change.position.y + dy } } : change
+  })
+}
+let alignmentFrame = 0
+const stopAlignmentGuides = () => {
+  alignmentMovingIds.clear()
+  window.removeEventListener('keydown', trackAlignmentAlt)
+  window.removeEventListener('keyup', trackAlignmentAlt)
+  alignmentAlt = false
+  cancelAnimationFrame(alignmentFrame)
+  alignmentFrame = 0
+  alignmentLines.value = []
+}
+const startAlignmentGuides = moving => {
+  stopAlignmentGuides()
+  const ids = new Set(moving.map(node => node.id))
+  // Children of a moving group are moving too, never stationary targets.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const node of nodes.value) if (ids.has(node.parentNode) && !ids.has(node.id)) { ids.add(node.id); changed = true }
+  }
+  alignmentMovingIds = ids
+  window.addEventListener('keydown', trackAlignmentAlt)
+  window.addEventListener('keyup', trackAlignmentAlt)
+  const tick = () => {
+    const container = document.querySelector('.canvas-flow')
+    if (!container) { stopAlignmentGuides(); return }
+    const origin = container.getBoundingClientRect()
+    const movingRects = [], stationaryRects = []
+    for (const element of container.querySelectorAll('.vue-flow__node')) {
+      const id = element.getAttribute('data-id')
+      const card = element.querySelector('.flow-card') || element
+      const box = card.getBoundingClientRect()
+      if (!box.width || !box.height) continue
+      const rect = { left: box.left - origin.left, right: box.right - origin.left,
+        top: box.top - origin.top, bottom: box.bottom - origin.top }
+      ;(ids.has(id) ? movingRects : stationaryRects).push(rect)
+    }
+    alignmentLines.value = alignmentGuides(movingRects, stationaryRects)
+    alignmentFrame = requestAnimationFrame(tick)
+  }
+  alignmentFrame = requestAnimationFrame(tick)
+}
+onBeforeUnmount(stopAlignmentGuides)
+
+const handleNodeDragStart = ({ node, nodes: draggedNodes, event }) => {
+  startAlignmentGuides(draggedNodes?.length ? draggedNodes : [node])
+  alignmentAlt = !!event?.altKey
   startBatchOperation()
   draggedGroupMembers.clear()
   dragGroupBounds.clear()
@@ -1545,6 +1679,7 @@ const handleNodeDragStart = ({ node, nodes: draggedNodes }) => {
   }
 }
 const handleNodeDragStop = () => {
+  stopAlignmentGuides()
   const allowDetach = true
   // Engine release patches finish before changing parent coordinates.
   requestAnimationFrame(() => {
@@ -1848,6 +1983,7 @@ const goBack = () => {
 
 // Check if mobile | 检测是否移动端
 const checkMobile = () => {
+  canvasWindowWidth.value = window.innerWidth
   isMobile.value = window.innerWidth < 768
 }
 
@@ -2433,16 +2569,25 @@ onUnmounted(() => {
 .canvas-flow .vue-flow__nodesselection-rect { opacity: 0; border: 0; background: transparent; pointer-events: none; }
 .canvas-flow .vue-flow__pane,
 .canvas-flow .vue-flow__container { cursor: default; }
-.canvas-flow .vue-flow__node,
-.canvas-flow .vue-flow__node * { cursor: grab !important; }
-.canvas-flow .vue-flow__node.dragging,
-.canvas-flow .vue-flow__node.dragging * { cursor: grabbing !important; }
+.canvas-alignment-guides { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+.alignment-line-x { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(160, 170, 185, .65); }
+.alignment-line-y { position: absolute; left: 0; right: 0; height: 1px; background: rgba(160, 170, 185, .65); }
+.canvas-flow .vue-flow__node { cursor: grab; }
+.canvas-flow .vue-flow__node.dragging { cursor: grabbing; }
 .canvas-flow .vue-flow__node input,
 .canvas-flow .vue-flow__node textarea,
 .canvas-flow .vue-flow__node [contenteditable="true"],
 .canvas-flow .vue-flow__node .cursor-text { cursor: text !important; }
 .canvas-flow .vue-flow__node button,
-.canvas-flow .vue-flow__node a { cursor: pointer !important; }
+.canvas-flow .vue-flow__node a,
+.canvas-flow .vue-flow__node select,
+.canvas-flow .vue-flow__node summary,
+.canvas-flow .vue-flow__node [role="button"],
+.canvas-flow .vue-flow__node input:is([type="checkbox"], [type="radio"], [type="range"]),
+.canvas-flow .vue-flow__node label:has(input:is([type="checkbox"], [type="radio"])) { cursor: pointer !important; }
+.canvas-flow .vue-flow__node :is(button, select, input, textarea):disabled,
+.canvas-flow .vue-flow__node [role="button"][aria-disabled="true"] { cursor: not-allowed !important; }
+.canvas-flow .vue-flow__node .flow-toolbar { cursor: default; }
 .canvas-flow .vue-flow__node .vue-flow__handle { cursor: crosshair !important; }
 .canvas-flow .vue-flow__node .group-resize.left,
 .canvas-flow .vue-flow__node .group-resize.right { cursor: ew-resize !important; }

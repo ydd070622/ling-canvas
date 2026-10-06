@@ -2,7 +2,7 @@
   <!-- 比例选择药丸 + 弹出面板（自适应竖条 + 常见比例网格） -->
   <span
     ref="pillRef"
-    class="flow-pill flow-select-pill ratio-picker"
+    class="flow-pill flow-select-pill ratio-picker nodrag nopan"
     :class="{ 'fs-open': open }"
     role="button"
     tabindex="0"

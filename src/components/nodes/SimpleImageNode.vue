@@ -34,33 +34,37 @@
       <!-- 一次生成的多张都留在这张卡里（画廊），主图排第一。
            展开是整齐网格，收起只剩主图 + 角标。
            格子按图片自身比例成形 —— 写死 4:3 会让 3:4 的竖图两边挂黑边。 -->
-      <div v-if="galleryOpen && galleryItems.length > 1" class="flow-image-gallery" :style="galleryStyle">
-        <div v-for="(item, index) in galleryItems" :key="item.url" class="flow-image-gallery-item">
-          <img v-if="!brokenUrls[item.url]" :src="item.url" :alt="`${data.label || '图片'} ${index + 1}`"
-            @dblclick.stop="openPreviewAt(item.url)" @error="markBroken(item.url)" />
+      <TransitionGroup v-if="galleryItems.length > 1" key="gallery" name="gallery-card" tag="div" class="flow-image-gallery flow-image-gallery-fade" :class="{ 'is-open': galleryOpen }" :style="galleryStyle">
+        <div v-for="(item, index) in galleryItems" :key="item.index" class="flow-image-gallery-item" :class="{ 'is-main': index === 0 }">
+          <NodeMedia v-if="item.pending" tone="image" :loading="true" :ratio="configuredRatio" :loading-text="`第 ${index + 1} 张生成中`" />
+          <CanvasPreviewImage v-else-if="!brokenUrls[item.url]" :src="item.url" :alt="`${data.label || '图片'} ${index + 1}`"
+            @dimensions="index === 0 && onGalleryDimensions($event)" @dblclick.stop="openPreviewAt(item.url)" @error="markBroken(item.url)" />
           <!-- 失效的图（旧存档里的临时链接重启就死）给个说明，不留一个问号般的空框 -->
           <span v-else class="flow-image-gallery-dead">图片已失效</span>
-          <div class="flow-image-gallery-actions nodrag">
-            <button v-if="!brokenUrls[item.url]" type="button" @click.stop="downloadAt(item.url, index)">
+          <div v-if="galleryOpen" class="flow-image-gallery-actions nodrag">
+            <button v-if="item.url && !brokenUrls[item.url]" type="button" @click.stop="downloadAt(item.url, index)">
               <n-icon :size="13"><DownloadOutline /></n-icon>下载
             </button>
             <button v-if="index === 0" type="button" @click.stop="galleryOpen = false">
               <n-icon :size="13"><ChevronUpOutline /></n-icon>收起
             </button>
-            <button v-else type="button" @click.stop="setMainImage(item.index)">
+            <button v-else-if="item.url && !data.loading" type="button" @click.stop="setMainImage(item.index)">
               <n-icon :size="13"><StarOutline /></n-icon>设为主图
             </button>
           </div>
         </div>
-      </div>
-      <div v-else class="flow-image-stack" :class="{ 'is-stacked': galleryItems.length > 1 }">
-        <div v-for="(item, index) in galleryItems.slice(1, 3)" :key="`back-${item.index}`"
+        <button v-if="!galleryOpen" key="gallery-count" class="flow-gallery-count nodrag" type="button" :aria-label="`展开 ${galleryItems.length} 张图片`" @click.stop="galleryOpen = true"><n-icon :size="17"><ExpandOutline /></n-icon>{{ galleryItems.length }}张</button>
+      </TransitionGroup>
+      <div v-else key="stack" class="flow-image-stack" :class="{ 'is-stacked': galleryItems.length > 1 }">
+        <div v-for="(item, index) in galleryItems.slice(1)" :key="`back-${item.index}`"
           class="flow-image-stack-back" :style="{ '--flow-stack-layer': index + 1 }" aria-hidden="true">
-          <img v-if="!brokenUrls[item.url]" :src="item.url" alt="" @error="markBroken(item.url)" />
+          <CanvasPreviewImage v-if="item.url && !brokenUrls[item.url]" :src="item.url" alt="" @error="markBroken(item.url)" />
         </div>
         <NodeMedia
           tone="image"
-          :url="data.url || data.previewUrl"
+          :url="data.url || ''"
+          :preview-url="data.previewUrl || ''"
+          :original-dimensions="data.mediaDimensions"
           :loading="data.loading"
           :alt="data.label"
           @upload="triggerFileInput"
@@ -100,6 +104,8 @@ import { NodeFrame } from './base'
 import NodeMedia from './base/NodeMedia.vue'
 import ImageEditModal from '../canvas/ImageEditModal.vue'
 import { formatMediaDetails } from '../../utils/mediaDetails'
+import CanvasPreviewImage from './base/CanvasPreviewImage.vue'
+import { imageGallerySlots } from '../../utils/imageGallery'
 import { downloadMedia } from '../../utils/downloadMedia'
 import { useNodeRefs } from '../../composables/useNodeRefs'
 import { useFocusExpanded, useMultiSelected } from '../../composables/useFocusMode'
@@ -158,13 +164,7 @@ const galleryOpen = ref(false)
  * `index` 是它在 `galleryUrls` 里的原始下标 —— 「设为主图」要靠它写回去。
  */
 const galleryItems = computed(() => {
-  const urls = Array.isArray(props.data?.galleryUrls) ? props.data.galleryUrls : []
-  if (urls.length > 1) {
-    const main = Math.min(Math.max(Number(props.data?.mainImageIndex) || 0, 0), urls.length - 1)
-    const order = [main, ...urls.map((_, index) => index).filter(index => index !== main)]
-    return order.filter(index => urls[index]).map(index => ({ url: urls[index], index }))
-  }
-  return props.data?.url ? [{ url: props.data.url, index: -1 }] : []
+  return imageGallerySlots(props.data)
 })
 /** 加载失败的图：死链接（旧存档的 blob: 重启即失效）不给它留一个空框 */
 const brokenUrls = ref({})
@@ -187,7 +187,8 @@ const cardWidth = computed(() => {
   return galleryOpen.value && galleryItems.value.length > 1 ? single * 2 + 10 : single
 })
 /** 格子跟着图片比例走，别让它写死 4:3 */
-const galleryStyle = computed(() => ({ '--flow-gallery-aspect': String(effectiveRatio.value || 4 / 3) }))
+const galleryStyle = computed(() => ({ '--flow-gallery-aspect': String(effectiveRatio.value || 4 / 3), '--flow-gallery-card-width': `${cardWidthForRatio(effectiveRatio.value)}px` }))
+const onGalleryDimensions = value => { dimensions.value = value; mediaRatio.value = value.width / value.height }
 const onMediaRatio = (value) => { mediaRatio.value = value }
 
 const fileInputRef = ref(null)
@@ -399,10 +400,16 @@ const handleSend = async (force = false) => {
       return
     }
 
-    updateNode(props.id, { loading: true, error: '', model, size: selectedSize.value || null, resolution: selectedResolution.value })
+    updateNode(props.id, { loading: true, generationCount: Number(props.data?.count || 1), generationUrls: [], error: '', model, size: selectedSize.value || null, resolution: selectedResolution.value })
     // 正文里 @文本1 换成上游正文，@图片1 换成可读标记；参考图另走素材字段
     const generated = await generate(buildRequest(), {
       providerId: providerId.value,
+      onImage: (items, index) => {
+        if (seq !== sendSeq) return
+        const urls = [...(props.data?.generationUrls || [])]
+        urls[index] = items?.[0]?.url || ''
+        updateNode(props.id, { generationUrls: urls })
+      },
       onPartialFailure: (errors) => {
         partialFailure = errors.map(error => error?.message || String(error)).join('；')
       }
@@ -416,7 +423,7 @@ const handleSend = async (force = false) => {
     // 一次生成的多张全留在这张卡里：第 1 张当主图，其余进画廊（角标展开看）
     galleryOpen.value = false
     updateNode(props.id, {
-      url, galleryUrls: urls, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+      url, galleryUrls: urls, generationUrls: [], generationCount: 0, mainImageIndex: 0, loading: false, updatedAt: Date.now()
     })
 
     // 部分请求失败时结果照收（保住的比丢掉好），但要让用户知道少了几张、为什么少

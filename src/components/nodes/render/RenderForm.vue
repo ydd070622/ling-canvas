@@ -14,7 +14,7 @@
 
        所有控件都走 set() 往上抛，**没有一个 v-model 绑 props.data** ——
        直接改 store 对象会绕过 updateNode 的存档与撤销栈。 -->
-  <div class="flow-render-form">
+  <div class="flow-render-form nodrag nopan">
     <label class="flow-render-field">
       <span class="flow-render-field-head">
         <span class="flow-render-field-icon" v-html="TEXT_ICON"></span>

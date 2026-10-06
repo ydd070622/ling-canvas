@@ -3,6 +3,8 @@
  * Manages nodes, edges and canvas state
  */
 import { ref } from 'vue'
+import { canvasPreview } from '../utils/canvasPreview'
+import { blobToDataUrl } from '../utils/imageThumb'
 import { promoteConnectedRenderNodes } from '../utils/renderConnections'
 import { updateProjectCanvas, getProjectCanvas, projects, cleanNodeForStorage } from './projects'
 import { cloneMediaSnapshot, equalMediaSnapshots } from '../utils/mediaSnapshot'
@@ -679,11 +681,11 @@ export const loadProject = (projectId) => {
     canvasViewport.value = migratedCanvasData.viewport || { x: 100, y: 50, zoom: 0.8 }
 
     // Restore persisted node images from IndexedDB | 从 IndexedDB 恢复节点图片
-    imageRestorePromise = restoreProjectImages(projectId, migratedCanvasData._imageNodeAliases)
+    imageRestorePromise = Promise.all([restoreProjectImages(projectId, migratedCanvasData._imageNodeAliases), hydrateAssetRefs(projectId)])
       // 串行、且必须挂在同一个 promise 上：autoSaveEnabled 的解除挂在它后面
       // （见下方 imageRestorePromise.finally）。素材 hydrate 是 N 次 IPC，
       // 比 restore 慢得多，并发会让自动保存在图片还没读完时就打开。
-      .then(() => hydrateAssetRefs(projectId))
+
       .then(() => {
         // 播种缩略图指纹。此时节点的 url 刚恢复好，正是能算指纹的时机。
         // 不播种的话，Vue Flow 挂载触发的第一次自动保存会以为"源变了"，
@@ -835,11 +837,12 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
     // below so legacy documents still claim each image only once.
     const mediaByKey = new Map()
     let cursor = 0
-    await Promise.all(Array.from({ length: Math.min(4, keys.length) }, async () => {
+    await Promise.all(Array.from({ length: Math.min(1, keys.length) }, async () => {
       while (cursor < keys.length) {
         const key = keys[cursor++]
         if (String(key).slice(prefix.length) === THUMB_MEDIA_ID || String(key).endsWith(':__preview__')) continue
         try { mediaByKey.set(key, await loadImage(key)) } catch { /* Other images can still recover. */ }
+        await new Promise(resolve => setTimeout(resolve, 0))
       }
     }))
     if (currentProjectId.value !== projectId) return
@@ -931,6 +934,20 @@ const ASSET_OFFLINE_MESSAGE = '素材库未连接'
 const findNodeById = (nodeId) => nodes.value.find(node => String(node.id) === String(nodeId))
 
 /** 把素材的渲染状态写回**当前**节点；不走 updateNode，避免污染撤销栈与触发保存 */
+const persistAssetPreview = async (projectId, nodeId, assetRef, url) => {
+  const preview = await canvasPreview(url)
+  if (!preview || currentProjectId.value !== projectId) return
+  const node = findNodeById(nodeId)
+  if (node?.data?.assetRef !== assetRef || node.data.url !== url) return
+  const dataUrl = await blobToDataUrl(preview.blob)
+  await saveImage(imagePreviewKey(`${projectId}:${nodeId}`), dataUrl)
+  if (currentProjectId.value !== projectId) return
+  const current = findNodeById(nodeId)
+  if (current?.data?.assetRef !== assetRef || current.data.url !== url) return
+  current.data.previewUrl = dataUrl
+  current.data.mediaDimensions = { width: preview.width, height: preview.height }
+}
+
 const applyAssetState = (nodeId, { url, error }) => {
   const id = String(nodeId)
   nodes.value = nodes.value.map(node => {
@@ -998,7 +1015,9 @@ export const hydrateAssetRefs = async (projectId) => {
     }
     try {
       const url = await resolveAssetUrl(item.ref)
+      if (currentProjectId.value !== projectId || findNodeById(item.id)?.data?.assetRef !== item.ref) return
       applyAssetState(item.id, { url })
+      await persistAssetPreview(projectId, item.id, item.ref, url).catch(error => console.warn('Asset preview save failed:', error))
     } catch {
       applyAssetState(item.id, { url: '', error: ASSET_MISSING_MESSAGE })
     }
@@ -1014,6 +1033,7 @@ export const hydrateSingleAssetNode = async (nodeId) => {
   const initial = findNodeById(nodeId)
   if (!initial?.data?.assetRef) return
   const ref = initial.data.assetRef
+  const projectId = currentProjectId.value
   try {
     const [status] = await statAssetFiles([ref])
     if (status && !status.exists) {
@@ -1021,7 +1041,9 @@ export const hydrateSingleAssetNode = async (nodeId) => {
       return
     }
     const url = await resolveAssetUrl(ref)
+    if (currentProjectId.value !== projectId || findNodeById(nodeId)?.data?.assetRef !== ref) return
     applyAssetState(nodeId, { url })
+    await persistAssetPreview(projectId, nodeId, ref, url).catch(error => console.warn('Asset preview save failed:', error))
   } catch {
     applyAssetState(nodeId, { url: '', error: ASSET_MISSING_MESSAGE })
   }

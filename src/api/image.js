@@ -123,6 +123,11 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
   const effectiveCapability = capability || (referenceImages.length ? 'image-edit' : 'image')
   // 渠道显式声明过协议就完全听它的，不做任何自动改道
   const explicitOverride = upstream.providerConfig?.protocols?.[effectiveCapability]
+  // FireMux 的 Seedream 文生图和多参考图共用 Ark 原生 JSON 入口。
+  const firemuxSeedream = !explicitOverride
+    && /seedream/i.test(modelKey)
+    && (upstream.providerConfig?.defaultBaseUrl?.includes('api.chatfire.site')
+      || /^https?:\/\/(?:api\.chatfire\.site|api\.firemux\.com)(?:\/|$)/i.test(upstream.baseUrl || ''))
 
   // 生图/改图端点默认只发标准字段 —— 多一个未知键就整个请求 400 才是常态，
   // 想广播多种尺寸写法的渠道要显式开 broadcastImageParams（见 providerCapabilities）
@@ -139,6 +144,27 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
 
   /** 按指定协议发起一次请求 */
   const performRequest = async (useProtocol) => {
+    if (firemuxSeedream) {
+      const ratio = normalizeRatioKey(payload.size, { fallback: '' })
+      const dimensions = String(payload.size || '').match(/^(\d+)x(\d+)$/i)
+      const pixelSize = dimensions && Number(dimensions[1]) > 32 && Number(dimensions[2]) > 32
+      return requestUpstream({
+        ...upstream,
+        endpointType: 'image',
+        requestPath: '/volcengine/api/v3/images/generations',
+        json: {
+          model: modelKey,
+          prompt,
+          size: pixelSize ? payload.size : (payload.resolution || '2K'),
+          ...(ratio ? { aspect_ratio: ratio } : {}),
+          ...(referenceImages.length ? { image: await toTransportableImages(referenceImages) } : {}),
+          n: 1,
+          response_format: 'url'
+        },
+        signal,
+        timeoutMs
+      })
+    }
     if (useProtocol === 'gemini') {
       return requestUpstream({
         ...upstream,
@@ -231,7 +257,7 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
       && !explicitOverride
       && isGeminiNativeUnavailableError(error)
     // 自愈二：图片端点回「不支持该模型」→ 改走对话协议
-    const canRetryImageViaChat = protocol !== 'chat' && protocol !== 'gemini'
+    const canRetryImageViaChat = !firemuxSeedream && protocol !== 'chat' && protocol !== 'gemini'
       && !explicitOverride
       && isUnsupportedImageModelError(error)
     // 渠道显式指定过协议则不擅自改道（用户的显式选择优先）
@@ -282,7 +308,8 @@ export const generateImage = async (payload = {}, options = {}) => {
   // 全部同时发，不做并发上限：用户明确要的是「快」，代价是瞬时并发等于张数。
   // finally 而不是 then —— 失败的那次也要算进度，否则界面会永远停在 2/4。
   const settled = await Promise.allSettled(
-    Array.from({ length: desired }, () => requestImagesOnce(payload, options)
+    Array.from({ length: desired }, (_, index) => requestImagesOnce(payload, options)
+      .then(items => { options.onImage?.(items, index); return items })
       .finally(() => { done += 1; onProgress?.(done, desired) }))
   )
 

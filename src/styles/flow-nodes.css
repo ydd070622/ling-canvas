@@ -1066,7 +1066,7 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 }
 
 /* ============ 图片节点的画廊（一张卡多图）============ */
-.flow-image-stack { position: relative; }
+.flow-image-stack { position: relative; isolation: isolate; }
 .flow-node-image .flow-stage:has(.flow-image-stack.is-stacked) { overflow: visible; }
 .flow-node-image.is-compact .flow-card:has(.flow-image-stack.is-stacked) { background: transparent; }
 .flow-image-stack.is-stacked .flow-media {
@@ -1077,12 +1077,13 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-image-stack-back {
   position: absolute;
   inset: 0;
-  z-index: calc(3 - var(--flow-stack-layer));
+  z-index: calc(-1 * var(--flow-stack-layer));
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--flow-card-radius);
   background: var(--flow-well-solid);
-  transform: translate(calc(var(--flow-stack-layer) * 12px), calc(var(--flow-stack-layer) * 6px));
+  transform-origin: 0 100%;
+  transform: rotate(calc(min(var(--flow-stack-layer), 8) * 2deg));
   pointer-events: none;
 }
 .flow-image-stack-back img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -1803,4 +1804,26 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 }
 .dark .flow-node-outer.flow-node-image:is(.is-focused, .is-multi) .flow-stage:has(img) {
   box-shadow: 0 6px 16px rgba(0, 0, 0, .45), 0 24px 40px -4px rgba(0, 0, 0, .70);
+}
+
+/* Expanded galleries expose the canvas between independently rounded cards. */
+.flow-node-outer.flow-node-image .flow-stage:has(.flow-image-gallery),
+.flow-node-outer.flow-node-image.is-compact .flow-stage:has(.flow-image-gallery) {
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.flow-image-gallery-item { box-shadow: 0 5px 18px -6px rgba(20, 24, 30, 0.16); }
+
+/* Keep the same cards and fixed image dimensions during gallery changes. */
+.flow-image-gallery-fade { position: relative; grid-template-columns: repeat(2, var(--flow-gallery-card-width)); }
+.flow-image-gallery-fade:not(.is-open) { grid-template-columns: var(--flow-gallery-card-width); }
+.flow-image-gallery-fade .flow-image-gallery-item { width: var(--flow-gallery-card-width); transition: opacity .26s ease-out, transform .26s ease-out; }
+.flow-image-gallery-fade:not(.is-open) .flow-image-gallery-item { grid-area: 1 / 1; opacity: 0; transform: translateX(12px); pointer-events: none; }
+.flow-image-gallery-fade:not(.is-open) .flow-image-gallery-item.is-main { opacity: 1; transform: none; pointer-events: auto; z-index: 1; }
+.flow-image-gallery-fade.is-open .flow-image-gallery-item { opacity: 1; transform: none; }
+.gallery-card-move { transition: transform .26s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .flow-image-gallery-fade .flow-image-gallery-item, .gallery-card-move { transition: none; }
 }
