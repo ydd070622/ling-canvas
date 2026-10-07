@@ -27,18 +27,18 @@
           <template #trigger><div class="prompt-ref"
           :class="{ 'is-dragging': referenceDragId === String(ref.nodeId) }" :data-reference-id="String(ref.nodeId)"
           title="Ctrl + 点击插入图片引用；长按拖动调整顺序" @pointerdown="startReferencePress($event, ref)" @contextmenu.prevent>
-          <img v-if="ref.thumb" :src="ref.thumb" alt="" draggable="false" />
+          <CanvasPreviewImage v-if="ref.thumb" :src="ref.thumb" alt="" draggable="false" />
           <span v-else class="prompt-ref-thumb"></span>
           <span class="prompt-ref-label">{{ ref.token.replace(/^@/, '') }}</span>
           <button type="button" class="prompt-ref-x" @pointerdown.stop @click="removeMention(ref)">×</button>
         </div></template>
           <div class="prompt-reference-preview">
             <CanvasPreviewImage :src="ref.thumb" :alt="ref.token.replace(/^@/, '')" />
-            <button type="button" @click="openMediaViewer({ url: ref.thumb, kind: 'image', alt: ref.token.replace(/^@/, '') })">查看原图</button>
+            <button type="button" @click="openMediaViewer({ url: ref.original || ref.thumb, kind: 'image', alt: ref.token.replace(/^@/, '') })">查看原图</button>
           </div>
         </NPopover>
       </TransitionGroup>
-      <Teleport to="body"><div v-if="referenceGhost" class="reference-drag-ghost" :style="{ left: referenceGhost.x + 'px', top: referenceGhost.y + 'px' }"><img v-if="referenceGhost.thumb" :src="referenceGhost.thumb" alt="" /><span>{{ referenceGhost.token.replace(/^@/, '') }}</span></div></Teleport>
+      <Teleport to="body"><div v-if="referenceGhost" class="reference-drag-ghost" :style="{ left: referenceGhost.x + 'px', top: referenceGhost.y + 'px' }"><CanvasPreviewImage v-if="referenceGhost.thumb" :src="referenceGhost.thumb" alt="" /><span>{{ referenceGhost.token.replace(/^@/, '') }}</span></div></Teleport>
 
       <div class="compose-main">
         <!-- 这两类节点没有"提示词"这回事，正文框换成一句说明 -->
@@ -657,20 +657,25 @@ const referenceOrder = ref([])
 let referencePress = null
 let referenceTimer = null
 const mentionRefs = computed(() => {
-  const linked = editingNode.value ? computeSlots(editingNode.value, nodes.value, edges.value).slots.map(slot => ({ nodeId: slot.src.id, token: slot.token, edgeId: slot.edge.id, thumb: slot.src.data?.url || '' })) : []
-  const list = [...linked, ...mentioned.value.filter(item => !linked.some(ref => String(ref.nodeId) === String(item.nodeId))).map(item => ({ ...item, thumb: nodes.value.find(n => String(n.id) === String(item.nodeId))?.data?.url || '' }))]
-  if (!referenceOrder.value.length) return list
+  const linked = editingNode.value ? computeSlots(editingNode.value, nodes.value, edges.value).slots.map(slot => ({ nodeId: slot.src.id, token: slot.token, edgeId: slot.edge.id, thumb: slot.src.data?.previewUrl || slot.src.data?.url || '', original: slot.src.data?.url || '' })) : []
+  const list = [...linked, ...mentioned.value.filter(item => !linked.some(ref => String(ref.nodeId) === String(item.nodeId))).map(item => ({ ...item, thumb: nodes.value.find(n => String(n.id) === String(item.nodeId))?.data?.previewUrl || nodes.value.find(n => String(n.id) === String(item.nodeId))?.data?.url || '', original: nodes.value.find(n => String(n.id) === String(item.nodeId))?.data?.url || '' }))]
+  const counts = {}
+  const renumber = items => items.map(item => { const kind = nodes.value.find(n => String(n.id) === String(item.nodeId))?.type; return kind ? { ...item, token: tokenFor({ type: kind }, counts[kind] = (counts[kind] || 0) + 1) } : item })
+  if (!referenceOrder.value.length) return renumber(list)
   const positions = new Map(referenceOrder.value.map((id, index) => [id, index]))
-  return list.sort((a, b) => (positions.get(String(a.nodeId)) ?? 999) - (positions.get(String(b.nodeId)) ?? 999))
+  return renumber(list.sort((a, b) => (positions.get(String(a.nodeId)) ?? 999) - (positions.get(String(b.nodeId)) ?? 999)))
 })
 const stopReferencePress = (event) => {
   const commit = referenceDragId.value && event?.type === 'pointerup'
   if (commit) {
     const list = mentionRefs.value
     const linked = list.filter(item => item.edgeId).map(item => item.edgeId)
-    if (editingNode.value && linked.length) reorderNodeEdges(editingNode.value.id, linked, true)
+    if (editingNode.value && linked.length) reorderNodeEdges(editingNode.value.id, linked, false)
+    if(editingNode.value) text.value = editingNode.value.data?.prompt || text.value
     const positions = new Map(list.map((item, index) => [String(item.nodeId), index]))
-    mentioned.value = [...mentioned.value].sort((a, b) => (positions.get(String(a.nodeId)) ?? 999) - (positions.get(String(b.nodeId)) ?? 999))
+    const replacements = new Map(mentioned.value.map(item => [item.token, list.find(ref => String(ref.nodeId) === String(item.nodeId))?.token || item.token]))
+    if(!editingNode.value) text.value = text.value.replace(/@(文本|图片|视频|音频)\d+/g, token => replacements.get(token) || token)
+    mentioned.value = list.filter(item => mentioned.value.some(ref => String(ref.nodeId) === String(item.nodeId))).map(item => ({ nodeId: item.nodeId, token: item.token }))
   }
   clearTimeout(referenceTimer); referencePress = null; referenceDragId.value = ''; referenceGhost.value = null; referenceOrder.value = []
   window.removeEventListener('pointermove', moveReference); window.removeEventListener('pointerup', stopReferencePress); window.removeEventListener('pointercancel', stopReferencePress)

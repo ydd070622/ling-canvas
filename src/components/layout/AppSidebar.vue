@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { localFolders, loadLocalFolders, connectLocalFolder, localCall } from '../../stores/localSpace'
 import { useRouter } from 'vue-router'
 import { NButton, NDropdown, NInput, NModal, useDialog } from 'naive-ui'
 import {
@@ -25,6 +26,7 @@ const router = useRouter()
 const ui = useUIStore()
 const dialog = useDialog()
 const showApiSettings = ref(false)
+onMounted(() => loadLocalFolders().catch(() => {}))
 
 const projectCount = computed(() => activeProjects.value.length)
 const trashCount = computed(() => trashedProjects.value.length)
@@ -45,9 +47,10 @@ const navigateToFolder = (folderName) => {
 
 // 文件夹管理：新建 / 重命名 / 删除 | Folder management
 const folderActions = [
-  { label: '重命名', key: 'rename' },
+  { label: '在资源管理器中打开', key: 'open' },
+  { label: '重命名显示名称', key: 'rename' },
   { type: 'divider' },
-  { label: '删除', key: 'delete' }
+  { label: '取消连接', key: 'delete' }
 ]
 
 const showFolderModal = ref(false)
@@ -55,60 +58,33 @@ const folderModalMode = ref('create')
 const folderNameValue = ref('')
 const folderModalTarget = ref('')
 
-const openCreateFolder = () => {
-  folderModalMode.value = 'create'
-  folderModalTarget.value = ''
-  folderNameValue.value = ''
-  showFolderModal.value = true
+const openCreateFolder = async () => {
+  try { const folder = await connectLocalFolder(); if (folder) navigateToFolder(folder.id) } catch(e) { window.$message?.error(e.message) }
 }
 
-const openRenameFolder = (name) => {
+const openRenameFolder = (folder) => {
   folderModalMode.value = 'rename'
-  folderModalTarget.value = name
-  folderNameValue.value = name
+  folderModalTarget.value = folder.id
+  folderNameValue.value = folder.name
   showFolderModal.value = true
 }
 
 // 校验失败时保持弹窗打开，用户可以直接改输入
-const confirmFolderModal = () => {
-  const value = folderNameValue.value
-  if (folderModalMode.value === 'create') {
-    const status = ui.addFolder(value)
-    if (status === 'ok') {
-      showFolderModal.value = false
-      navigateToFolder(value.trim())
-    } else {
-      window.$message?.warning(status === 'empty' ? '文件夹名称不能为空' : '已存在同名文件夹')
-    }
-    return
-  }
-
-  const status = ui.renameFolder(folderModalTarget.value, value)
-  if (status === 'ok') {
-    showFolderModal.value = false
-  } else if (status === 'unchanged') {
-    showFolderModal.value = false
-  } else if (status === 'empty') {
-    window.$message?.warning('文件夹名称不能为空')
-  } else if (status === 'duplicate') {
-    window.$message?.warning('已存在同名文件夹')
-  } else {
-    // missing：文件夹已被别处删掉
-    showFolderModal.value = false
-    window.$message?.warning('文件夹已不存在')
-  }
+const confirmFolderModal = async () => {
+  try { await localCall('update_local_folder', { id: folderModalTarget.value, name: folderNameValue.value }); await loadLocalFolders(); showFolderModal.value = false } catch(e) { window.$message?.error(e.message) }
 }
 
-const handleFolderAction = (key, name) => {
-  if (key === 'rename') return openRenameFolder(name)
+const handleFolderAction = async (key, folder) => {
+  if (key === 'open') { try { await localCall('open_local_folder', { id: folder.id, relative: '' }) } catch(e) { window.$message?.error(e.message) } return }
+  if (key === 'rename') return openRenameFolder(folder)
   if (key !== 'delete') return
   dialog.error({
-    title: '删除文件夹',
-    content: `确定删除文件夹「${name}」吗？此操作无法恢复。`,
-    positiveText: '删除',
+    title: '取消连接',
+    content: `取消连接「${folder.name}」？电脑上的文件会保留。`,
+    positiveText: '取消连接',
     negativeText: '取消',
-    onPositiveClick: () => {
-      ui.removeFolder(name)
+    onPositiveClick: async () => {
+      try { await localCall('update_local_folder', { id: folder.id, name: null }); await loadLocalFolders(); if(ui.currentFolder === folder.id) navigateToView('all') } catch(e) { window.$message?.error(e.message) }
     }
   })
 }
@@ -171,25 +147,25 @@ const handleFolderAction = (key, name) => {
       <div class="home-sidebar__divider" />
       <p class="home-sidebar__section-title">本地空间</p>
 
-      <div v-for="folder in ui.folders" :key="folder" class="home-sidebar__folder-row">
+      <div v-for="folder in localFolders" :key="folder.id" class="home-sidebar__folder-row">
         <button
           class="home-sidebar__item home-sidebar__folder"
-          :class="{ 'home-sidebar__item--active': ui.currentView === 'folder' && ui.currentFolder === folder }"
-          @click="navigateToFolder(folder)"
+          :class="{ 'home-sidebar__item--active': ui.currentView === 'folder' && ui.currentFolder === folder.id }"
+          :title="folder.path" @click="navigateToFolder(folder.id)"
         >
           <span class="home-sidebar__icon"><FolderOutline /></span>
-          <span class="truncate">{{ folder }}</span>
+          <span class="truncate">{{ folder.name }}</span>
         </button>
         <n-dropdown :options="folderActions" placement="bottom-end" @select="key => handleFolderAction(key, folder)">
           <button class="home-sidebar__folder-menu" aria-label="文件夹操作" @click.stop><EllipsisHorizontalOutline /></button>
         </n-dropdown>
       </div>
 
-      <p v-if="!ui.folders.length" class="home-sidebar__folder-empty">还没有文件夹</p>
+      <p v-if="!localFolders.length" class="home-sidebar__folder-empty">尚未连接文件夹</p>
 
       <button class="home-sidebar__item home-sidebar__create" @click="openCreateFolder">
         <span class="home-sidebar__icon"><AddCircleOutline /></span>
-        <span>创建文件夹</span>
+        <span>连接本地文件夹</span>
       </button>
     </nav>
 

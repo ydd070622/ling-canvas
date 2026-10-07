@@ -25,7 +25,7 @@ export const canvasPreview = url => {
   const task = queue.then(async () => {
     const result = await inWorker(url)
     if (result !== undefined) return result
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => { if(typeof requestIdleCallback === 'function') requestIdleCallback(resolve, { timeout: 250 }); else setTimeout(resolve, 24) })
     let bitmap
     try {
       const blob = await (await fetch(url)).blob()

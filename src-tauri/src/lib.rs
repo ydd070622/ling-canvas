@@ -12,6 +12,7 @@ use std::{
 };
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
+mod local_space;
 use tokio::sync::oneshot;
 
 mod agent;
@@ -1843,6 +1844,15 @@ pub fn run() {
             cancel_http_request,
             fetch_binary,
             save_media_file,
+            local_space::local_folders,
+            local_space::connect_local_folder,
+            local_space::update_local_folder,
+            local_space::list_local_folder,
+            local_space::read_local_image,
+            local_space::read_local_folder_cover,
+            local_space::read_local_text,
+            local_space::open_local_folder,
+            local_space::save_local_image,
             list_asset_library,
             read_asset_file,
             stat_asset_files,

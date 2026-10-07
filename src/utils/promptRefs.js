@@ -2,7 +2,7 @@
  * Prompt references | 提示词里的上游引用
  *
  * 全显式引用模型：连了线不等于用了上游素材，必须在正文里写 `@图片1` / `@文本2`
- * 才会生效。编号默认按入边位次分配；拖动后用 referenceIndex 保留名称，order 只决定排列。
+ * 才会生效。编号默认按入边位次分配；拖动后按新的排列连续编号。
  *
  * token 字面量与绑定键同名（`@图片1` ↔ key `图片1`），统一由 `refKey()` 产出，
  * 不要在别处手拼这个格式。
@@ -66,12 +66,6 @@ export const computeSlots = (node, nodes, edges) => {
   const slots = []
   const idle = []
 
-  const reserved = {}
-  inbound.forEach((edge, i) => {
-    const kind = sources[i]?.type, index = Number(edge.data?.referenceIndex)
-    if (Number.isInteger(index) && index > 0) (reserved[kind] ||= new Set()).add(index)
-  })
-  const assigned = {}
   inbound.forEach((edge, i) => {
     const src = sources[i]
     if (!src || !isReferenceableType(src.type)) return
@@ -83,13 +77,7 @@ export const computeSlots = (node, nodes, edges) => {
       return
     }
     used[kind] = taken + 1
-    const assignedKind = assigned[kind] ||= new Set()
-    let index = Number(edge.data?.referenceIndex)
-    if (!Number.isInteger(index) || index < 1 || assignedKind.has(index)) {
-      index = 1
-      while (assignedKind.has(index) || reserved[kind]?.has(index)) index++
-    }
-    assignedKind.add(index)
+    const index = taken + 1
     slots.push({
       edge,
       src,

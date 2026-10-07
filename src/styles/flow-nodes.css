@@ -1815,6 +1815,12 @@ textarea.flow-pfield-textarea:focus { outline: none; }
   overflow: visible;
 }
 .flow-image-gallery-item { box-shadow: 0 5px 18px -6px rgba(20, 24, 30, 0.16); }
+.canvas-flow .vue-flow__node .flow-node-image .flow-card:has(.flow-image-gallery) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.flow-node-image .flow-card:has(.flow-image-gallery) > .flow-card-body { padding: 0; }
 
 /* Keep the same cards and fixed image dimensions during gallery changes. */
 .flow-image-gallery-fade { position: relative; grid-template-columns: repeat(2, var(--flow-gallery-card-width)); }
@@ -1824,6 +1830,26 @@ textarea.flow-pfield-textarea:focus { outline: none; }
 .flow-image-gallery-fade:not(.is-open) .flow-image-gallery-item.is-main { opacity: 1; transform: none; pointer-events: auto; z-index: 1; }
 .flow-image-gallery-fade.is-open .flow-image-gallery-item { opacity: 1; transform: none; }
 .gallery-card-move { transition: transform .26s ease-out; }
+.flow-gallery-count,
+.flow-image-gallery-item.is-main .flow-image-gallery-actions button:last-child {
+  box-sizing: border-box; min-width: 64px; height: 28px; justify-content: center;
+  padding: 6px 9px; font-size: 11px;
+}
+.flow-gallery-count { top: 9px; right: 9px; }
+.flow-header-actions { position: absolute; right: 0; top: -28px; display: flex; align-items: center; height: 20px; }
+.flow-node-image .flow-card:has(.flow-history-trigger) > .flow-media-details { right: 26px; }
+.flow-history-trigger { display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 2px; background: transparent; color: var(--flow-text-mid); cursor: pointer; }
+.flow-node-image .flow-stage:has(.flow-generation-history) { overflow: visible; }
+.flow-node-image .flow-card:has(.flow-generation-history) { overflow: visible; }
+.flow-generation-history { position: absolute; top: 0; left: calc(100% + 14px); z-index: 30; box-sizing: border-box; width: 240px; height: var(--history-height, 304px); min-height: 240px; padding: 12px; border: 1px solid var(--flow-card-border); border-radius: 12px; background: var(--flow-card-bg); color: var(--flow-text-strong); box-shadow: var(--flow-card-shadow); display: flex; flex-direction: column; }
+.flow-generation-history header { display: flex; align-items: center; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
+.flow-generation-history header button { display: flex; border: 0; background: transparent; color: inherit; padding: 2px; cursor: pointer; }
+.flow-history-batches { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.flow-history-time { display: flex; justify-content: space-between; color: var(--flow-text-mid); font-size: 11px; margin-bottom: 7px; }
+.flow-history-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.flow-history-thumbs > button { position: relative; aspect-ratio: 1; min-width: 0; padding: 0; border: 2px solid transparent; border-radius: 7px; background: var(--flow-well-solid); cursor: pointer; }
+.flow-history-thumbs > button[aria-pressed="true"] { border-color: var(--flow-text-strong); }
+.flow-history-thumbs > button > img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) {
   .flow-image-gallery-fade .flow-image-gallery-item, .gallery-card-move { transition: none; }
 }

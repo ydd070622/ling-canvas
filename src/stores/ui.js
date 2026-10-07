@@ -4,6 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { localFolders } from './localSpace'
 
 export const useUIStore = defineStore('ui', () => {
   // 当前视图：'all' | 'canvases' | 'templates' | 'favorites' | 'assets' | 'trash' | 'folder'
@@ -84,7 +85,7 @@ export const useUIStore = defineStore('ui', () => {
   const viewTitle = computed(() => {
     if (currentView.value === 'folder' && currentFolder.value) {
       // 兜底：文件夹已被外部改动或删除时，不要渲染一个已死的名字
-      return folders.value.includes(currentFolder.value) ? currentFolder.value : '全部画布'
+      return localFolders.value.find(f => f.id === currentFolder.value)?.name || '本地空间'
     }
     const titles = {
       all: '全部画布',

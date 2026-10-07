@@ -48,6 +48,9 @@ import {
 import { INPUT_HANDLE, OUTPUT_HANDLE, NODE_DEFINITIONS } from '../../config/nodeRegistry'
 import { makeToken, refKey } from '../../utils/promptRefs'
 import { buildNodeNotices } from '../../utils/nodeNotices'
+import { appendImageGeneration } from '../../utils/imageGenerationHistory'
+import { autoSaveNodeImages } from '../../stores/localSpace'
+import { currentProjectId } from '../../stores/canvas'
 import { normalizeRatioKey, findSizeByRatio, ratioDisplay } from '../../utils/ratio'
 import { resolveImageTierOptions } from '../../utils/imageTiers'
 import { isLikelyTextModel, enrichModelError } from '../../composables/useModelGuard'
@@ -258,7 +261,7 @@ const writeImageResults = (outputs, results, partialFailure) => {
     if (target) {
       // galleryUrls 一并覆盖：上次多、这次少时旧的残余必须清掉，否则画廊里会留着上一批
       updateNode(target.id, {
-        url: urls[0], galleryUrls: urls, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+        url: urls[0], galleryUrls: urls, imageHistory: appendImageGeneration(target.data, urls), mainImageIndex: 0, loading: false, updatedAt: Date.now()
       })
     }
   } else {
@@ -266,13 +269,14 @@ const writeImageResults = (outputs, results, partialFailure) => {
       const item = results[index]
       if (!target || !item) return
       updateNode(target.id, {
-        url: item.url, galleryUrls: [], mainImageIndex: 0, loading: false, updatedAt: Date.now()
+        url: item.url, galleryUrls: [], imageHistory: appendImageGeneration(target.data, [item.url]), mainImageIndex: 0, loading: false, updatedAt: Date.now()
       })
     })
   }
   endBatchOperation()
 
   // 少回来几张必须说清原因 —— 只说「少了一张」等于没说
+  void autoSaveNodeImages(currentProjectId.value, urls, props.data.label || '图片').catch(e => window.$message?.warning(`本地保存失败：${e.message}`))
   const requested = Number(props.data?.count || 1)
   if (outputs.length <= 1 && requested > 1 && urls.length < requested) {
     window.$message?.warning(

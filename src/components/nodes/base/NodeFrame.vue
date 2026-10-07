@@ -70,6 +70,7 @@
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg><span>{{ downloading ? '保存中…' : '下载' }}</span>
         </button>
+        <button v-if="tone === 'image' && mediaUrl" class="flow-tool-btn nodrag" type="button" @click="saveLocal"><span>保存到本地空间</span></button>
 </div>
       <div class="flow-tb-sep"></div>
       <div class="flow-tb-group">
@@ -87,6 +88,7 @@
         <span class="flow-zoom-tag-name">{{ compactLabel || typeLabel }}</span>
       </span>
       <span v-if="!expanded && mediaDetails" class="flow-media-details">{{ mediaDetails }}</span>
+      <div v-if="!expanded && $slots['header-actions']" class="flow-header-actions"><slot name="header-actions" /></div>
 
       <div v-if="expanded" class="flow-card-head">
         <span class="flow-head-left">
@@ -99,6 +101,7 @@
           >{{ title }}</span>
         </span>
         <span class="flow-head-right">
+          <slot name="header-actions" />
           <!-- 失败的原因挂在悬停上，不占正文：底部栏那条 toast 已经报过一次了 -->
           <span class="flow-status" :class="statusClass" :title="failed ? failText : ''"><i></i>{{ statusText }}</span>
         </span>
@@ -157,6 +160,9 @@ import { canvasViewport, updateNode } from '../../../stores/canvas'
 import { NODE_ICONS } from '../../../config/nodeIcons'
 import { NODE_DEFINITIONS } from '../../../config/nodeRegistry'
 import { downloadMedia } from '../../../utils/downloadMedia'
+import { requestLocalSave } from '../../../stores/localSpace'
+import { nodes } from '../../../stores/canvas'
+const saveLocal = () => { const data = nodes.value.find(n => n.id === props.nodeId)?.data; requestLocalSave([props.mediaUrl, ...(data?.galleryUrls || []).filter(url => url !== props.mediaUrl)], props.title) }
 
 const props = defineProps({
   nodeId: { type: String, required: true },

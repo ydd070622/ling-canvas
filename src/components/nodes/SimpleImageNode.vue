@@ -30,7 +30,19 @@
     @notice-action="handleNoticeAction"
     @send-to-agent="handleSendToAgent"
   >
+    <template #header-actions>
+      <button v-if="imageHistory.length > 1" class="flow-history-trigger nodrag" type="button" title="生成历史" aria-label="生成历史" :aria-expanded="historyOpen" @click.stop="historyOpen = !historyOpen"><n-icon :size="16"><TimeOutline /></n-icon></button>
+    </template>
     <template #body>
+      <aside v-if="historyOpen && imageHistory.length > 1" class="flow-generation-history nodrag nowheel" :style="historyStyle" @pointerdown.stop @dblclick.stop @wheel.stop>
+        <header><span>生成历史</span><button type="button" aria-label="关闭历史" @click.stop="historyOpen = false"><n-icon :size="16"><CloseOutline /></n-icon></button></header>
+        <div class="flow-history-batches">
+          <section v-for="batch in [...imageHistory].reverse()" :key="batch.id">
+            <div class="flow-history-time"><time>{{ historyTime(batch.createdAt) }}</time><span>{{ batch.urls.length }}张</span></div>
+            <div class="flow-history-thumbs"><button v-for="(url, index) in batch.urls" :key="index" type="button" :disabled="!url || isGenerating" :aria-label="`${historyTime(batch.createdAt)} 第${index + 1}张，设为主图`" :aria-pressed="data.url === url" @click.stop="selectHistoryImage(batch, index)"><CanvasPreviewImage v-if="url" :src="url" alt="历史图片" /></button></div>
+          </section>
+        </div>
+      </aside>
       <!-- 一次生成的多张都留在这张卡里（画廊），主图排第一。
            展开是整齐网格，收起只剩主图 + 角标。
            格子按图片自身比例成形 —— 写死 4:3 会让 3:4 的竖图两边挂黑边。 -->
@@ -99,7 +111,10 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { DownloadOutline, ChevronUpOutline, StarOutline, ExpandOutline } from '@vicons/ionicons5'
+import { DownloadOutline, ChevronUpOutline, StarOutline, ExpandOutline, TimeOutline, CloseOutline } from '@vicons/ionicons5'
+import { appendImageGeneration } from '../../utils/imageGenerationHistory'
+import { autoSaveNodeImages } from '../../stores/localSpace'
+import { currentProjectId } from '../../stores/canvas'
 import { NodeFrame } from './base'
 import NodeMedia from './base/NodeMedia.vue'
 import ImageEditModal from '../canvas/ImageEditModal.vue'
@@ -158,6 +173,15 @@ const mediaDetails = computed(() => formatMediaDetails(dimensions.value))
 
 /* ------------------------------------------------------------ 画廊（多图）*/
 const galleryOpen = ref(false)
+const historyOpen = ref(false)
+const imageHistory = computed(() => Array.isArray(props.data?.imageHistory) ? props.data.imageHistory : [])
+const historyTime = value => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+const historyStyle = computed(() => ({ '--history-height': `${cardWidthForRatio(effectiveRatio.value) / (effectiveRatio.value || 4 / 3)}px` }))
+const selectHistoryImage = (batch, index) => {
+  if (isGenerating.value || !batch.urls[index]) return
+  galleryOpen.value = false
+  updateNode(props.id, { url: batch.urls[index], base64: '', previewUrl: '', galleryUrls: [...batch.urls], mainImageIndex: index, updatedAt: Date.now() })
+}
 /**
  * 画廊里的图，主图排第一。
  * 只有一张时不存在画廊这回事，直接回落到 `url`（上传、单张生成都走这里）。
@@ -387,6 +411,7 @@ const handleSend = async (force = false) => {
   }
 
   const seq = ++sendSeq
+  const savedProjectId = currentProjectId.value
   // 扇出时部分请求失败，原因得留到最后那条提示里一起说 —— 只说「少了一张」等于没说
   let partialFailure = ''
   try {
@@ -423,10 +448,11 @@ const handleSend = async (force = false) => {
     // 一次生成的多张全留在这张卡里：第 1 张当主图，其余进画廊（角标展开看）
     galleryOpen.value = false
     updateNode(props.id, {
-      url, galleryUrls: urls, generationUrls: [], generationCount: 0, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+      url, galleryUrls: urls, imageHistory: appendImageGeneration(props.data, urls), generationUrls: [], generationCount: 0, mainImageIndex: 0, loading: false, updatedAt: Date.now()
     })
 
     // 部分请求失败时结果照收（保住的比丢掉好），但要让用户知道少了几张、为什么少
+    void autoSaveNodeImages(savedProjectId, urls, props.data.label || '图片').catch(e => window.$message?.warning(`本地保存失败：${e.message}`))
     const requested = Number(props.data?.count || 1)
     if (requested > 1 && urls.length < requested) {
       window.$message?.warning(

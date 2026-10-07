@@ -760,7 +760,14 @@ const queueImageSave = (key, dataUrl) => {
   pendingImageFingerprints.set(key, fingerprint)
   imageSaveQueue = imageSaveQueue
     .then(async () => {
-      await saveImage(key, dataUrl)
+      let persistentUrl = dataUrl
+      if (dataUrl.startsWith('blob:')) persistentUrl = await blobToDataUrl(await (await fetch(dataUrl)).blob())
+      else if (/^https?:/.test(dataUrl)) {
+        const { fetchBytes } = await import('../utils/downloadMedia')
+        const { bytes, contentType } = await fetchBytes(dataUrl)
+        persistentUrl = await blobToDataUrl(new Blob([bytes], { type: contentType || 'image/png' }))
+      }
+      await saveImage(key, persistentUrl)
       savedImageKeys.set(key, fingerprint)
       lastImageSaveError = null
     })
@@ -787,16 +794,19 @@ export const flushCanvasMediaSaves = async () => {
  * (project-document copies are stripped by cleanNodeForStorage)
  */
 const persistProjectImages = (projectId) => {
+  nodes.value.forEach(node => node.data?.imageHistory?.forEach(batch => batch.urls.forEach((url, index) => {
+    if (url) queueImageSave(`${projectId}:${node.id}:history:${batch.id}:${index}`, url)
+  })))
   nodes.value.forEach((node) => {
     const base64 = node.data?.base64
-    const dataUrl = base64 || (node.data?.url?.startsWith?.('data:') ? node.data.url : '')
+    const dataUrl = base64 || (/^(data:|blob:)/.test(node.data?.url || '') ? node.data.url : '')
     if (!dataUrl) return
     const key = `${projectId}:${node.id}`
     queueImageSave(key, dataUrl)
   })
   nodes.value.forEach((node) => {
     node.data?.galleryUrls?.forEach((url, index) => {
-      if (!url?.startsWith?.('data:')) return
+      if (!/^(data:|blob:)/.test(url || '')) return
       const key = `${projectId}:${node.id}:gallery:${index}`
       queueImageSave(key, url)
     })
@@ -856,6 +866,22 @@ const restoreProjectImages = async (projectId, imageNodeAliases = {}) => {
       // 它今天靠"不以数字结尾"侥幸躲过下面的 previousSequentialNodeId 兜底匹配，
       // 而那是巧合不是契约 —— 不要依赖它，见 stores/projectThumbnails.js 的不变量说明。
       if (storedNodeId === THUMB_MEDIA_ID) continue
+      const historyMatch = storedNodeId.match(/^(.*):history:([^:]+):(\d+)$/)
+      if (historyMatch) {
+        const historyNode = nodesById.get(historyMatch[1])
+        const batch = historyNode?.data?.imageHistory?.find(item => item.id === historyMatch[2])
+        const index = Number(historyMatch[3]), media = mediaByKey.get(key)
+        if (batch && index < batch.urls.length && media) {
+          const original = batch.urls[index]
+          const restored = typeof media === 'string' ? media : URL.createObjectURL(media)
+          batch.urls[index] = restored
+          if (original) {
+            if (historyNode.data.url === original) historyNode.data.url = restored
+            historyNode.data.galleryUrls = historyNode.data.galleryUrls?.map(url => url === original ? restored : url)
+          }
+        }
+        continue
+      }
       const galleryMatch = storedNodeId.match(/^(.*):gallery:(\d+)$/)
       if (galleryMatch) {
         const galleryNode = nodesById.get(galleryMatch[1])
@@ -1008,7 +1034,7 @@ export const hydrateAssetRefs = async (projectId) => {
   )
 
   // 并发压到 3：一张 4000×6000 的素材解码后接近 100MB
-  await runLimited(pending, 3, async item => {
+  await runLimited(pending, 1, async item => {
     if (existsByRef.get(item.ref) === false) {
       applyAssetState(item.id, { url: '', error: ASSET_MISSING_MESSAGE })
       return

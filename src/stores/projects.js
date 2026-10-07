@@ -161,6 +161,11 @@ export const cleanNodeForStorage = (inputNode) => {
       url?.startsWith?.('data:') || url?.startsWith?.('blob:') ? null : url
     )
   }
+  if (Array.isArray(cleanedData.imageHistory)) {
+    cleanedData.imageHistory = cleanedData.imageHistory.map(batch => ({ ...batch, urls: batch.urls.map(url =>
+      url?.startsWith?.('data:') || url?.startsWith?.('blob:') ? null : url
+    ) }))
+  }
   
   // Remove mask data | 移除蒙版数据
   if (cleanedData.maskData) {

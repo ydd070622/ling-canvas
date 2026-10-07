@@ -27,6 +27,7 @@ import { useModelStore } from '../stores/pinia'
 import { useUIStore } from '../stores/ui'
 import CanvasList from '../components/layout/CanvasList.vue'
 import AssetLibrary from '../components/assets/AssetLibrary.vue'
+import LocalFolderView from '../components/local/LocalFolderView.vue'
 import { assetRoot } from '../stores/assets'
 
 const router = useRouter()
@@ -318,18 +319,17 @@ const confirmEmptyTrash = () => {
     <div
       v-else
       class="home-library-page"
-      :class="{ 'home-library-page--wide': uiStore.currentView === 'assets' }"
+      :class="{ 'home-library-page--wide': uiStore.currentView === 'assets', 'home-library-page--local': uiStore.currentView === 'folder' }"
     >
       <header class="home-library-header">
         <div>
-          <span class="home-hero__eyebrow">LING CANVAS</span>
+          <span v-if="uiStore.currentView !== 'folder'" class="home-hero__eyebrow">LING CANVAS</span>
           <h1>{{ searchText ? `搜索“${uiStore.searchQuery}”` : uiStore.viewTitle }}</h1>
           <p v-if="uiStore.currentView === 'templates'">从专业模板开始，快速搭建你的创意空间。</p>
           <p v-else-if="uiStore.currentView === 'favorites'">集中浏览和整理你收藏的空间灵感。</p>
           <p v-else-if="uiStore.currentView === 'assets'">浏览 {{ assetRoot || '本地素材库' }} · 只读，不会改动你的文件</p>
           <p v-else-if="uiStore.currentView === 'trash'">删除的画布可以在这里恢复。</p>
-          <p v-else-if="uiStore.currentView === 'folder'">文件夹目前是空的，可以随时重命名或删除。</p>
-          <p v-else>管理此空间下的画布项目。</p>
+          <p v-else-if="uiStore.currentView !== 'folder'">管理此空间下的画布项目。</p>
         </div>
         <button v-if="uiStore.currentView === 'trash' && trashedProjects.length" class="home-danger-btn" @click="confirmEmptyTrash">清空回收站</button>
         <button v-else-if="canCreateCanvas" class="home-primary-btn" @click="createNewCanvas"><span>＋</span> 新建画布</button>
@@ -365,11 +365,7 @@ const confirmEmptyTrash = () => {
         <div v-if="!viewProjects.length" class="home-empty-state"><TrashOutline /><strong>回收站是空的</strong><span>删除的画布会出现在这里</span></div>
       </div>
 
-      <div v-else-if="uiStore.currentView === 'folder'" class="home-empty-state">
-        <FolderOutline />
-        <strong>文件夹是空的</strong>
-        <span>这里暂时还没有内容</span>
-      </div>
+      <LocalFolderView v-else-if="uiStore.currentView === 'folder'" />
 
       <CanvasList
         v-else
@@ -473,6 +469,9 @@ const confirmEmptyTrash = () => {
 .home-library-page { max-width: 1240px; margin: 0 auto; padding: 34px 30px 60px; }
 /* 素材库要铺满可用宽度：1240 是给固定 4 列的模板卡片定的，用在几百张图的
    网格上会让全屏下面空掉一大片。仍然留一个上限，避免超宽屏上无意义地拉伸。 */
+.home-library-page--local { padding-top:18px; }
+.home-library-page--local .home-library-header { margin-bottom:14px; }
+.home-library-page--local .home-library-header h1 { margin-top:0; font-size:26px; }
 .home-library-page--wide { max-width: 1760px; }
 .home-library-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 26px; }.home-library-header h1 { margin-top: 7px; color: #172033; font-size: 29px; font-weight: 780; }.home-library-header p { margin-top: 5px; color: #8c98aa; font-size: 13px; }
 .home-library-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 18px; }.home-library-card { overflow: hidden; border: 1px solid #e8edf4; border-radius: 13px; text-align: left; background: #fff; box-shadow: 0 5px 15px rgba(30,52,82,.06); transition: all .2s ease; }.home-library-card:hover { transform: translateY(-3px); box-shadow: 0 12px 27px rgba(30,52,82,.13); }.home-library-card img { width: 100%; height: 175px; object-fit: cover; }.home-library-card div { display: flex; justify-content: space-between; padding: 13px 14px; }.home-library-card strong { color: #344055; font-size: 14px; }.home-library-card span { color: #6798df; font-size: 11px; }

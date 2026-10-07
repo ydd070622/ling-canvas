@@ -117,6 +117,7 @@
         >
           {{ projectName }}
         </button>
+        <CanvasLocalOutput :project-id="String(route.params.id)" />
       </div>
 
       <!-- Left toolbar | 左侧工具栏 -->
@@ -412,6 +413,7 @@ import { nodes, edges, pendingReferenceImages, addNode, addNodes, addEdge, addEd
 import { useChat, useWorkflowOrchestrator } from '../hooks'
 import { useModelStore } from '../stores/pinia'
 import { projects, initProjectsStore, renameProject, deleteProject, flushProjectSaves } from '../stores/projects'
+import CanvasLocalOutput from '../components/local/CanvasLocalOutput.vue'
 import { flushProjectThumbnails } from '../stores/projectThumbnails'
 import { isContentNodeType, validateCanvasConnection, findModeAccepting, getAcceptLimit, AUTO_MODE, INPUT_HANDLE, OUTPUT_HANDLE, NODE_MODES, CONTENT_NODE_TYPES } from '../config/nodeRegistry'
 import { selectedNodeIds } from '../composables/useFocusMode'
