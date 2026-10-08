@@ -31,6 +31,7 @@
     @send-to-agent="handleSendToAgent"
   >
     <template #header-actions>
+      <button v-if="galleryItems.length > 1" class="flow-history-trigger flow-gallery-toggle nodrag" type="button" :aria-expanded="galleryOpen" @click.stop="galleryOpen = !galleryOpen">{{ galleryItems.length }}张 · {{ galleryOpen ? '收起' : '展开' }}</button>
       <button v-if="imageHistory.length > 1" class="flow-history-trigger nodrag" type="button" title="生成历史" aria-label="生成历史" :aria-expanded="historyOpen" @click.stop="historyOpen = !historyOpen"><n-icon :size="16"><TimeOutline /></n-icon></button>
     </template>
     <template #body>
@@ -173,6 +174,10 @@ const mediaDetails = computed(() => formatMediaDetails(dimensions.value))
 
 /* ------------------------------------------------------------ 画廊（多图）*/
 const galleryOpen = ref(false)
+// 恢复多图节点以及首次生成多图时直接展示整批结果。
+watch(() => props.data?.galleryUrls?.length || 0, (count, previous) => {
+  if (count > 1 && (!previous || previous <= 1)) galleryOpen.value = true
+}, { immediate: true })
 const historyOpen = ref(false)
 const imageHistory = computed(() => Array.isArray(props.data?.imageHistory) ? props.data.imageHistory : [])
 const historyTime = value => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -411,6 +416,9 @@ const handleSend = async (force = false) => {
   }
 
   const seq = ++sendSeq
+  const batchId = `batch-${Date.now()}-${props.id}-${seq}`
+  const request = buildRequest()
+  const received = new Map()
   const savedProjectId = currentProjectId.value
   // 扇出时部分请求失败，原因得留到最后那条提示里一起说 —— 只说「少了一张」等于没说
   let partialFailure = ''
@@ -427,10 +435,11 @@ const handleSend = async (force = false) => {
 
     updateNode(props.id, { loading: true, generationCount: Number(props.data?.count || 1), generationUrls: [], error: '', model, size: selectedSize.value || null, resolution: selectedResolution.value })
     // 正文里 @文本1 换成上游正文，@图片1 换成可读标记；参考图另走素材字段
-    const generated = await generate(buildRequest(), {
+    const generated = await generate(request, {
       providerId: providerId.value,
       onImage: (items, index) => {
         if (seq !== sendSeq) return
+        received.set(index, items || [])
         const urls = [...(props.data?.generationUrls || [])]
         urls[index] = items?.[0]?.url || ''
         updateNode(props.id, { generationUrls: urls })
@@ -440,20 +449,21 @@ const handleSend = async (force = false) => {
       }
     })
 
+    if(seq !== sendSeq) return
     const results = Array.isArray(generated) ? generated : []
     const urls = results.map(item => item?.url).filter(Boolean)
     const url = urls[0]
     if (!url) throw new Error('接口未返回图片地址')
 
     // 一次生成的多张全留在这张卡里：第 1 张当主图，其余进画廊（角标展开看）
-    galleryOpen.value = false
+    galleryOpen.value = urls.length > 1
     updateNode(props.id, {
-      url, galleryUrls: urls, imageHistory: appendImageGeneration(props.data, urls), generationUrls: [], generationCount: 0, mainImageIndex: 0, loading: false, updatedAt: Date.now()
+      url, galleryUrls: urls, imageHistory: appendImageGeneration(props.data, urls, Date.now(), batchId), generationUrls: [], generationCount: 0, mainImageIndex: 0, loading: false, updatedAt: Date.now()
     })
 
     // 部分请求失败时结果照收（保住的比丢掉好），但要让用户知道少了几张、为什么少
     void autoSaveNodeImages(savedProjectId, urls, props.data.label || '图片').catch(e => window.$message?.warning(`本地保存失败：${e.message}`))
-    const requested = Number(props.data?.count || 1)
+    const requested = Number(request.n || 1)
     if (requested > 1 && urls.length < requested) {
       window.$message?.warning(
         `要了 ${requested} 张，成功回来 ${urls.length} 张`

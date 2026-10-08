@@ -199,7 +199,7 @@ export const useImageGeneration = () => {
       // 有参考图时若渠道未声明图片能力，仍按 image-edit 走，交给网关用默认端点
       const capability = referenceImages.length ? 'image-edit' : 'image'
 
-      const result = await generateImage(adapted, {
+      const result = await generateImage({ ...adapted, n: progress.total }, {
         upstream,
         capability,
         signal: requestOptions.signal || abortController?.signal,

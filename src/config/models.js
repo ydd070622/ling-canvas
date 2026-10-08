@@ -66,6 +66,18 @@ export const BANANA_SIZE_OPTIONS = [
 
 // Image generation models | 图片生成模型
 export const IMAGE_MODELS = [
+    ...['gemini-2.5-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-image', 'gemini-3.1-flash-lite-image'].map(key => ({
+        label: key, key, provider: ['chatfire'],
+        sizes: BANANA_SIZE_OPTIONS.map(s => s.key),
+        imageResolutions: key.includes('2.5') ? ['1K'] : ['1K', '2K', '4K'],
+        defaultParams: { size: '1x1' }
+    })),
+    {
+        label: 'GPT Image 2', key: 'gpt-image-2', provider: ['chatfire', 'openai'],
+        sizes: ['1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'],
+        qualities: ['auto', 'low', 'medium', 'high'].map(key => ({ label: key, key })),
+        defaultParams: { size: '1024x1536', quality: 'auto' }
+    },
     {
         label: 'Nano Banana 2',
         key: 'nano-banana-2',

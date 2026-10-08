@@ -1807,6 +1807,14 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 必须先注册：第二次启动只唤起已有窗口，不创建新的数据写入实例。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(HttpRequestState::default())
         .manage(AssetRootState::default())
         .manage(agent::AgentProcessState::default())

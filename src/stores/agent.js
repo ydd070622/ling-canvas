@@ -511,6 +511,9 @@ export const useAgentStore = defineStore('agent', () => {
     // 还没转换完的 chip 这一轮先不发：留给下一轮，别把半截数据写进会话
     const attachments = pendingImages.value.filter(item => !item.loading && item.dataBase64)
 
+    const projectId = currentProject.value?.id
+    const explicitReferences = [...new Set([...attachments.map(item => item.nodeId).filter(Boolean), ...selectedNodeIds.value.filter(id => nodes.value.some(node => node.id === id && node.type === 'image'))])]
+    const referenceNodeIds = explicitReferences.length ? explicitReferences : (attachments.length ? [] : inheritedReferences(messages.value, projectId))
     error.value = ''
     messages.value.push({
       id: newSessionId(),
@@ -522,7 +525,7 @@ export const useAgentStore = defineStore('agent', () => {
       // 记下当时发的图（用降采样后的小图当缩略图，不为 60px 展示去解码大图）
       images: attachments.map(item => item.previewUrl)
     })
-    messages.value.push({ id: newSessionId(), role: 'assistant', createdAt: Date.now(), projectId:currentProject.value?.id, referenceNodeIds:[...new Set([...attachments.map(item=>item.nodeId).filter(Boolean),...selectedNodeIds.value.filter(id=>nodes.value.some(node=>node.id===id && node.type==='image'))])], nodeIds: [...new Set([...selectedNodeIds.value, ...attachments.map(item => item.nodeId).filter(Boolean)])], content: '', streaming: true, status: '', copyOnly: isCopyRequest(prompt) })
+    messages.value.push({ id: newSessionId(), role: 'assistant', createdAt: Date.now(), projectId:currentProject.value?.id, referenceNodeIds, nodeIds: [...new Set([...selectedNodeIds.value, ...attachments.map(item => item.nodeId).filter(Boolean)])], content: '', streaming: true, status: '', copyOnly: isCopyRequest(prompt) })
     running.value = true
 
     const requestId = newSessionId()
@@ -588,9 +591,19 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  function inheritedReferences(history, projectId) {
+    for(let i = history.length - 1; i >= 0; i--) {
+      const message = history[i]
+      if(message.projectId && message.projectId !== projectId) return []
+      if(message.referenceNodeIds?.length) return [...message.referenceNodeIds]
+      if(message.role === 'user' && message.images?.length) return []
+    }
+    return []
+  }
   const sendPromptsToCanvas = (message, indices) => {
     if(message.projectId!==currentProject.value?.id) throw new Error('请打开生成这条提示词时的画布')
-    const references=message.referenceNodeIds || []
+    const references=message.referenceNodeIds?.length ? message.referenceNodeIds : inheritedReferences(messages.value.slice(0, messages.value.indexOf(message)), currentProject.value?.id)
+    message.referenceNodeIds = [...references]
     const sources=references.map(id=>nodes.value.find(node=>node.id===id))
     if(sources.some(node=>!node)) throw new Error('部分参考图已删除，请恢复参考图后再发送')
     const ids=[]
@@ -604,6 +617,12 @@ export const useAgentStore = defineStore('agent', () => {
         if(existing){
           const ratio=agentPromptRatio(item)
           if(ratio && !existing.data?.ratio && !existing.data?.size) updateNode(existing.id,{ratio})
+          if(sources.length && !edges.value.some(edge => edge.target === existing.id)) {
+            let y = top
+            while(nodes.value.some(node => node.id !== existing.id && Math.abs((node.position?.x || 0) - (right + 120)) < 300 && Math.abs((node.position?.y || 0) - y) < 360)) y += 400
+            existing.position = { x: right + 120, y }
+            sources.forEach(source => addEdge({ source: source.id, target: existing.id }))
+          }
           ids.push(item.nodeId);continue
         }
         let y=top

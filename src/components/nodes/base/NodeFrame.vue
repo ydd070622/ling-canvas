@@ -70,7 +70,7 @@
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19h14" /></svg><span>{{ downloading ? '保存中…' : '下载' }}</span>
         </button>
-        <button v-if="tone === 'image' && mediaUrl" class="flow-tool-btn nodrag" type="button" @click="saveLocal"><span>保存到本地空间</span></button>
+        <button v-if="tone === 'image' && mediaUrl" class="flow-tool-btn nodrag" type="button" @click="saveLocal"><span>本地空间</span></button>
 </div>
       <div class="flow-tb-sep"></div>
       <div class="flow-tb-group">

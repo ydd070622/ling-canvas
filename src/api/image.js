@@ -39,6 +39,15 @@ import { normalizeRatioKey, approximateRatio, ratioValue, COMMON_RATIOS } from '
 /** 文生图/图生图首包可能等待数分钟（尤其 4K 模型） */
 const IMAGE_TIMEOUT_MS = 300_000
 
+// FireMux OpenAI 原生接口接受像素尺寸，不接受画布比例或 standard 风格值。
+const openAIImageSize = size => {
+  const value = String(size || '')
+  if (value === 'auto' || /^\d{3,}x\d{3,}$/.test(value)) return value
+  const ratio = ratioValue(normalizeRatioKey(value, { fallback: '1:1' }))
+  return ratio > 1 ? '1536x1024' : ratio < 1 ? '1024x1536' : '1024x1024'
+}
+const openAIImageQuality = quality => ['low', 'medium', 'high', 'auto'].includes(quality) ? quality : 'auto'
+
 /**
  * 参考图 → 厂商能直接取用的字符串形式。
  * blob: / file: / asset: / 裸磁盘路径都必须转成 data URL，
@@ -124,6 +133,9 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
   // 渠道显式声明过协议就完全听它的，不做任何自动改道
   const explicitOverride = upstream.providerConfig?.protocols?.[effectiveCapability]
   // FireMux 的 Seedream 文生图和多参考图共用 Ark 原生 JSON 入口。
+  const firemux = /^https?:\/\/(?:api\.chatfire\.site|api\.firemux\.com)(?:\/|$)/i.test(upstream.baseUrl || upstream.providerConfig?.defaultBaseUrl || '')
+  const firemuxGemini = firemux && !explicitOverride && /^gemini-/i.test(modelKey) && /image/i.test(modelKey)
+  const firemuxOpenAI = firemux && !explicitOverride && /^gpt-image/i.test(modelKey)
   const firemuxSeedream = !explicitOverride
     && /seedream/i.test(modelKey)
     && (upstream.providerConfig?.defaultBaseUrl?.includes('api.chatfire.site')
@@ -134,7 +146,9 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
   const strictParams = !allowsExtraImageParams(upstream.providerConfig, upstream.baseUrl)
 
   let protocol = resolveProviderEndpointRule(upstream.providerConfig, effectiveCapability).protocol
-  if (!explicitOverride && prefersGeminiNativeImage(upstream.providerConfig, upstream.baseUrl, modelKey)) {
+  if (firemuxOpenAI) {
+    protocol = referenceImages.length ? 'multipart' : 'json'
+  } else if (firemuxGemini || (!explicitOverride && prefersGeminiNativeImage(upstream.providerConfig, upstream.baseUrl, modelKey))) {
     // Gemini 系在支持原生路由的渠道上优先走原生 —— 只有这条路认 1K/2K/4K
     protocol = 'gemini'
   } else if (!explicitOverride && prefersChatProtocolForImage(modelKey)) {
@@ -187,19 +201,20 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
       const multipart = await buildImageEditMultipart({
         model: modelKey,
         prompt,
-        size: payload.size,
-        quality: payload.quality,
+        size: firemuxOpenAI ? openAIImageSize(payload.size) : payload.size,
+        quality: firemuxOpenAI ? openAIImageQuality(payload.quality) : payload.quality,
         resolution: payload.resolution,
         count: 1,
         referenceImages,
         fileNamePrefix: 'ling-canvas-reference',
         // 少数厂商只认 image[] 字段名，可通过渠道配置覆盖
-        imageField: upstream.providerConfig?.imageEditImageField,
+        imageField: firemuxOpenAI ? 'image' : upstream.providerConfig?.imageEditImageField,
         strict: strictParams
       })
       return requestUpstream({
         ...upstream,
         endpointType: effectiveCapability,
+        ...(firemuxOpenAI ? { requestPath: '/v1/images/edits' } : {}),
         fields: multipart.fields,
         files: multipart.files,
         signal,
@@ -240,7 +255,12 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
     return requestUpstream({
       ...upstream,
       endpointType: effectiveCapability,
-      json: requestBody,
+      ...(firemuxOpenAI ? { requestPath: '/v1/images/generations' } : {}),
+      json: firemuxOpenAI ? {
+        model: modelKey, prompt, n: 1,
+        size: openAIImageSize(payload.size),
+        quality: openAIImageQuality(payload.quality)
+      } : requestBody,
       signal,
       timeoutMs
     })
@@ -254,10 +274,11 @@ const requestImagesOnce = async (payload = {}, options = {}) => {
     // 退回去只是丢掉档位（回到改动前的行为：1K 出图），比整次生成失败好。
     // 鉴权 / 限流 / 上游故障刻意不在这里兜 —— 那些情况下改协议只会掩盖真错误。
     const canRetryGeminiViaChat = protocol === 'gemini'
+      && !firemuxGemini
       && !explicitOverride
       && isGeminiNativeUnavailableError(error)
     // 自愈二：图片端点回「不支持该模型」→ 改走对话协议
-    const canRetryImageViaChat = !firemuxSeedream && protocol !== 'chat' && protocol !== 'gemini'
+    const canRetryImageViaChat = !firemuxSeedream && !firemuxOpenAI && protocol !== 'chat' && protocol !== 'gemini'
       && !explicitOverride
       && isUnsupportedImageModelError(error)
     // 渠道显式指定过协议则不擅自改道（用户的显式选择优先）

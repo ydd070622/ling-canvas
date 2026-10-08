@@ -326,10 +326,10 @@ export const buildGeminiImageRequest = async ({ model, prompt, images, size, res
   const ratio = size ? normalizeRatioKey(size, { fallback: '' }) : ''
   const tier = normalizeStringValue(resolution).toUpperCase()
   if (ratio) imageConfig.aspectRatio = ratio
-  if (tier) imageConfig.imageSize = tier
+  if (tier && !/gemini-2\.5-flash-image/i.test(model || '')) imageConfig.imageSize = tier
 
   const body = { contents: [{ role: 'user', parts }] }
-  if (Object.keys(imageConfig).length) body.generationConfig = { imageConfig }
+  body.generationConfig = { responseModalities: ['TEXT', 'IMAGE'], ...(Object.keys(imageConfig).length ? { imageConfig } : {}) }
   return body
 }
 

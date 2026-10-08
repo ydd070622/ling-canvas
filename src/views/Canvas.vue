@@ -92,6 +92,9 @@
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z" /><path d="M12 13V8" /><path d="M9.5 10.5 12 8l2.5 2.5" /></svg><span>智能体</span>
           </button>
+          <button v-if="selectedImageNodes.length" type="button" class="selection-action" title="保存所选图片到本地空间" @click="saveSelectionLocal">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3Z" /><path d="M3 7V4h7l2 3" /></svg><span>本地空间</span>
+          </button>
           <button v-if="selectedImageNodes.length >= 2" type="button" class="selection-action"
             :disabled="batchDownloading" aria-label="批量下载" :title="batchDownloading ? batchDownloadProgress : '批量下载：保存为 ZIP'" @click="downloadSelectedImages">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v4h16v-4" /></svg><span>{{ batchDownloading ? batchDownloadProgress : '批量下载' }}</span>
@@ -364,6 +367,7 @@
 </template>
 
 <script setup>
+import { requestLocalSave } from '../stores/localSpace'
 /**
  * Canvas view component | 画布视图组件
  * Main infinite canvas with Vue Flow integration
@@ -659,6 +663,10 @@ const mergeSelectedImages = async () => {
   } finally { mergingImages.value = false }
 }
 const batchDownloadProgress = ref('准备下载…')
+const saveSelectionLocal = () => {
+  const urls = selectedImageNodes.value.flatMap(node => [node.data.url, ...(node.data.galleryUrls || [])]).filter(Boolean)
+  requestLocalSave([...new Set(urls)], '图片')
+}
 const downloadSelectedImages = async () => {
   if (batchDownloading.value) return
   const selected = selectedImageNodes.value.map(node => ({ ...node, data: { ...node.data, galleryUrls: node.data?.galleryUrls ? [...node.data.galleryUrls] : undefined } }))
