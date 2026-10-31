@@ -71,8 +71,8 @@ const run = (action) => async () => {
 
 const minimize = run('minimize')
 const toggleMaximize = run('toggleMaximize')
-// Keep the app and running tasks alive when the title-bar X is clicked.
-const close = run('minimize')
+// Hide from the taskbar; the native tray icon restores the running app.
+const close = run('hide')
 
 const handleSearchShortcut = async (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && isHomePage.value) {
@@ -130,7 +130,7 @@ const handleSearchShortcut = async (event) => {
         </svg>
       </button>
 
-      <button class="title-bar__btn title-bar__btn--close" title="收起到任务栏" aria-label="收起到任务栏" @click="close">
+      <button class="title-bar__btn title-bar__btn--close" title="收起到系统托盘" aria-label="收起到系统托盘" @click="close">
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
           <path
             d="M1 1l8 8M9 1l-8 8"

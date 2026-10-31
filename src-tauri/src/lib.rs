@@ -1804,16 +1804,20 @@ mod tests {
     }
 }
 
+fn restore_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // 必须先注册：第二次启动只唤起已有窗口，不创建新的数据写入实例。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            restore_main_window(app);
         }))
         .manage(HttpRequestState::default())
         .manage(AssetRootState::default())
@@ -1822,6 +1826,40 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            use tauri::menu::{Menu, MenuItem};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            let show = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let icon = app.default_window_icon().cloned().ok_or("缺少系统托盘图标")?;
+            TrayIconBuilder::with_id("main-tray")
+                .icon(icon)
+                .tooltip("Ling Canvas")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(event, TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }) {
+                        restore_main_window(tray.app_handle());
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => restore_main_window(app),
+                    "quit" => {
+                        // Use the existing close handler to flush saves before shutdown.
+                        restore_main_window(app);
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.close();
+                        }
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
             if let Some(root) = load_persisted_asset_root(app.handle()) {
                 if let Err(err) = app.state::<AssetRootState>().set(root) {
                     eprintln!("读取素材库根目录失败: {err}");
